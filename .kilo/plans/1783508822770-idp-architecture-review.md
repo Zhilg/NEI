@@ -604,13 +604,17 @@ Documents exceeding the VLM's context window (even with 131K extended context) r
 
 ### 13.1 Implementation Tasks (for implementation-capable agent)
 
-1. Create `docs/architecture.md` containing the Mermaid source below (verbatim) plus the resource table.
-2. Install mermaid-cli: `npm i -g @mermaid-js/mermaid-cli`.
-3. Export images:
+> Repo: `github.com/Zhilg/NEI.git`. These files must be committed into the tracked tree (NOT `.kilo/`, which is gitignored). That is why they are currently not visible in the repo.
+
+1. Create `docs/architecture.md` containing the Mermaid source below (verbatim) plus the resource table (13.4).
+2. (Recommended) Copy this full review into a tracked file `docs/architecture-review.md` so the analysis is versioned in the repo too.
+3. Install mermaid-cli: `npm i -g @mermaid-js/mermaid-cli`.
+4. Export images:
    - `mmdc -i docs/architecture.md -o docs/architecture.svg`
    - `mmdc -i docs/architecture.md -o docs/architecture.png -w 2400`
-4. Embed in root `README.md`: `![IDP Architecture](docs/architecture.svg)`.
-5. (Optional) Add a CI job that re-exports the image on change to `docs/architecture.md` so the picture never drifts from the source.
+5. Embed in root `README.md`: `![IDP Architecture](docs/architecture.svg)`.
+6. **Commit & push**: `git add docs/ README.md && git commit -m "docs: add IDP architecture diagram and review" && git push origin HEAD`.
+7. (Optional) Add a CI job that re-exports the image on change to `docs/architecture.md` so the picture never drifts from the source.
 
 ### 13.2 Mermaid Source (paste into `docs/architecture.md`)
 
