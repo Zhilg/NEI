@@ -3,7 +3,8 @@
 **Author**: Principal AI Architect  
 **Date**: 2026-07-08  
 **Status**: FINAL  
-**Goal**: Maximum accuracy entity/metadata extraction from heterogeneous documents
+**Goal**: Maximum accuracy entity/metadata extraction from heterogeneous documents  
+**Deployment constraint**: Air-gapped (no internet) on-prem server with **2×NVIDIA A100 40GB** (80GB total VRAM). No external APIs. See Section 14.
 
 ---
 
@@ -622,22 +623,22 @@ flowchart TD
     classDef route fill:#fce4ec,stroke:#c2185b,color:#880e4f
     classDef gpu fill:#ffebee,stroke:#c62828,color:#b71c1c
 
-    A["📥 INGESTION<br/><b>Что:</b> приём + immutable-хранение<br/><b>Чем:</b> Kafka/SQS + S3/MinIO + PostgreSQL<br/><b>Ресурс:</b> CPU, сеть<br/><b>Зачем:</b> идемпотентный вход, оригинал = источник истины"]:::ingest
+    A["📥 INGESTION<br/><b>Что:</b> приём + immutable-хранение<br/><b>Чем:</b> Kafka (on-prem) + MinIO/FS + PostgreSQL (all local)<br/><b>Ресурс:</b> CPU, локальная сеть<br/><b>Зачем:</b> идемпотентный вход, оригинал = источник истины"]:::ingest
 
     B["🔄 NORMALIZATION + MULTI-RES RENDER<br/><b>Чем:</b> PyMuPDF, pdf2image/Ghostscript, Pillow/OpenCV,<br/>LibreOffice, Playwright, extract-msg<br/><b>Ресурс:</b> CPU-bound, 8-16 vCPU pool<br/><b>Зачем:</b> разрешение задаёт потолок точности"]:::ingest
 
     C{"🔍 TEXT-LAYER TRUST CHECK<br/><b>Чем:</b> эвристики + Tesseract sample-cross-check<br/><b>Ресурс:</b> CPU<br/><b>Зачем:</b> решает 'битый/сдвинутый text layer'"}:::ingest
 
-    D["✂️ PACKET SEGMENTATION<br/><b>Чем:</b> LayoutLMv3/Donut + BIO-tagging (DocSplit)<br/><b>Ресурс:</b> 1×GPU T4<br/><b>Зачем:</b> инвойс+договор+W9 в одном файле"]:::parse
+    D["✂️ PACKET SEGMENTATION<br/><b>Чем:</b> LayoutLMv3/Donut + BIO-tagging (DocSplit)<br/><b>Ресурс:</b> GPU1 (A100)<br/><b>Зачем:</b> инвойс+договор+W9 в одном файле"]:::parse
 
     subgraph PARSE["🧩 STAGE 3 — COARSE-TO-FINE PARSING"]
         direction TB
-        E["📐 3a LAYOUT DETECTION<br/><b>Чем:</b> RT-DETR / PP-DocLayoutV2 (YOLOv8 lite)<br/><b>Ресурс:</b> 1×GPU T4, ~35ms/стр<br/><b>Зачем:</b> стабильные bbox без галлюцинаций"]:::gpu
-        F["🔢 3b READING ORDER<br/><b>Чем:</b> Pointer Network (6 transformer layers)<br/><b>Ресурс:</b> shared GPU<br/><b>Зачем:</b> multi-column, sidebars, footnotes"]:::gpu
-        G["🔤 Text → PaddleOCR-VL-0.9B / SmolDocling<br/>ИЛИ доверенный text-layer"]:::gpu
-        H["📊 Table → TATR/POTATR + VLM ячейки<br/>GriTS 0.964"]:::gpu
-        I["📈 Figure/Chart/Formula → Qwen2.5-VL / Nougat"]:::gpu
-        J["✍️ Signature/Seal → детектор + seal-recognition"]:::gpu
+        E["📐 3a LAYOUT DETECTION<br/><b>Чем:</b> RT-DETR / PP-DocLayoutV2<br/><b>Ресурс:</b> GPU1 (A100), ~2GB, ~35ms/стр<br/><b>Зачем:</b> стабильные bbox без галлюцинаций"]:::gpu
+        F["🔢 3b READING ORDER<br/><b>Чем:</b> Pointer Network (6 transformer layers)<br/><b>Ресурс:</b> GPU1 (shared)<br/><b>Зачем:</b> multi-column, sidebars, footnotes"]:::gpu
+        G["🔤 Text → PaddleOCR-VL-0.9B / SmolDocling (GPU1, ~3GB)<br/>ИЛИ доверенный text-layer"]:::gpu
+        H["📊 Table → TATR/POTATR (GPU1, &lt;1GB) + VLM ячейки<br/>GriTS 0.964"]:::gpu
+        I["📈 Figure/Chart/Formula → PaddleOCR-VL / Nougat (GPU1)"]:::gpu
+        J["✍️ Signature/Seal → детектор + seal-recognition (GPU1)"]:::gpu
         K["🗂️ 3d ASSEMBLY<br/><b>Чем:</b> Docling / DocTags → Markdown+JSON+bbox<br/><b>Зачем:</b> единый формат + грудинг для цитат"]:::parse
         E --> F
         F --> G & H & I & J
@@ -646,8 +647,8 @@ flowchart TD
 
     subgraph EXTRACT["🎯 STAGE 4 — DUAL-PATH EXTRACTION"]
         direction TB
-        L["Path A: SPECIALIST<br/><b>Чем:</b> LayoutLMv3 fine-tuned<br/><b>Ресурс:</b> self-host T4, ~40ms<br/>стабилен, слаб на OOD"]:::extract
-        M["Path B: FRONTIER VLM<br/><b>Чем:</b> Claude 3.5 / GPT-4o / Qwen2.5-VL<br/><b>Ресурс:</b> API, ~$0.008/стр<br/>+ Layout-as-Thought, устойчив к верстке"]:::extract
+        L["Path A: SPECIALIST<br/><b>Чем:</b> LayoutLMv3 fine-tuned<br/><b>Ресурс:</b> GPU1 (A100), ~40ms<br/>стабилен, слаб на OOD"]:::extract
+        M["Path B: LOCAL VLM (air-gapped)<br/><b>Чем:</b> Qwen2.5-VL-32B AWQ, self-hosted vLLM<br/><b>Ресурс:</b> GPU0 (A100 40GB), TP=1<br/>+ Layout-as-Thought, устойчив к верстке"]:::extract
         N{"⚖️ RECONCILIATION<br/><b>Чем:</b> Stickler-компаратор (exact/fuzzy/numeric)<br/><b>Зачем:</b> расхождение = сигнал ошибки<br/>99.2% @ 4.1% review"}:::extract
         L --> N
         M --> N
@@ -655,8 +656,8 @@ flowchart TD
 
     subgraph CONF["📊 STAGE 5-6 — CONFIDENCE + VALIDATION"]
         direction TB
-        O["🧮 MULTI-SIGNAL CONFIDENCE<br/><b>Чем:</b> Hunter-Mapper + CatBoost (ExtractConf)<br/>OCR-conf, logprob-entropy, agreement,<br/>image-quality, spatial, reconstruction-fidelity<br/><b>Калибровка:</b> isotonic, ECE<0.03"]:::conf
-        P["✅ VALIDATION<br/><b>Чем:</b> rules + LLM cross-field + DB/API +<br/>Reconstruction-as-Validation (RaV-IDP)<br/><b>Зачем:</b> ловит галлюцинации до вывода"]:::conf
+        O["🧮 MULTI-SIGNAL CONFIDENCE<br/><b>Чем:</b> Hunter-Mapper (reuse GPU0 VLM) + CatBoost (ExtractConf)<br/>OCR-conf, logprob-entropy (локальные!), agreement,<br/>image-quality, spatial, reconstruction-fidelity<br/><b>Калибровка:</b> isotonic, ECE<0.03"]:::conf
+        P["✅ VALIDATION<br/><b>Чем:</b> rules + локальный LLM cross-field + local DB +<br/>Reconstruction-as-Validation (RaV-IDP)<br/><b>Зачем:</b> ловит галлюцинации до вывода"]:::conf
         O --> P
     end
 
@@ -691,27 +692,28 @@ flowchart TD
 |-------|-------------|
 | Blue | Intake (ingestion, normalization, trust check) |
 | Green | Parsing (segmentation, layout, assembly) |
-| Red border | GPU-bound recognition nodes |
-| Orange | Dual-path extraction + reconciliation |
+| Red border | GPU-bound nodes (parsing stack → **GPU1**) |
+| Orange | Dual-path extraction + reconciliation (Path B → **GPU0**) |
 | Purple | Confidence + validation |
 | Pink | Routing, output, feedback |
 
 ### 13.4 Resource Table (place under the diagram in `docs/architecture.md`)
 
-| Стадия | Compute | Модель/сервис | Латентность/стр | Стоимость/стр | Масштабирование |
-|--------|---------|---------------|-----------------|---------------|-----------------|
-| Ingestion | CPU | Kafka+S3+PG | ~50ms | ~$0.0001 | горизонтальное (workers) |
-| Normalize | 8-16 vCPU | PyMuPDF/LibreOffice | ~80-800ms | ~$0.0001 | CPU pool |
-| Trust check | CPU | Tesseract | ~200ms | ~$0.00005 | CPU |
-| Segmentation | 1×T4 GPU | LayoutLMv3 | ~50ms | ~$0.0002 | GPU batch |
-| Layout+Order | 1×T4 GPU | RT-DETR+Pointer | ~40ms | ~$0.0002 | GPU batch |
-| Recognition | 1×A10/L4 GPU | PaddleOCR-VL-0.9B | ~150-400ms | ~$0.0008 | GPU pool, vLLM |
-| Path A | 1×T4 GPU | LayoutLMv3 | ~40ms | ~$0.0002 | self-host |
-| Path B | API | Claude/GPT-4o | ~900-2400ms | ~$0.008 | rate-limited, только low-conf |
-| Confidence | CPU | CatBoost | ~20ms | ~$0.00005 | CPU |
-| Validation | CPU+API | rules+LLM+DB | ~100ms | ~$0.0005 | CPU |
+| Стадия | Устройство | Модель/сервис | VRAM | Латентность/стр | Масштабирование |
+|--------|------------|---------------|------|-----------------|-----------------|
+| Ingestion | CPU | Kafka+MinIO+PostgreSQL (local) | — | ~50ms | горизонтальное (workers) |
+| Normalize | 8-16 vCPU | PyMuPDF/LibreOffice/Playwright | — | ~80-800ms | CPU pool |
+| Trust check | CPU | Tesseract | — | ~200ms | CPU |
+| Segmentation | **GPU1** (A100 40GB) | LayoutLMv3 | ~2GB | ~50ms | GPU batch |
+| Layout+Order | **GPU1** | RT-DETR/PP-DocLayoutV2 + Pointer | ~2GB | ~40ms | GPU batch |
+| Recognition | **GPU1** | PaddleOCR-VL-0.9B | ~3GB | ~150-400ms | локальный vLLM |
+| Table | **GPU1** | TATR/POTATR | <1GB | ~50-150ms | GPU batch |
+| Path A (specialist) | **GPU1** | LayoutLMv3 fine-tuned | ~2GB | ~40ms | self-host |
+| Path B (VLM) | **GPU0** (A100 40GB) | Qwen2.5-VL-32B AWQ, vLLM TP=1 | ~20GB веса + ~18GB KV | ~1-4s | self-host, только low-conf |
+| Confidence | CPU (+ GPU0 reuse) | CatBoost + Hunter-Mapper на VLM | — | ~20ms + VLM-call | CPU |
+| Validation | CPU (+ GPU0 reuse) | rules + local LLM + local DB + RaV | — | ~100ms + VLM-call | CPU |
 
-> Cost/latency — ориентиры на январь 2026 (per-page). Path B запускается выборочно (по низкой уверенности Path A), а не на каждый документ — это ключ к контролю бюджета.
+> Латентность — ориентиры для 2×A100 40GB. Стоимости per-page нет (air-gapped, без API). Path B и Hunter-Mapper/валидация переиспользуют один VLM на GPU0 и запускаются выборочно (по низкой уверенности Path A) — это ключ к пропускной способности. GPU1 полностью отдан парсинг-стеку (~8GB суммарно, большой запас в 40GB).
 
 ### 13.5 Notes for Implementer
 
@@ -719,3 +721,63 @@ flowchart TD
 - Do not exceed ~8 lines per node label or the diagram becomes unreadable; move detail to the resource table.
 - If the diagram grows, split into two files: `docs/architecture.md` (high-level flow) and `docs/architecture-parsing.md` (Stage 3 detail).
 - Regenerate `docs/architecture.svg` / `.png` whenever the Mermaid source changes (CI recommended).
+- **Air-gap note**: mermaid-cli (Puppeteer/Chromium) must be installed offline on the build host, or export the images once on a connected build machine and commit the resulting `.svg/.png` to the repo. The runtime server needs no internet.
+
+---
+
+## 14. Air-Gapped Deployment on 2×A100 40GB
+
+**Constraint**: On-prem server, **no internet**, 2×NVIDIA A100 40GB (80GB total VRAM). No external LLM/OCR APIs. All models, packages, and images provisioned offline.
+
+### 14.1 GPU Budget (Variant A — dedicated per-GPU)
+
+| Device | Workload | Models | VRAM |
+|--------|----------|--------|------|
+| **GPU0** (A100 40GB) | Extraction Path B + Hunter-Mapper confidence + LLM validation | Qwen2.5-VL-32B AWQ int4 (vLLM, TP=1) | ~20GB weights + ~18GB KV-cache |
+| **GPU1** (A100 40GB) | Full parsing stack (isolated from extraction) | RT-DETR/PP-DocLayoutV2 (~2GB) + Pointer Net + PaddleOCR-VL-0.9B (~3GB) + TATR/POTATR (<1GB) + LayoutLMv3 Path A (~2GB) | ~8GB used, ~32GB headroom |
+| **CPU** | Confidence classifier, orchestration, rendering | CatBoost, PyMuPDF, LibreOffice, Tesseract | RAM |
+
+Rationale: physical isolation of the extraction VLM from the parsing pipeline → no memory contention, large KV-cache on GPU0 (long multi-page context in a single pass), simple and robust ops. Ceiling is 32B (72B does not fit on a single 40GB card).
+
+### 14.2 Model Choices (all open-weights, air-gap compatible)
+
+- **Primary VLM (Path B / confidence / validation)**: Qwen2.5-VL-32B-Instruct (AWQ/GPTQ int4).
+- **Parsing recognition**: PaddleOCR-VL-0.9B (or SmolDocling-256M for lighter footprint).
+- **Layout**: RT-DETR / PP-DocLayoutV2. **Reading order**: Pointer Network.
+- **Tables**: TATR / POTATR (non-VLM, outperforms domain VLMs on TSR).
+- **Path A specialist**: LayoutLMv3 fine-tuned per document type.
+- **Alternatives if 32B is too heavy or for redundancy**: InternVL2, HunyuanOCR-1B, Qianfan-OCR-4B.
+
+### 14.3 Offline Provisioning (build/transfer checklist)
+
+1. **Model weights**: download all HF checkpoints on a connected machine → transfer to server → local model dir.
+2. **Offline flags at runtime**: `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_DATASETS_OFFLINE=1`.
+3. **Python deps**: build a wheelhouse (`pip download`) or run a private PyPI mirror (devpi/Nexus); install with `--no-index --find-links`.
+4. **Containers**: pull and `docker save` images (vLLM, PaddleOCR, app) → `docker load` on server, or push to a local registry (Harbor).
+5. **System packages**: LibreOffice, Ghostscript, Tesseract + language packs, Chromium (for Playwright) — provision via offline apt mirror or bundled `.deb`.
+6. **Telemetry off**: disable vLLM usage stats (`VLLM_NO_USAGE_STATS=1` / `DO_NOT_TRACK=1`), HF telemetry (`HF_HUB_DISABLE_TELEMETRY=1`), pip version check; block all egress at firewall.
+
+### 14.4 Local Infrastructure (replaces cloud services)
+
+| Cloud (original) | Air-gapped replacement |
+|---|---|
+| S3 | MinIO or local filesystem |
+| SQS/Kafka | self-hosted Kafka / RabbitMQ |
+| Managed DB | on-prem PostgreSQL |
+| API LLM (Claude/GPT-4o) | self-hosted vLLM (Qwen2.5-VL-32B) |
+| Cloud OCR (Textract/Doc AI) | PaddleOCR-VL + TATR (local) |
+
+### 14.5 Serving & Concurrency Notes
+
+- Serve the VLM via **vLLM** with `--gpu-memory-utilization` tuned so KV-cache fits multi-page documents; pin to GPU0 (`CUDA_VISIBLE_DEVICES=0`).
+- Pin the parsing stack to GPU1 (`CUDA_VISIBLE_DEVICES=1`); load small models once and keep resident (avoid reload churn).
+- Goal is accuracy, not latency → batch processing acceptable; queue documents through Kafka, process with bounded concurrency to respect VRAM.
+- Hunter-Mapper (2 asymmetric prompts) and RaV validation reuse the same GPU0 VLM via sequential calls; account for their added VLM calls in throughput planning.
+
+### 14.6 Dual-Path Still Applies (air-gapped)
+
+Both extraction paths are now local models with different failure modes: Path A (LayoutLMv3 — stable, weak on OOD layouts) and Path B (Qwen2.5-VL-32B — robust to layout variation, less deterministic). Reconciliation of their disagreement remains the primary accuracy lever; no internet dependency.
+
+### 14.7 Upgrade Option
+
+If a benchmark on real production documents shows a material accuracy gain, upgrade the primary VLM to **72B AWQ with TP=2** (Variant B). Trade-off: parsing stack and KV-cache become memory-constrained, ops complexity increases (tensor-parallel + co-residency). Only adopt after measured justification.
