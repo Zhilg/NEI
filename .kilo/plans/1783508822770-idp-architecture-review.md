@@ -1,8 +1,9 @@
-# Industrial IDP System — Architecture Review
+# Industrial IDP System — Architecture Review + Component Specification
 
 **Author**: Principal AI Architect  
 **Date**: 2026-07-08  
-**Status**: FINAL  
+**Status**: FINAL (Part I = review; Part II = component spec; Part III = diagrams & contracts)  
+**Contents**: Part I (§1–14) architecture review & air-gapped deployment · Part II (§15–16) detailed spec of 18 services · Part III (§17–24) service interaction, data flow, decision tree, DAG, lifecycle, per-stage JSON, API contracts.  
 **Goal**: Maximum accuracy entity/metadata extraction from heterogeneous documents  
 **Deployment constraint**: Air-gapped (no internet) on-prem server with **2×NVIDIA A100 40GB** (80GB total VRAM). No external APIs. See Section 14.
 
@@ -785,3 +786,891 @@ Both extraction paths are now local models with different failure modes: Path A 
 ### 14.7 Upgrade Option
 
 If a benchmark on real production documents shows a material accuracy gain, upgrade the primary VLM to **72B AWQ with TP=2** (Variant B). Trade-off: parsing stack and KV-cache become memory-constrained, ops complexity increases (tensor-parallel + co-residency). Only adopt after measured justification.
+
+---
+
+# PART II — DETAILED COMPONENT SPECIFICATION
+
+> **Audience**: 20 senior engineers. **Status**: architecture APPROVED — this section is the build spec.
+> **Deployment**: air-gapped, 2×A100 40GB, Variant A. All models local. No external APIs.
+
+## 15. Global Conventions
+
+### 15.1 Service Topology
+
+- **Communication**: two planes.
+  - **Control/data plane (async)**: Apache Kafka topics. Each service consumes from an input topic, produces to an output topic. This is the primary orchestration mechanism (event-driven DAG).
+  - **Sync plane (request/response)**: gRPC for GPU inference services (low-latency, binary, streaming); REST/JSON for control APIs (HITL portal, admin, health).
+- **Blob storage**: MinIO (S3-compatible) for page images, crops, intermediate artifacts. Kafka messages carry **references** (object keys), never large binaries.
+- **State store**: PostgreSQL — canonical document state, per-stage results index, audit log. Redis — caches, idempotency keys, distributed locks.
+- **Artifact model**: every stage writes an immutable `StageResult` blob to MinIO keyed by `{doc_id}/{stage}/{version}.json` and an index row to PostgreSQL. Nothing is mutated in place — reprocessing creates a new version.
+
+### 15.2 Common Envelope (every Kafka message)
+
+```json
+{
+  "envelope_version": "1.0",
+  "message_id": "uuid",
+  "doc_id": "uuid",
+  "segment_id": "uuid|null",
+  "page_range": [1, 12],
+  "stage": "ocr_ensemble",
+  "attempt": 1,
+  "trace_id": "w3c-traceparent",
+  "produced_at": "2026-07-08T11:00:00Z",
+  "producer": "ocr-ensemble@v2.3.1",
+  "payload_ref": "s3://idp/{doc_id}/ocr_ensemble/v1.json",
+  "payload_inline": null,
+  "priority": "normal",
+  "sla_deadline": "2026-07-08T11:05:00Z"
+}
+```
+
+### 15.3 Common Confidence Model
+
+- Every extracted unit (char span, cell, region, field) carries `confidence ∈ [0,1]` PLUS the **raw signals** used to derive it (so downstream Confidence Fusion can re-weight).
+- Confidence is always **calibrated** per stage against held-out ground truth (isotonic regression); raw model scores are stored separately as `raw_confidence`.
+- Target calibration: **ECE < 0.03** per stage, monitored weekly.
+
+### 15.4 Common Error / Retry / Fallback Semantics
+
+- **Error classes**: `TRANSIENT` (GPU OOM, timeout, queue backpressure) → retry; `DATA` (corrupt input, unsupported codec) → dead-letter, no retry; `MODEL` (inference produced invalid schema) → fallback model then dead-letter; `POISON` (repeated crash) → quarantine topic + alert.
+- **Retry**: exponential backoff with jitter, `base=2s`, `max=60s`, `max_attempts=3` (per-service override). Idempotency key = `{doc_id}:{stage}:{content_hash}` in Redis prevents duplicate side effects.
+- **Dead-letter**: `dlq.{stage}` topic; DLQ consumer surfaces to ops dashboard + HITL as needed.
+- **Circuit breaker**: per downstream model server (open after N consecutive failures → route to fallback → half-open probe).
+
+### 15.5 Common Observability
+
+- **Logging**: structured JSON logs (level, `trace_id`, `doc_id`, `stage`, `attempt`, `latency_ms`, `model_version`, `outcome`). Shipped to Loki. No document content in logs (PII) — only refs and hashes.
+- **Tracing**: OpenTelemetry, W3C `traceparent` propagated through envelope. One trace = one document journey across all services.
+- **Metrics**: Prometheus. Every service exports RED (Rate, Errors, Duration) + domain metrics (below). Grafana dashboards per service + one global "document funnel".
+- **Model registry**: MLflow (offline mode) tracks model versions, calibration curves, eval metrics; models pinned by digest.
+
+### 15.6 Service Catalog
+
+| # | Service | GPU | Kafka in → out |
+|---|---------|-----|----------------|
+| S1 | Ingestion | — | `ingest.raw` → `pipeline.normalize` |
+| S2 | Format Normalization & Rendering | CPU | `pipeline.normalize` → `pipeline.classify` |
+| S3 | Document Classification | GPU1 | `pipeline.classify` → `pipeline.segment` |
+| S4 | Text Layer Quality Estimator | CPU | `pipeline.segment` → `pipeline.enhance`/`pipeline.ocr` |
+| S5 | Image Enhancement | CPU/GPU1 | `pipeline.enhance` → `pipeline.ocr` |
+| S6 | OCR Ensemble | GPU1 | `pipeline.ocr` → `pipeline.ocr_consensus` |
+| S7 | OCR Consensus | CPU | `pipeline.ocr_consensus` → `pipeline.layout` |
+| S8 | Layout Reconstruction | GPU1 | `pipeline.layout` → `pipeline.tables`/`figures`/`semantic` |
+| S9 | Table Reconstruction | GPU1 | `pipeline.tables` → `pipeline.semantic` |
+| S10 | Figure Processing | GPU1 | `pipeline.figures` → `pipeline.semantic` |
+| S11 | Semantic Reconstruction | CPU/GPU0 | `pipeline.semantic` → `pipeline.extract` |
+| S12 | Entity Extraction (dual-path) | GPU0+GPU1 | `pipeline.extract` → `pipeline.reconcile` |
+| S13 | Reconciliation | CPU | `pipeline.reconcile` → `pipeline.validate` |
+| S14 | Validation Engine | CPU/GPU0 | `pipeline.validate` → `pipeline.confidence` |
+| S15 | Confidence Fusion | CPU | `pipeline.confidence` → `pipeline.route` |
+| S16 | Routing & HITL | — | `pipeline.route` → `pipeline.output`/`hitl.review` |
+| S17 | Feedback/Training | offline | `hitl.corrections` → model registry |
+| S18 | Orchestrator | — | control-plane (saga, timeouts, DAG edges) |
+
+---
+
+## 16. Service Specifications
+
+> Each service follows the same 16-field template. `⭐` = expanded per request.
+
+### S1 — Ingestion Service
+
+- **Назначение**: единая точка приёма документов (watched folder / SFTP drop / internal upload API), присвоение `doc_id`, неизменяемое хранение оригинала, старт саги.
+- **Входные данные**: сырой файл (bytes) + метаданные источника (channel, sender, received_at).
+- **Выходные данные**: `doc_id`, объект-оригинал в MinIO `raw/{doc_id}/original.{ext}`, событие в `pipeline.normalize`.
+- **Внутренний алгоритм**: (1) стрим в MinIO с вычислением SHA-256; (2) дедуп по хэшу (Redis SETNX) — идентичный файл возвращает существующий `doc_id`; (3) MIME-sniffing (libmagic) + верификация расширения; (4) запись строки в `documents` (state=`INGESTED`); (5) emit envelope.
+- **Используемые модели**: нет (детерминированный сервис).
+- **Альтернативные модели**: —.
+- **Форматы данных**: вход — любой из поддерживаемых (PDF/TIFF/PNG/JPG/DOCX/XLSX/PPTX/HTML/EML/MSG); выход — оригинал + JSON-envelope.
+- **Confidence score**: `ingest_confidence` = 1.0, кроме случая MIME/extension mismatch → 0.5 + флаг `mime_mismatch`.
+- **Возможные ошибки**: `DATA` (файл 0 байт, битый контейнер), `TRANSIENT` (MinIO недоступен), `POISON` (превышен лимит размера, напр. >500MB/2000 стр).
+- **Retry strategy**: только `TRANSIENT` (MinIO/Kafka) — 3 попытки, backoff. `DATA` → сразу DLQ `dlq.ingest`.
+- **Fallback strategy**: при недоступности MinIO — временный запис на локальный WAL-диск, дренаж при восстановлении.
+- **Caching**: дедуп-кэш `sha256 → doc_id` (Redis, TTL 7 дней).
+- **Логирование**: `doc_id`, `sha256`, `source_channel`, `size`, `mime`, `dedup_hit`.
+- **Мониторинг**: ingest rate, dedup ratio, MinIO write latency, DLQ rate.
+- **Метрики качества**: % успешно принятых, % mime_mismatch, % дублей.
+- **API между сервисами**: REST `POST /v1/documents` (upload) → `{doc_id}`; Kafka producer `pipeline.normalize`.
+
+### S2 — Format Normalization & Rendering Service
+
+- **Назначение**: привести любой формат к каноническому набору: (a) page-images в нужном разрешении, (b) сохранённый нативный текстовый слой + координаты (где есть), (c) нативная структура для office-форматов.
+- **Входные данные**: envelope + ref на оригинал.
+- **Выходные данные**: per-page PNG (`pages/{doc_id}/{n}.png`), `native_text.json` (текст+bbox из PDF/DOCX), `render_manifest.json` (dpi, размеры, кол-во страниц, source_type).
+- **Внутренний алгоритм**:
+  1. Роутинг по типу: PDF→PyMuPDF (extract text layer + embedded images + render @ target DPI); scan-PDF→pdf2image/Ghostscript @300 DPI; image→Pillow/OpenCV; DOCX/PPTX→LibreOffice headless→PDF→render; XLSX→openpyxl (структура) + render листов; HTML→Playwright screenshot + DOM; EML/MSG→парсинг MIME, извлечение тела + рекурсия по вложениям (каждое вложение → новый `doc_id` с `parent_doc_id`).
+  2. Определение целевого DPI: адаптивно (мелкий шрифт → 300–400 DPI) на основе первичной оценки плотности текста.
+  3. Нормализация цветового пространства, ориентации (EXIF), удаление alpha.
+- **Используемые модели**: нет (rendering); опц. лёгкий orientation-classifier (доля градусов) — MobileNet-tiny.
+- **Альтернативные модели**: orientation через Tesseract OSD.
+- **Форматы данных**: вход — оригинал; выход — PNG (RGB, без alpha), JSON.
+- **Confidence score**: `render_confidence` — по успешности рендера каждой страницы (1.0 полный успех; <1.0 если часть страниц не отрендерилась).
+- **Возможные ошибки**: `DATA` (зашифрованный PDF без пароля, битый DOCX), `TRANSIENT` (LibreOffice worker crash), `MODEL` (—).
+- **Retry strategy**: `TRANSIENT` 3× ; LibreOffice в отдельном sandbox-процессе с таймаутом 60s, kill+retry.
+- **Fallback strategy**: PDF не парсится PyMuPDF → рендер через Ghostscript как скан → downstream пойдёт по OCR-ветке; office не конвертируется LibreOffice → рендер через альтернативный конвертер (unoconv) или пометка `render_failed` + HITL.
+- **Caching**: рендер кэшируется по `sha256(original)+dpi` (MinIO) — повторная обработка бесплатна.
+- **Логирование**: source_type, page_count, target_dpi, per-format renderer, fallback_used.
+- **Мониторинг**: pages/sec, renderer error rate по типам, LibreOffice pool saturation.
+- **Метрики качества**: % страниц с успешным рендером, среднее отклонение DPI от оптимального.
+- **API**: gRPC `Render(doc_ref) → render_manifest` (для синхронных нужд); Kafka `pipeline.classify`.
+
+### S3 — Document Classification ⭐
+
+- **Назначение**: определить (a) тип документа per-страница и per-документ (invoice, contract, form, letter, report, ID, ...), (b) вероятность мультидокументного пакета и точки разбиения, (c) выбрать downstream-профиль обработки (какие экстракторы/схемы применять). Это **адаптивный роутер**, а не жёсткий гейт.
+- **Входные данные**: page-images + `native_text.json` + `render_manifest`.
+- **Выходные данные**:
+  ```json
+  {
+    "doc_id": "…",
+    "page_labels": [{"page":1,"type":"invoice","p":0.94,"bio":"B-invoice"},
+                    {"page":2,"type":"invoice","p":0.90,"bio":"I-invoice"},
+                    {"page":3,"type":"contract","p":0.88,"bio":"B-contract"}],
+    "doc_type": "packet",
+    "segments_hint": [{"range":[1,2],"type":"invoice"},{"range":[3,7],"type":"contract"}],
+    "processing_profile": "profile.invoice_v3",
+    "confidence": 0.91
+  }
+  ```
+- **Внутренний алгоритм**:
+  1. **Мультимодальный энкодер** страницы: изображение (низкое разрешение, ~224–512px) + топ-N токенов native_text → LayoutLMv3/Donut-classifier → эмбеддинг страницы.
+  2. **Sequence labeling (BIO)** поверх последовательности страниц (BiLSTM/Transformer head) → границы документов внутри пакета (это вход для S-сегментации, здесь только hint).
+  3. **Классификация типа** на уровне страницы (softmax по таксономии типов) + агрегация в тип документа/сегмента.
+  4. **Выбор профиля**: маппинг type→processing_profile (какие схемы полей, какие валидаторы, какой extractor prompt).
+  5. **OOD-детекция**: если max softmax < τ или энергия/Mahalanobis-скор выше порога → `type=unknown` → профиль `generic` + флаг для HITL.
+- **Используемые модели**: LayoutLMv3 (fine-tuned классификатор, GPU1). Таксономия конфигурируема (YAML).
+- **Альтернативные модели**: Donut-classifier (OCR-free) для случаев с плохим/отсутствующим текстовым слоем; DiT (Document Image Transformer) как vision-only fallback; zero-shot через Qwen2.5-VL (GPU0) для unknown-типов.
+- **Форматы данных**: вход JSON+PNG; выход JSON (см. выше).
+- **Confidence score**: `class_confidence` = калиброванная (isotonic) вероятность выбранного типа; отдельно `segmentation_confidence` для BIO-границ. Per-page и aggregate.
+- **Возможные ошибки**: `MODEL` (невалидный выход, NaN), `DATA` (пустая страница). Смысловые: misclassification, пропущенная граница пакета.
+- **Retry strategy**: `MODEL`/`TRANSIENT` — 2 попытки на primary, затем fallback-модель.
+- **Fallback strategy**: low-confidence или OOD → (1) zero-shot VLM классификация; (2) если всё ещё низко → profile=`generic` (запускает максимально общий парсинг) + маршрут в HITL на подтверждение типа.
+- **Caching**: эмбеддинги страниц кэшируются (Redis/MinIO) по хэшу изображения — ускоряет реклассификацию при смене таксономии.
+- **Логирование**: page_labels, doc_type, profile, ood_flag, model_version, fallback_used.
+- **Мониторинг**: распределение предсказанных типов (drift-детекция), % OOD, доля fallback, средняя max-softmax.
+- **Метрики качества**: per-class precision/recall/F1, confusion matrix (по HITL-разметке), packet-boundary F1, OOD detection AUROC, ECE калибровки.
+- **API**: gRPC `Classify(pages, native_text) → ClassificationResult`; Kafka `pipeline.segment`. Публикует `processing_profile`, который читают S11/S12/S14.
+
+### S4 — Text Layer Quality Estimator ⭐
+
+- **Назначение**: решить, **можно ли доверять встроенному текстовому слою** (per-region), и направить каждый регион либо на «взять native text», либо на OCR. Прямо решает проблему «битый/сдвинутый/посимвольный/мусорный текст PDF».
+- **Входные данные**: `native_text.json` (спаны+bbox+шрифты), page-images, `render_manifest`.
+- **Выходные данные**:
+  ```json
+  {
+    "page": 1,
+    "global_trust": 0.32,
+    "decision": "ocr_required",
+    "regions": [
+      {"bbox":[..],"trust":0.95,"decision":"use_native","reason":"clean"},
+      {"bbox":[..],"trust":0.10,"decision":"ocr","reason":"cid_garbage"}
+    ]
+  }
+  ```
+- **Внутренний алгоритм** (набор детекторов → взвешенная агрегация):
+  1. **Coverage**: доля площади страницы, покрытая текстовыми боксами vs визуально «чернильные» пиксели (OpenCV connected components). Низкое покрытие при высокой чернильности → скан без слоя.
+  2. **Garbage/CID-детекция**: доля символов вне ожидаемых юникод-диапазонов, `(cid:NN)` глифы, аномальная энтропия n-грамм, доля непечатаемых.
+  3. **Geometry sanity**: боксы вне страницы, нулевой размер, перекрытия, посимвольная разбивка (каждый символ = отдельный спан).
+  4. **Vision cross-check**: быстрый Tesseract-проход по K случайным строкам → CER(native, ocr_sample). CER>15% → слой недоверенный.
+  5. **Language plausibility**: лёгкая LID + словарное покрытие.
+  6. Взвешенная логистическая модель → `trust ∈ [0,1]` per-region; порог → decision.
+- **Используемые модели**: Tesseract (sample cross-check), lightweight LID (fastText-compact), логистический агрегатор (обучен на размеченных «good/broken» PDF).
+- **Альтернативные модели**: PaddleOCR quick-pass вместо Tesseract; GNN по геометрии боксов (research-tier).
+- **Форматы данных**: JSON in/out.
+- **Confidence score**: сам `trust` — это и есть confidence слоя; отдаётся в Confidence Fusion как сигнал `text_layer_trust`.
+- **Возможные ошибки**: `DATA` (нет текстового слоя вообще → тривиально decision=ocr), `TRANSIENT` (Tesseract worker).
+- **Retry strategy**: cross-check best-effort; при недоступности Tesseract — пропустить его сигнал, решать по остальным (degraded mode).
+- **Fallback strategy**: при неопределённости (`trust≈порог`) — **безопасный выбор в сторону OCR** (не доверяем сомнительному слою; цель — точность).
+- **Caching**: результат по `sha256(page)+native_hash`.
+- **Логирование**: global_trust, per-region decisions distribution, CER_sample, garbage_ratio.
+- **Мониторинг**: доля страниц ocr_required, средний CER cross-check, распределение trust.
+- **Метрики качества**: точность decision против ground-truth (там где есть и слой, и OCR, и эталон); корреляция trust↔фактический CER.
+- **API**: gRPC `EstimateTrust(native_text, pages) → TrustMap`; Kafka route: high-trust регионы → `pipeline.layout` (native text), low-trust → `pipeline.enhance`→`pipeline.ocr`.
+
+### S5 — Image Enhancement ⭐
+
+- **Назначение**: максимизировать OCR-точность для регионов, идущих на OCR: дескью, деварпинг, денойз, бинаризация, супер-резолюция мелкого текста, удаление фона/шума печатей.
+- **Входные данные**: page-images + список low-trust регионов (bbox) от S4.
+- **Выходные данные**: enhanced-кропы `enhanced/{doc_id}/{page}/{region}.png` + `enhancement_manifest.json` (какие операции применены, параметры, before/after quality score).
+- **Внутренний алгоритм** (конвейер, каждый шаг условный по метрике качества):
+  1. **Deskew**: Hough/Radon оценка угла → поворот.
+  2. **Dewarp** (для фото/сканов книг): модель геометрической коррекции (DocUNet-style) — опц.
+  3. **Denoise / despeckle**: OpenCV (fastNlMeans), морфология.
+  4. **Binarization**: адаптивная (Sauvola) для печатного текста; пропускается для цветных/фото-регионов.
+  5. **Super-resolution**: если высота строки < N px → Real-ESRGAN/SwinIR ×2–×4 (GPU1) только для текстовых кропов.
+  6. **Illumination/shadow correction** для мобильных фото.
+  7. Каждый шаг оценивается no-reference quality metric; шаг откатывается, если ухудшил метрику (guardrail).
+- **Используемые модели**: Real-ESRGAN или SwinIR (super-res, GPU1); DocUNet/GeoTr (dewarp) — опционально; классические CV — без моделей.
+- **Альтернативные модели**: SR — BSRGAN/HAT; dewarp — DewarpNet; denoise — DnCNN.
+- **Форматы данных**: PNG in/out + JSON manifest.
+- **Confidence score**: `enhancement_gain` = Δ(no-reference quality) до/после; не «уверенность», а сигнал для Fusion (`image_quality`).
+- **Возможные ошибки**: `TRANSIENT` (GPU OOM на SR больших кропов → тайлинг), `MODEL` (SR артефакты).
+- **Retry strategy**: OOM → уменьшить тайл/батч, retry; иначе пропустить SR.
+- **Fallback strategy**: любой шаг, ухудшивший качество → откат к предыдущему изображению; при полном отказе SR → OCR по оригинальному кропу (никогда не блокируем pipeline).
+- **Caching**: по `sha256(region)+pipeline_params`.
+- **Логирование**: applied_ops, angles, sr_factor, quality_before/after, rollbacks.
+- **Мониторинг**: доля регионов с SR, средний gain, GPU util, откаты.
+- **Метрики качества**: Δ CER на OCR до/после enhancement (A/B на размеченном наборе) — главный KPI; no-reference IQ (BRISQUE/NIQE).
+- **API**: gRPC `Enhance(region_crops) → enhanced_crops`; Kafka `pipeline.ocr`.
+
+### S6 — OCR Ensemble ⭐
+
+- **Назначение**: для каждого low-trust региона получить текст+координаты+per-char confidence от **нескольких независимых OCR-движков**, чтобы затем консенсусом снизить ошибку. Разные движки ошибаются по-разному.
+- **Входные данные**: enhanced-кропы (или оригинальные, если enhancement пропущен) + метаданные региона (тип: printed/handwritten/mixed, язык-хинт от S3/S4).
+- **Выходные данные**: на каждый регион — массив гипотез от каждого движка:
+  ```json
+  {
+    "region_id":"…","engines":[
+      {"engine":"paddleocr-vl","text":"Total: 1234.56","conf":0.97,
+       "chars":[{"c":"1","bbox":[..],"p":0.99}, …],"lang":"en"},
+      {"engine":"trocr","text":"Total: 1234,56","conf":0.88,"chars":[…]},
+      {"engine":"tesseract","text":"Tota1: 1234.56","conf":0.71,"chars":[…]}
+    ]
+  }
+  ```
+- **Внутренний алгоритм**:
+  1. **Engine routing** по типу региона: printed→PaddleOCR-VL-0.9B (primary) + Tesseract5 (cheap diverse); handwritten/degraded→TrOCR; CJK/multilingual→PaddleOCR-VL (109 языков). Минимум 2 движка на регион, до 3 для критичных полей.
+  2. Параллельный inference (GPU1 pool через vLLM/triton для VL-движка; CPU для Tesseract).
+  3. Нормализация выходов к единой схеме (текст + char-level boxes + confidence). Движки без char-conf получают оценку через эвристику.
+  4. Пер-движковая калибровка confidence (isotonic на движок).
+- **Используемые модели**: PaddleOCR-VL-0.9B (primary, GPU1), Tesseract 5 (CPU), TrOCR-base/large (рукопись, GPU1).
+- **Альтернативные модели**: SmolDocling-256M, GOT-OCR2.0, HunyuanOCR-1B, EasyOCR; для формул — Nougat.
+- **Форматы данных**: PNG in; JSON (per-engine hypotheses) out.
+- **Confidence score**: per-engine, per-char, per-line calibrated confidence; агрегация — в S7.
+- **Возможные ошибки**: `TRANSIENT` (GPU OOM, движок timeout), `MODEL` (пустой/битый выход одного движка).
+- **Retry strategy**: падение одного движка не блокирует — консенсус считается по выжившим (min 1). Timeout движка → его гипотеза помечается missing.
+- **Fallback strategy**: если primary (PaddleOCR-VL) недоступен → Tesseract+TrOCR; если все GPU-движки недоступны → Tesseract-only (degraded, флаг низкой уверенности).
+- **Caching**: по `sha256(crop)+engine_version` — идемпотентно, дорого, кэш обязателен.
+- **Логирование**: engines_run, per-engine latency/conf, missing_engines.
+- **Мониторинг**: per-engine availability, latency p50/p99, GPU util, средняя per-engine confidence, drift.
+- **Метрики качества**: per-engine CER/WER на эталоне; вклад каждого движка в итоговый консенсус (ablation).
+- **API**: gRPC streaming `Recognize(region) → EngineHypotheses`; Kafka `pipeline.ocr_consensus`.
+
+### S7 — OCR Consensus ⭐
+
+- **Назначение**: слить гипотезы нескольких движков в **единый наиболее вероятный текст** с надёжной per-token уверенностью; пометить разногласия для ревью.
+- **Входные данные**: per-region массив engine-гипотез (S6).
+- **Выходные данные**: консенсусный текст региона + per-token confidence + флаги разногласий:
+  ```json
+  {"region_id":"…","text":"Total: 1234.56","method":"weighted_rover",
+   "tokens":[{"t":"Total","p":0.99,"agree":3},{"t":"1234.56","p":0.93,"agree":2,
+     "alts":[{"t":"1234,56","engines":["trocr"]}]}],
+   "region_confidence":0.95,"disagreement":0.07}
+  ```
+- **Внутренний алгоритм**:
+  1. **Alignment**: character/token-level multiple sequence alignment гипотез (ROVER-подобный, с учётом bbox для якорения).
+  2. **Voting**: взвешенное голосование, вес = калиброванная confidence движка × историческая точность движка для данного типа контента/языка.
+  3. **Tie-break**: при равенстве — приоритет движку с наибольшей исторической точностью на этом классе; для числовых полей — доп. правило (валидные форматы чисел/дат) .
+  4. **Disagreement score**: 1 − доля согласных движков (взвешенно) per token → агрегат по региону.
+  5. Токены с высоким disagreement → флаг `needs_review` (пойдёт в Fusion/HITL).
+- **Используемые модели**: детерминированный алгоритм (ROVER + правила); опц. small seq2seq «corrector» (ByT5-small) для пост-коррекции частых OCR-паттернов (`1↔l`, `O↔0`).
+- **Альтернативные модели**: обучаемый confusion-aware LM-reranker; CTC-fusion.
+- **Форматы данных**: JSON in/out.
+- **Confidence score**: per-token и per-region **консенсусная** уверенность (функция согласия + весов) — ключевой сигнал для Fusion.
+- **Возможные ошибки**: `DATA` (все гипотезы пустые → регион помечается unreadable), логические (согласованная, но общая ошибка всех движков — не ловится консенсусом).
+- **Retry strategy**: не требует GPU; ошибки алгоритма → лог + пометка региона, без бесконечных повторов.
+- **Fallback strategy**: одна гипотеза → берётся as-is с confidence движка; ноль гипотез → `unreadable` + HITL.
+- **Caching**: по хэшу набора гипотез.
+- **Логирование**: method, disagreement распределение, corrector_applied, unreadable_count.
+- **Мониторинг**: средний disagreement, доля needs_review, доля unreadable.
+- **Метрики качества**: CER/WER консенсуса vs лучший одиночный движок (должен быть ниже — доказательство ценности ансамбля); корреляция disagreement↔факт. ошибка.
+- **API**: gRPC `Fuse(engine_hypotheses) → ConsensusText`; Kafka `pipeline.layout`.
+
+### S8 — Layout Reconstruction ⭐
+
+- **Назначение**: обнаружить и классифицировать все структурные элементы страницы (bbox + тип), восстановить **порядок чтения** и иерархию (секции, колонки, вложенность), связать текст (native/OCR) с регионами.
+- **Входные данные**: page-images + консенсусный/native текст с координатами.
+- **Выходные данные**:
+  ```json
+  {"page":1,"regions":[
+     {"id":"r1","type":"title","bbox":[..],"order":0,"parent":null},
+     {"id":"r2","type":"table","bbox":[..],"order":3,"parent":"sec1"},
+     {"id":"r3","type":"paragraph","bbox":[..],"order":1,"column":0}],
+   "reading_order":["r1","r3","r5","r2",…],
+   "columns":2,"layout_confidence":0.9}
+  ```
+- **Внутренний алгоритм**:
+  1. **Detection**: RT-DETR / PP-DocLayoutV2 → bbox + класс (title, paragraph, list, table, figure, chart, formula, header, footer, caption, signature, stamp, page-number).
+  2. **Reading order**: Pointer Network (6 transformer layers) → N×N матрица порядка → топологическая линеаризация; учёт колонок (проекционный профиль/XY-cut как sanity check).
+  3. **Hierarchy**: построение дерева (title→section→paragraph; caption↔figure/table linking) по геометрии + типам.
+  4. **Text binding**: сопоставление текстовых спанов (native/консенсус) с регионами по IoU/containment.
+  5. **Layout-as-Thought (опц.)**: для сложных/OOD-страниц — прогон Qwen2.5-VL (GPU0) в think-режиме как второй мнение; расхождение с RT-DETR → флаг.
+- **Используемые модели**: RT-DETR/PP-DocLayoutV2 (GPU1), Pointer Network (GPU1).
+- **Альтернативные модели**: YOLOv8-DocLayNet (лёгкий), DiT/LayoutLMv3 for detection, Qwen2.5-VL Layout-as-Thought (тяжёлый fallback), Docling.
+- **Форматы данных**: PNG+JSON in; DocTags/JSON out.
+- **Confidence score**: per-region detection score + `reading_order_confidence` (энтропия pointer-матрицы) + `layout_confidence` (агрегат).
+- **Возможные ошибки**: `MODEL` (перекрывающиеся боксы, пропуск региона), логические (таблица классифицирована как текст → критично).
+- **Retry strategy**: `TRANSIENT` 2×; при подозрительной раскладке (много перекрытий) → авто-эскалация в Layout-as-Thought.
+- **Fallback strategy**: low layout_confidence → VLM Layout-as-Thought; всё ещё низко → «linear fallback» (простой top-down/left-right порядок) + флаг HITL.
+- **Caching**: по `sha256(page)+model_version`.
+- **Логирование**: n_regions по типам, columns, reading_order_confidence, lat_used (RT-DETR vs VLM).
+- **Мониторинг**: распределение типов регионов (drift), доля VLM-эскалаций, reading-order confidence.
+- **Метрики качества**: layout mAP (DocLayNet), reading-order accuracy (Kendall τ / BLEU-порядка), table-detection recall (критично — пропуск таблицы дорог).
+- **API**: gRPC `AnalyzeLayout(page, text) → LayoutGraph`; Kafka fan-out: `pipeline.tables` (table-регионы), `pipeline.figures` (figure/chart), `pipeline.semantic` (текстовые+все).
+
+### S9 — Table Reconstruction ⭐
+
+- **Назначение**: из табличных регионов восстановить логическую структуру (строки/колонки/ячейки, merged cells, заголовки), содержимое ячеек и семантику (какая колонка — что), включая **многостраничные таблицы**.
+- **Входные данные**: table-регионы (кроп + bbox) + консенсус-текст внутри региона + layout-контекст.
+- **Выходные данные**:
+  ```json
+  {"table_id":"t1","pages":[2,3],"grid":{"rows":40,"cols":6},
+   "cells":[{"r":0,"c":0,"rowspan":1,"colspan":2,"text":"Description","is_header":true,"bbox":[..],"conf":0.98}],
+   "html":"<table>…</table>","otsl":"…","column_semantics":["desc","qty","unit_price","tax","total"],
+   "table_confidence":0.94,"cross_page_merged":true}
+  ```
+- **Внутренний алгоритм**:
+  1. **Structure recognition**: TATR/POTATR (DETR-based) → строки, колонки, spanning cells, headers (bbox + класс).
+  2. **Cell content**: текст берётся из консенсус-OCR/native по геометрии ячейки; при пустоте — таргетный OCR кропа ячейки.
+  3. **Grid canonicalization**: разрешение merged-cells, устранение oversegmentation (канонизация как в PubTables-1M).
+  4. **Cross-page merge**: классификатор «продолжается ли таблица на след. странице» (image-classifier, F1≈0.99 в PubTables-v2) → сшивка по совпадению колонок.
+  5. **Column semantics**: маппинг заголовков → канонические поля (эмбеддинги заголовков + профиль документа).
+  6. **Serialization**: HTML + OTSL (компактный табличный формат) + JSON-grid.
+- **Используемые модели**: TATR-v1.2 / POTATR (GPU1); cross-page classifier (ResNet/ViT-small); опц. VLM для «грязных» безрамочных таблиц.
+- **Альтернативные модели**: TDATR (end-to-end), PaddleOCR-VL table mode, MinerU2.5, Table Transformer v1.1.
+- **Форматы данных**: PNG+JSON in; HTML/OTSL/JSON out.
+- **Confidence score**: per-cell + `table_confidence` (TEDS-подобная внутренняя оценка структуры + OCR-conf ячеек).
+- **Возможные ошибки**: `MODEL` (неверная сетка, потерянные spanning cells), логические (сдвиг колонок, неверный cross-page merge).
+- **Retry strategy**: `TRANSIENT` 2×; при низком table_confidence → повтор через VLM-table.
+- **Fallback strategy**: TATR низкая уверенность → VLM (Qwen2.5-VL/PaddleOCR-VL) table extraction; конфликт → взять вариант с большей внутренней согласованностью + флаг HITL.
+- **Caching**: по `sha256(table_crop)+model_version`.
+- **Логирование**: rows/cols, merged_cells, cross_page_merged, method (tatr/vlm), table_confidence.
+- **Мониторинг**: доля VLM-fallback, средний table_confidence, cross-page merge rate.
+- **Метрики качества**: **TEDS / TEDS-Struct**, GriTS (Top/Con), cell-detection AP50, cross-page continuation F1, column-semantic accuracy.
+- **API**: gRPC `ExtractTable(region) → TableStruct`; Kafka `pipeline.semantic`.
+
+### S10 — Figure Processing ⭐
+
+- **Назначение**: обработать нетекстовые/полутекстовые элементы: диаграммы, графики, схемы, изображения, печати, подписи, логотипы — извлечь из них данные и метаданные (не терять информацию, которую нельзя прочитать как текст).
+- **Входные данные**: figure/chart/signature/stamp-регионы (кроп + тип из S8).
+- **Выходные данные**:
+  ```json
+  {"figure_id":"f1","type":"bar_chart","caption":"Revenue by quarter",
+   "extracted_data":{"series":[{"label":"2025","points":[["Q1",10],["Q2",14]]}]},
+   "ocr_in_figure":["Revenue","Q1","Q2"],"embedding_ref":"…",
+   "signature":{"present":true,"signer_hint":null},"figure_confidence":0.8}
+  ```
+- **Внутренний алгоритм** (роутинг по подтипу):
+  1. **Chart/Plot** → VLM chart-understanding (Qwen2.5-VL / PaddleOCR-VL chart mode) → структурированные данные (series/points) + Markdown-таблица; caption-linking из layout.
+  2. **Diagram/Schema** → VLM captioning + OCR текстовых меток + (опц.) извлечение узлов/связей.
+  3. **Photo/Image** → VLM caption + CLIP-эмбеддинг (для поиска) + OCR встроенного текста.
+  4. **Signature** → детектор наличия + (опц.) сопоставление с эталоном (out of scope v1, только детекция).
+  5. **Stamp/Seal** → seal-recognition (PaddleOCR-VL-1.5 seal task) → текст печати.
+- **Используемые модели**: Qwen2.5-VL (GPU0, chart/diagram/caption), CLIP (эмбеддинги, GPU1), seal-recognition (GPU1), signature-detector (YOLO-small).
+- **Альтернативные модели**: ChartQA-специализированные (Deplot/MatCha), UniChart; BLIP-2 для caption.
+- **Форматы данных**: PNG in; JSON (+ embedding vector) out.
+- **Confidence score**: `figure_confidence` (VLM self-report + структурная согласованность извлечённых данных); chart-data отдельно.
+- **Возможные ошибки**: `MODEL` (галлюцинация данных графика — риск!), `TRANSIENT` (GPU).
+- **Retry strategy**: `TRANSIENT` 2×; для chart-data — самопроверка (сумма/монотонность) , при провале — повтор с иным промптом.
+- **Fallback strategy**: не удаётся извлечь данные графика → сохранить caption + OCR-метки + эмбеддинг (частичная информация, флаг «data_not_extracted»).
+- **Caching**: по `sha256(crop)+model+prompt_version`.
+- **Логирование**: subtype, data_extracted?, ocr_labels_count, figure_confidence.
+- **Мониторинг**: доля chart-data успешно извлечённых, доля fallback, галлюцинация-флаги.
+- **Метрики качества**: chart data extraction accuracy (против эталона), caption relevance, seal-recognition CER, signature-detection precision/recall.
+- **API**: gRPC `ProcessFigure(region) → FigureResult`; Kafka `pipeline.semantic`.
+
+### S11 — Semantic Reconstruction ⭐
+
+- **Назначение**: собрать из разрозненных элементов (текст-регионы, таблицы, фигуры) **единый семантически связный документ** в reading-order с иерархией, cross-references, cross-page склейкой абзацев/секций — вход для экстракции и RAG.
+- **Входные данные**: LayoutGraph (S8) + ConsensusText (S7)/native + TableStruct (S9) + FigureResult (S10).
+- **Выходные данные**: канонический документ:
+  ```json
+  {"doc_id":"…","segment_id":"…","blocks":[
+     {"id":"b1","type":"heading","level":1,"text":"Invoice","page":1,"bbox":[..]},
+     {"id":"b2","type":"paragraph","text":"…","page":1,"refs":["b7"]},
+     {"id":"b3","type":"table","ref":"t1","page":2},
+     {"id":"b4","type":"figure","ref":"f1","page":2}],
+   "markdown":"# Invoice\n…","reading_order":["b1","b2","b3",…],
+   "cross_page_links":[{"from":"b2@p1","to":"b2cont@p2"}],
+   "semantic_confidence":0.9}
+  ```
+- **Внутренний алгоритм**:
+  1. **Merge & order**: расставить все блоки по reading-order из S8; вставить таблицы/фигуры по их bbox-позиции.
+  2. **Paragraph/section stitching**: сшить абзацы, разорванные колонками/страницами (эвристики + опц. LLM на GPU0 для спорных стыков); объединить многостраничные секции.
+  3. **Cross-reference resolution**: связать «см. раздел 3.2», сноски↔маркеры, caption↔объект.
+  4. **Normalization**: единый Markdown + структурированный block-JSON с сохранением bbox/страниц (грудинг для цитат).
+  5. **Language/section tagging** для downstream.
+- **Используемые модели**: в основном детерминированная сборка; опц. локальный LLM (Qwen2.5-VL/‑LLM на GPU0) для спорного stitching и разрешения ссылок.
+- **Альтернативные модели**: Docling assembler; правило-ориентированный сборщик без LLM (быстрый режим).
+- **Форматы данных**: JSON in; Markdown + block-JSON out.
+- **Confidence score**: `semantic_confidence` — доля блоков, размещённых с высокой уверенностью reading-order + успешность stitching.
+- **Возможные ошибки**: неверный порядок при сложной вёрстке, ошибочная склейка разных секций, потеря блока.
+- **Retry strategy**: детерминированный этап; спорные стыки → LLM-проверка (1 попытка), иначе консервативная (без склейки).
+- **Fallback strategy**: при низкой layout-уверенности — линейный порядок по координатам без агрессивной склейки (лучше недосклеить, чем склеить неверно).
+- **Caching**: по хэшу входных артефактов.
+- **Логирование**: n_blocks, stitched_paragraphs, cross_refs_resolved, llm_used.
+- **Мониторинг**: доля LLM-stitching, semantic_confidence, средняя длина документа.
+- **Метрики качества**: reading-order correctness (против эталона), stitching precision/recall, end-to-end Markdown similarity (нормализованный edit distance) на эталонном наборе.
+- **API**: gRPC `Reconstruct(layout, text, tables, figures) → CanonicalDoc`; Kafka `pipeline.extract`.
+
+### S12 — Entity Extraction (Dual-Path) ⭐
+
+- **Назначение**: извлечь целевые сущности/поля/метаданные согласно схеме профиля документа, двумя независимыми путями с разными режимами отказа.
+- **Входные данные**: CanonicalDoc (S11) + `processing_profile` (S3) + extraction-schema (поля, типы, описания) + page-images (для VLM-пути).
+- **Выходные данные**: два набора кандидатов + грудинг:
+  ```json
+  {"path_a":{"fields":{"invoice_no":{"value":"INV-123","bbox":[..],"page":1,
+      "raw_conf":0.93,"source_block":"b1"}}},
+   "path_b":{"fields":{"invoice_no":{"value":"INV-123","evidence":"…","raw_conf":0.9,
+      "logprobs":{"entropy":0.12}}}},
+   "schema_id":"invoice_v3"}
+  ```
+- **Внутренний алгоритм**:
+  - **Path A (Specialist, GPU1)**: LayoutLMv3 fine-tuned per doc-type → token-classification/QA по полям схемы; быстрый, стабильный, привязан к bbox; слаб на OOD-вёрстке.
+  - **Path B (VLM, GPU0)**: Qwen2.5-VL-32B AWQ, schema-guided prompt → **structured output (JSON, constrained decoding/grammar)**; включает Layout-as-Thought на сложных документах; отдаёт evidence-span + logprobs.
+  - Оба получают одну и ту же схему; выходы приводятся к общему формату полей с грудингом (bbox/страница/цитата).
+  - Для табличных полей (line items) — вход из S9 TableStruct.
+- **Используемые модели**: LayoutLMv3 (Path A, GPU1); Qwen2.5-VL-32B AWQ (Path B, GPU0, vLLM).
+- **Альтернативные модели**: Path A — Donut/UDOP/DiT; Path B — InternVL2, Qwen2.5-VL-72B (Variant B), Qianfan-OCR-4B (для KIE).
+- **Форматы данных**: JSON+PNG in; JSON (два набора) out. Path B — JSON Schema-constrained.
+- **Confidence score**: per-field `raw_conf` от каждого пути + logprob-энтропия (Path B) + token-class prob (Path A). Итоговая уверенность считается позже (S13/S15).
+- **Возможные ошибки**: `MODEL` (Path B невалидный JSON → грамматика/repair; галлюцинация значения отсутствующего поля), `TRANSIENT` (GPU OOM).
+- **Retry strategy**: невалидный JSON → constrained-decoding repair (1×) → повтор с укороченным контекстом. `TRANSIENT` 2×.
+- **Fallback strategy**: недоступен Path B (GPU0) → работать на Path A + пометить `single_path` (пониженная итоговая уверенность); недоступен Path A → Path B single. Никогда не блокируем.
+- **Caching**: по `sha256(canonical_doc)+schema_id+model_version` для каждого пути.
+- **Логирование**: schema_id, fields_extracted, path availability, json_repair_used, layout_as_thought_used.
+- **Мониторинг**: per-path latency, per-field extraction rate, доля single-path, GPU0/1 util.
+- **Метрики качества**: per-field precision/recall/F1 по каждому пути отдельно и после reconcile; hallucination rate (значение есть, а в документе нет) — критический KPI.
+- **API**: gRPC `ExtractA(doc, schema)` (GPU1) и `ExtractB(doc, images, schema)` (GPU0), запускаются параллельно оркестратором; Kafka `pipeline.reconcile`.
+
+### S13 — Reconciliation Service
+
+- **Назначение**: слить два набора кандидатов (Path A/B) в один per-field результат и превратить их (не)согласие в сигнал надёжности.
+- **Входные данные**: `path_a` + `path_b` поля (S12).
+- **Выходные данные**: reconciled-поля + agreement-сигналы:
+  ```json
+  {"fields":{"invoice_no":{"value":"INV-123","agreement":"exact",
+     "chosen_path":"both","raw_conf_a":0.93,"raw_conf_b":0.9,"needs_tiebreak":false}},
+   "reconcile_confidence":0.96}
+  ```
+- **Внутренний алгоритм**: per-field сравнение — exact / fuzzy (Levenshtein≤2) / numeric-tolerance / date-normalized / semantic (embedding cosine для длинных текстов). Согласие → выбрать значение, высокая уверенность. Несогласие → `needs_tiebreak=true` (tiebreaker: 3-й прогон VLM с обоими вариантами, или правило, или HITL).
+- **Используемые модели**: детерминированные компараторы (Stickler-подобные) + опц. embedding-модель (bge-small, GPU1/CPU) для semantic match; tiebreaker — Qwen2.5-VL (GPU0).
+- **Альтернативные модели**: LLM-judge для семантической эквивалентности.
+- **Форматы данных**: JSON in/out.
+- **Confidence score**: agreement-производная (exact>fuzzy>none) — сильнейший сигнал для Fusion (`cross_path_agreement`).
+- **Возможные ошибки**: оба пути согласованно неверны (не ловится здесь — ловит Validation/RaV).
+- **Retry strategy**: н/д (CPU-логика); tiebreaker-VLM — 1 попытка.
+- **Fallback strategy**: single-path (один путь недоступен) → значение берётся, agreement=`single`, уверенность снижена.
+- **Caching**: по хэшу пары входов.
+- **Логирование**: per-field agreement class, tiebreak_count, chosen_path.
+- **Мониторинг**: доля exact/fuzzy/disagreement, tiebreak rate.
+- **Метрики качества**: точность reconciled vs эталон; насколько agreement предсказывает корректность (AUROC agreement→correct).
+- **API**: gRPC `Reconcile(path_a, path_b) → ReconciledFields`; Kafka `pipeline.validate`.
+
+### S14 — Validation Engine ⭐
+
+- **Назначение**: проверить извлечённые данные на корректность тремя уровнями: синтаксис/формат, кросс-полевая логика, соответствие источнику (anti-hallucination) и внешним системам.
+- **Входные данные**: ReconciledFields + CanonicalDoc + page-images + `processing_profile` (правила).
+- **Выходные данные**: per-field статусы валидации + причины:
+  ```json
+  {"fields":{"total":{"value":"1234.56","checks":[
+     {"type":"format","ok":true},
+     {"type":"cross_field","rule":"total==sum(line_items)","ok":true},
+     {"type":"reconstruction","fidelity":0.97,"ok":true},
+     {"type":"external","source":"ERP","ok":false,"detail":"PO not found"}],
+     "validation_status":"warn"}},
+   "validation_confidence":0.88}
+  ```
+- **Внутренний алгоритм**:
+  1. **Format** (детерминированно): типы, regex, диапазоны, checksums (IBAN/VAT/EAN).
+  2. **Cross-field** (LLM-driven + правила): `total == Σ line_items`, `date ≤ today`, консистентность валют/налогов; сложные правила — локальный LLM (GPU0) с объяснением.
+  3. **Reconstruction-as-Validation (RaV)**: рендер извлечённого значения обратно в форму, сопоставимую с исходным регионом, и сравнение с **оригинальным кропом** (не с извлечением!) → fidelity-score. Ловит галлюцинации.
+  4. **External** (air-gapped → только локальные системы): проверки против локальной БД/ERP-реплики/справочников (PO exists, vendor whitelisted).
+- **Используемые модели**: правила (детерм.); Qwen2.5-VL/-LLM (GPU0) для cross-field и RaV-компаратора; опц. NLI-модель (RoBERTa-large-mnli) для entailment «значение подтверждается текстом».
+- **Альтернативные модели**: чисто rule-based режим (без LLM) для скорости; отдельный fine-tuned validator.
+- **Форматы данных**: JSON in/out.
+- **Confidence score**: `validation_confidence` + per-check ok/warn/fail + `reconstruction_fidelity` (сигнал в Fusion).
+- **Возможные ошибки**: `MODEL` (LLM-ложное срабатывание), недоступность внешней локальной системы (`TRANSIENT`).
+- **Retry strategy**: external check `TRANSIENT` 3×; LLM-check 1 повтор при невалидном выводе.
+- **Fallback strategy**: внешняя система недоступна → пометить check `skipped`, не блокировать (итоговая уверенность чуть ниже); LLM недоступен → только rule-based + RaV.
+- **Caching**: правила — по (schema+values); RaV — по (value+region_hash).
+- **Логирование**: per-check outcomes, failed rules, rav_fidelity, external_status.
+- **Мониторинг**: fail/warn rate по типам проверок, RaV fidelity распределение, external availability.
+- **Метрики качества**: доля пойманных инъекционных ошибок (на synthetic corrupted set), RaV Spearman ρ с фактическим качеством (цель ρ>0.8, как в RaV-IDP), false-positive rate валидатора.
+- **API**: gRPC `Validate(fields, doc, images, profile) → ValidationReport`; Kafka `pipeline.confidence`.
+
+### S15 — Confidence Fusion ⭐
+
+- **Назначение**: собрать все накопленные сигналы в **единую калиброванную per-field уверенность**, по которой роутер принимает решение auto/review/reject. Именно этот сервис делает confidence «честным».
+- **Входные данные**: все сигналы по полю: `text_layer_trust` (S4), `image_quality` (S5), `ocr_consensus_conf` + `disagreement` (S7), `layout_confidence` (S8), table/figure conf (S9/S10), `raw_conf_a/b` + logprob-энтропия (S12), `cross_path_agreement` (S13), `validation` + `reconstruction_fidelity` (S14).
+- **Выходные данные**:
+  ```json
+  {"fields":{"invoice_no":{"value":"INV-123","confidence":0.97,
+     "raw_confidence":0.93,"signals":{"agreement":"exact","ocr":0.95,
+       "logprob_entropy":0.12,"rav":0.97,"validation":"pass"},
+     "band":"auto_accept"}},
+   "doc_confidence":0.94,"calibration_model":"invoice_v3@2026-06"}
+  ```
+- **Внутренний алгоритм**:
+  1. **Feature assembly**: ~40 признаков на поле (по образцу ExtractConf): OCR-conf, logprob-энтропия, cross-path agreement, spatial centroid divergence, image quality, RaV fidelity, validation outcomes.
+  2. **Meta-classifier**: CatBoost (native handling пропусков) → вероятность корректности поля.
+  3. **Calibration**: isotonic regression / Lasso поверх, **per document-type & per field-type** (разные кривые для printed vs handwritten, invoice_no vs description).
+  4. **Banding**: отображение в полосы (auto/audit/review/reject) по порогам профиля.
+  5. **Doc-level**: агрегация (min/weighted) для документной уверенности.
+- **Используемые модели**: CatBoost meta-classifier + isotonic/Lasso калибраторы (по типу). Hunter-Mapper (переиспользует Qwen2.5-VL на GPU0) как источник cross-call сигнала для критичных полей.
+- **Альтернативные модели**: логистическая регрессия (интерпретируемость), MUSE-подобная multi-LLM UQ; conformal prediction для гарантий покрытия.
+- **Форматы данных**: JSON in/out.
+- **Confidence score**: это и есть выход — калиброванная `confidence` per field + doc.
+- **Возможные ошибки**: `MODEL` (отсутствующие признаки → CatBoost терпим), calibration drift.
+- **Retry strategy**: CPU, детерминирован; отсутствующие сигналы → импутация (модель обучена на пропусках).
+- **Fallback strategy**: нет калибровочной кривой для нового типа → generic-кривая + флаг «uncalibrated» (консервативные пороги).
+- **Caching**: не кэшируется (зависит от всех сигналов); модель калибровки версионируется.
+- **Логирование**: per-field confidence, band, top-признаки (feature importance для debug), calibration_model_version.
+- **Мониторинг**: распределение confidence, **ECE weekly** на spot-check выборке, доля uncalibrated, drift alarm (ECE>0.03).
+- **Метрики качества**: **ECE, Brier, AUROC, AURC** (risk-coverage); accuracy@coverage (напр. accuracy при 80% авто-покрытии).
+- **API**: gRPC `Fuse(all_signals) → CalibratedConfidence`; Kafka `pipeline.route`.
+
+### S16 — Routing & HITL Service
+
+- **Назначение**: по калиброванной уверенности маршрутизировать поля/документы (auto-accept / audit / human review / reject+reprocess) и управлять очередью человеческой проверки.
+- **Входные данные**: CalibratedConfidence + reconciled values + грудинг (bbox/страницы) + profile-пороги.
+- **Выходные данные**: финальный output-объект ИЛИ задача в `hitl.review`; после ревью — исправленные значения в `hitl.corrections`.
+- **Внутренний алгоритм**: пороговый роутинг (профильно): ≥0.95 auto; 0.85–0.95 auto+audit-sample(5%); 0.70–0.85 review normal; 0.50–0.70 review high; <0.50 reject→self-correct loop (реформулировать промпт/сменить OCR-движок/VLM, max 2 retry, иначе review). HITL-портал: role-based (Admin/Reviewer), показывает поле + подсвеченный bbox на изображении, alt-варианты (из consensus/paths), причины валидации.
+- **Используемые модели**: нет (правила + UI); self-correct переиспользует S6/S12.
+- **Альтернативные модели**: —.
+- **Форматы данных**: JSON + UI-события.
+- **Confidence score**: наследует из S15; фиксирует пост-ревью «human-verified=1.0».
+- **Возможные ошибки**: `TRANSIENT` (портал/БД), переполнение очереди ревью (backpressure).
+- **Retry strategy**: self-correct loop с hard-cap 2; хранение состояния ревью в PostgreSQL.
+- **Fallback strategy**: перегрузка ревьюеров → приоритизация по бизнес-важности поля + SLA; при недоступности портала — задачи копятся в очереди.
+- **Caching**: —.
+- **Логирование**: routing decisions распределение, review queue depth, correction diffs.
+- **Мониторинг**: auto-accept rate, review rate, среднее время ревью, self-correct success rate, SLA breaches.
+- **Метрики качества**: **automation rate at target accuracy**, human agreement rate, доля исправленных полей, post-review accuracy.
+- **API**: REST для портала (`GET /reviews`, `POST /reviews/{id}/resolve`); Kafka `pipeline.output`, `hitl.corrections`.
+
+### S17 — Feedback / Training Service (offline)
+
+- **Назначение**: превращать человеческие исправления в улучшение моделей и калибровок (continuous improvement) без выхода в интернет.
+- **Входные данные**: `hitl.corrections` (before/after значения + грудинг + doc-type) + периодические spot-check метки.
+- **Выходные данные**: обновлённые датасеты, переобученные веса (specialist, калибраторы), новые версии в MLflow registry.
+- **Внутренний алгоритм**: накопление размеченных примеров → построение train/eval сплитов (StratifiedGroupKFold по doc) → периодическое (batch) до-обучение LayoutLMv3 и переобучение CatBoost/isotonic-кривых → offline-эвал против held-out → gated promotion (только при не-регрессии) → канареечный роллаут новой версии.
+- **Используемые модели**: те же, что дообучаются; всё локально (offline training на тех же/выделенных GPU в непиковые часы).
+- **Альтернативные модели**: LoRA-дообучение VLM (Path B) на собранных данных.
+- **Форматы данных**: parquet-датасеты, model artifacts.
+- **Confidence score**: н/д (мета-сервис).
+- **Возможные ошибки**: регрессия качества при promotion (ловится gate), data leakage.
+- **Retry strategy**: обучающие джобы идемпотентны, перезапускаемы.
+- **Fallback strategy**: провал gate → откат к предыдущей версии (registry pinning).
+- **Caching**: датасеты версионируются.
+- **Логирование**: dataset versions, train runs, eval deltas, promotion decisions.
+- **Мониторинг**: eval-метрики по версиям, дата последнего дообучения, drift между версиями.
+- **Метрики качества**: улучшение per-field F1 между версиями, снижение review-rate при той же точности.
+- **API**: batch-джобы (Airflow/cron); пишет в MLflow; сервисы подхватывают новую версию по digest.
+
+### S18 — Orchestrator
+
+- **Назначение**: управлять DAG обработки как **сагой**: порождать шаги, распараллеливать независимые (layout→{tables,figures}; extract Path A∥B), обрабатывать таймауты/компенсации, обеспечивать exactly-once-эффекты, вести жизненный цикл документа.
+- **Входные данные**: события всех этапов, состояние в PostgreSQL.
+- **Выходные данные**: команды-переходы (Kafka), обновления state-machine.
+- **Внутренний алгоритм**: событийная сага поверх Kafka — на каждое `StageResult` определяет следующие рёбра DAG; fan-out/fan-in (join после параллельных ветвей); per-stage таймауты и SLA-deadlines; компенсации при фатальных ошибках; идемпотентность через `{doc_id}:{stage}` ключи. Реализация: Temporal или Kafka-Streams-сага.
+- **Используемые модели**: нет.
+- **Форматы данных**: envelopes + state rows.
+- **Возможные ошибки**: зависшие саги (stuck states), дубли.
+- **Retry strategy**: watchdog по SLA-deadline → повторная эмиссия шага; stuck>timeout → alert.
+- **Fallback strategy**: частичный результат (best-effort) → пометка документа `partial` + HITL для недостающего.
+- **Caching**: —.
+- **Логирование**: полный трейс переходов на документ (audit).
+- **Мониторинг**: документов в каждом состоянии, средняя длительность стадий, stuck-саги, funnel drop-off.
+- **Метрики качества**: end-to-end completion rate, средняя/‑p99 длительность обработки, доля partial.
+- **API**: внутренний; управляет всеми Kafka-топиками; REST `GET /v1/documents/{id}/state` для наблюдаемости.
+
+---
+
+# PART III — DIAGRAMS, DATA FLOW, CONTRACTS
+
+> All diagrams are Mermaid (render on GitHub). Place into `docs/` alongside `architecture.md`.
+
+## 17. Service Interaction Diagram
+
+```mermaid
+flowchart LR
+    subgraph CP["Control plane"]
+        ORCH["S18 Orchestrator (saga)"]
+    end
+    subgraph INFRA["Shared infra"]
+        K[(Kafka)]
+        MO[(MinIO)]
+        PG[(PostgreSQL)]
+        RD[(Redis)]
+        ML[(MLflow registry)]
+    end
+
+    S1["S1 Ingestion"] --> K
+    S2["S2 Normalize/Render"] --> K
+    S3["S3 Classification\nGPU1"] --> K
+    S4["S4 TextLayer Quality"] --> K
+    S5["S5 Image Enhancement"] --> K
+    S6["S6 OCR Ensemble\nGPU1"] --> K
+    S7["S7 OCR Consensus"] --> K
+    S8["S8 Layout Recon\nGPU1"] --> K
+    S9["S9 Table Recon\nGPU1"] --> K
+    S10["S10 Figure Proc\nGPU0/1"] --> K
+    S11["S11 Semantic Recon\nGPU0"] --> K
+    S12["S12 Entity Extract\nA:GPU1 ∥ B:GPU0"] --> K
+    S13["S13 Reconciliation"] --> K
+    S14["S14 Validation\nGPU0"] --> K
+    S15["S15 Confidence Fusion"] --> K
+    S16["S16 Routing & HITL"] --> K
+    S17["S17 Feedback/Training\noffline"] --> ML
+
+    K <--> ORCH
+    ORCH <--> PG
+    S1 & S2 & S5 -.blobs.-> MO
+    S6 & S9 & S10 -.crops.-> MO
+    S1 & S13 -.idempotency.-> RD
+    S16 -->|corrections| S17
+    S17 -.new versions.-> S3 & S12 & S15
+```
+
+## 18. Data Flow (artifacts through the pipeline)
+
+```mermaid
+flowchart TD
+    O["Original file"] --> R["page-images PNG + native_text.json + render_manifest"]
+    R --> C["ClassificationResult\n(page_labels, profile, segments_hint)"]
+    C --> Q["TrustMap\n(per-region use_native | ocr)"]
+    Q -->|low-trust regions| E["enhanced crops + enhancement_manifest"]
+    Q -->|high-trust| L
+    E --> H["EngineHypotheses\n(per-engine text+char conf)"]
+    H --> CN["ConsensusText\n(tokens, region_confidence, disagreement)"]
+    CN --> L["LayoutGraph\n(regions, reading_order, hierarchy)"]
+    L --> T["TableStruct (HTML/OTSL/grid, TEDS conf)"]
+    L --> F["FigureResult (chart data, caption, embedding)"]
+    L --> SM["CanonicalDoc\n(blocks, markdown, cross-page links)"]
+    T --> SM
+    F --> SM
+    SM --> X["Extraction candidates\n(path_a, path_b, grounding)"]
+    X --> RC["ReconciledFields\n(agreement, chosen)"]
+    RC --> V["ValidationReport\n(format, cross-field, RaV, external)"]
+    V --> CF["CalibratedConfidence\n(per-field band, doc_confidence)"]
+    CF --> OUT["Output JSON\n(values + confidence + citations)"]
+    CF -.low conf.-> HITL["HITL review → corrections"]
+    HITL -.feedback.-> O
+```
+
+## 19. Decision Tree (per document / per field routing)
+
+```mermaid
+flowchart TD
+    A{Format?} -->|PDF digital/hybrid| B[extract text layer]
+    A -->|scan/image/office/html/email| C[render to images]
+    B --> D{Text-layer trust ≥ τ?\n per region}
+    C --> E[all regions → OCR]
+    D -->|yes| USE[use native text]
+    D -->|no| ENH{Needs enhancement?}
+    E --> ENH
+    ENH -->|yes| ENH2[enhance crop]
+    ENH -->|no| OCR
+    ENH2 --> OCR[OCR Ensemble ≥2 engines]
+    OCR --> CONS{Consensus disagreement > δ?}
+    CONS -->|yes| FLAG[flag token needs_review]
+    CONS -->|no| OK1[accept consensus]
+    USE --> LAY
+    OK1 --> LAY
+    FLAG --> LAY[Layout]
+    LAY --> LC{layout_confidence low / OOD?}
+    LC -->|yes| LAT[VLM Layout-as-Thought]
+    LC -->|no| ASM
+    LAT --> ASM[Semantic Reconstruction]
+    ASM --> EX[Dual-path extract]
+    EX --> AG{Path A vs B agree?}
+    AG -->|exact/fuzzy| VAL
+    AG -->|disagree| TB[Tiebreaker VLM / rule]
+    TB --> VAL[Validate: format+cross-field+RaV+external]
+    VAL --> CFB{Calibrated confidence band?}
+    CFB -->|≥0.95| AUTO[Auto-accept]
+    CFB -->|0.85-0.95| AUD[Accept + audit 5%]
+    CFB -->|0.70-0.85| RVN[Human review]
+    CFB -->|0.50-0.70| RVH[Human review high-prio]
+    CFB -->|<0.50| SC{Self-correct < 2 retries?}
+    SC -->|yes| OCR
+    SC -->|no| RVH
+```
+
+## 20. Processing DAG (parallelism & joins)
+
+```mermaid
+flowchart TD
+    S1 --> S2 --> S3 --> SEG[Segment packet]
+    SEG --> S4
+    S4 -->|low-trust| S5 --> S6 --> S7 --> S8
+    S4 -->|high-trust native| S8
+    S8 --> S9
+    S8 --> S10
+    S8 --> S11a[text blocks]
+    S9 --> JOIN((join))
+    S10 --> JOIN
+    S11a --> JOIN
+    JOIN --> S11[S11 Semantic Recon]
+    S11 --> PA[S12 Path A GPU1]
+    S11 --> PB[S12 Path B GPU0]
+    PA --> JOIN2((join))
+    PB --> JOIN2
+    JOIN2 --> S13 --> S14 --> S15 --> S16
+    S16 --> OUT[Output]
+    S16 -.->|reject| S6
+    S16 -.->|corrections| S17
+```
+
+## 21. Document Lifecycle (state machine)
+
+```mermaid
+stateDiagram-v2
+    [*] --> INGESTED
+    INGESTED --> NORMALIZED
+    NORMALIZED --> CLASSIFIED
+    CLASSIFIED --> SEGMENTED
+    SEGMENTED --> PARSING: per segment
+    state PARSING {
+        [*] --> QUALITY_CHECK
+        QUALITY_CHECK --> ENHANCING: low trust
+        QUALITY_CHECK --> LAYOUT: native ok
+        ENHANCING --> OCR
+        OCR --> CONSENSUS
+        CONSENSUS --> LAYOUT
+        LAYOUT --> ELEMENTS: tables/figures/text (parallel)
+        ELEMENTS --> RECONSTRUCTED
+    }
+    PARSING --> EXTRACTED
+    EXTRACTED --> RECONCILED
+    RECONCILED --> VALIDATED
+    VALIDATED --> SCORED
+    SCORED --> AUTO_ACCEPTED: conf ≥ 0.95
+    SCORED --> IN_REVIEW: 0.5–0.95
+    SCORED --> REPROCESSING: < 0.5 (≤2)
+    REPROCESSING --> PARSING
+    REPROCESSING --> IN_REVIEW: retries exhausted
+    IN_REVIEW --> HUMAN_CORRECTED
+    HUMAN_CORRECTED --> COMPLETED
+    AUTO_ACCEPTED --> COMPLETED
+    COMPLETED --> [*]
+    NORMALIZED --> FAILED: unrecoverable DATA error
+    PARSING --> PARTIAL: best-effort
+    PARTIAL --> IN_REVIEW
+    FAILED --> [*]
+```
+
+## 22. Internal JSON per Stage
+
+> Canonical schemas (abbreviated; full JSON Schemas live in `contracts/` and are versioned). All share the Envelope (§15.2).
+
+- **S1 Ingestion** → `IngestResult`: `{doc_id, sha256, mime, source_channel, size, dedup_hit}`
+- **S2 Normalize** → `RenderManifest`: `{doc_id, source_type, pages:[{n, w, h, dpi, image_ref}], native_text_ref, render_confidence}`
+- **S2** → `native_text.json`: `{pages:[{n, spans:[{text, bbox, font, size}]}]}`
+- **S3 Classification** → `ClassificationResult`: see §S3 (page_labels, doc_type, segments_hint, processing_profile, confidence)
+- **S4 Trust** → `TrustMap`: `{pages:[{n, global_trust, decision, regions:[{bbox, trust, decision, reason}]}]}`
+- **S5 Enhance** → `EnhancementManifest`: `{regions:[{region_id, ops:[...], sr_factor, quality_before, quality_after, crop_ref}]}`
+- **S6 OCR Ensemble** → `EngineHypotheses`: `{region_id, engines:[{engine, text, conf, lang, chars:[{c,bbox,p}]}]}`
+- **S7 Consensus** → `ConsensusText`: `{region_id, text, method, tokens:[{t,p,agree,alts}], region_confidence, disagreement}`
+- **S8 Layout** → `LayoutGraph`: `{page, regions:[{id,type,bbox,order,parent,column}], reading_order:[...], columns, layout_confidence}`
+- **S9 Table** → `TableStruct`: `{table_id, pages, grid:{rows,cols}, cells:[...], html, otsl, column_semantics, table_confidence, cross_page_merged}`
+- **S10 Figure** → `FigureResult`: `{figure_id, type, caption, extracted_data, ocr_in_figure, embedding_ref, figure_confidence}`
+- **S11 Semantic** → `CanonicalDoc`: `{doc_id, segment_id, blocks:[...], markdown, reading_order, cross_page_links, semantic_confidence}`
+- **S12 Extract** → `ExtractionCandidates`: `{path_a:{fields}, path_b:{fields}, schema_id}` (each field: value, bbox/page, evidence, raw_conf, logprobs)
+- **S13 Reconcile** → `ReconciledFields`: `{fields:{name:{value, agreement, chosen_path, raw_conf_a, raw_conf_b, needs_tiebreak}}, reconcile_confidence}`
+- **S14 Validate** → `ValidationReport`: `{fields:{name:{checks:[{type,ok,detail}], validation_status}}, validation_confidence}`
+- **S15 Fusion** → `CalibratedConfidence`: `{fields:{name:{value, confidence, raw_confidence, signals, band}}, doc_confidence, calibration_model}`
+- **S16 Routing** → `FinalOutput`: `{doc_id, schema_id, fields:{name:{value, confidence, band, citations:[{page,bbox}], human_verified}}, doc_confidence, status}`
+
+## 23. API Contracts Between Services
+
+### 23.1 Conventions
+
+- **Sync**: gRPC (proto3), deadline propagation, mTLS in-cluster. Errors via gRPC status + `ErrorDetail{class: TRANSIENT|DATA|MODEL|POISON, retriable, message}`.
+- **Async**: Kafka topics per stage (§15.6). Key = `doc_id` (ordering per document). Payload = Envelope with `payload_ref` (MinIO). Schema Registry (Avro/Protobuf) enforces compatibility.
+- **Versioning**: `service@semver`, proto package versioned (`idp.ocr.v1`), topic name carries major (`pipeline.ocr.v1`). Backward-compatible changes only within major.
+- **Idempotency**: every consumer keys side-effects by `{doc_id}:{stage}:{content_hash}` in Redis.
+
+### 23.2 Representative gRPC contracts
+
+```proto
+// idp.render.v1
+service RenderService {
+  rpc Render(RenderRequest) returns (RenderManifest);
+}
+
+// idp.classify.v1
+service ClassificationService {
+  rpc Classify(ClassifyRequest) returns (ClassificationResult);
+}
+
+// idp.ocr.v1
+service OcrEnsembleService {
+  rpc Recognize(stream RegionCrop) returns (stream EngineHypotheses);
+}
+
+// idp.extract.v1  (two impls behind one contract)
+service ExtractionService {
+  rpc Extract(ExtractRequest) returns (FieldSet); // path=A|B in request
+}
+
+// idp.confidence.v1
+service ConfidenceFusionService {
+  rpc Fuse(SignalBundle) returns (CalibratedConfidence);
+}
+```
+
+```proto
+message ExtractRequest {
+  string doc_id = 1;
+  string segment_id = 2;
+  string schema_id = 3;
+  Path path = 4;              // PATH_A | PATH_B
+  CanonicalDocRef doc = 5;    // MinIO ref
+  repeated PageImageRef images = 6; // used by PATH_B
+}
+message FieldSet {
+  map<string, Field> fields = 1;
+}
+message Field {
+  string value = 1;
+  BBox bbox = 2;
+  int32 page = 3;
+  string evidence = 4;
+  double raw_conf = 5;
+  Logprobs logprobs = 6;     // PATH_B only
+}
+```
+
+### 23.3 Kafka topic contract (per stage)
+
+| Topic | Key | Value schema | Producer | Consumers |
+|-------|-----|--------------|----------|-----------|
+| `ingest.raw` | doc_id | Envelope+IngestResult | S1 | S2, Orchestrator |
+| `pipeline.normalize` | doc_id | Envelope | S2 | S3 |
+| `pipeline.classify` | doc_id | Envelope+ClassificationResult | S3 | S4, S11, S14 (profile) |
+| `pipeline.ocr` | doc_id | Envelope | S5 | S6 |
+| `pipeline.ocr_consensus` | doc_id | Envelope+EngineHypotheses ref | S6 | S7 |
+| `pipeline.layout` | doc_id | Envelope+ConsensusText ref | S7 | S8 |
+| `pipeline.tables` / `.figures` / `.semantic` | doc_id | Envelope+LayoutGraph ref | S8 | S9 / S10 / S11 |
+| `pipeline.extract` | segment_id | Envelope+CanonicalDoc ref | S11 | S12 |
+| `pipeline.reconcile` | segment_id | Envelope+ExtractionCandidates ref | S12 | S13 |
+| `pipeline.validate` | segment_id | Envelope+ReconciledFields ref | S13 | S14 |
+| `pipeline.confidence` | segment_id | Envelope+ValidationReport ref | S14 | S15 |
+| `pipeline.route` | segment_id | Envelope+CalibratedConfidence ref | S15 | S16 |
+| `pipeline.output` | doc_id | Envelope+FinalOutput ref | S16 | downstream/ERP |
+| `hitl.review` | task_id | ReviewTask | S16 | HITL portal |
+| `hitl.corrections` | doc_id | CorrectionRecord | S16/portal | S17 |
+| `dlq.*` | doc_id | Envelope+ErrorDetail | any | ops + Orchestrator |
+
+### 23.4 REST (control/UX)
+
+- `POST /v1/documents` (upload) → `{doc_id}` (S1)
+- `GET /v1/documents/{id}/state` → lifecycle state + per-stage results index (S18)
+- `GET /v1/reviews?status=pending` → review queue (S16)
+- `POST /v1/reviews/{task_id}/resolve` → `{fields:{...}, reviewer_id}` (S16 → `hitl.corrections`)
+- `GET /v1/health`, `/v1/ready`, `/metrics` (all services)
+
+---
+
+## 24. Implementation Notes for the Team
+
+- **Contracts-first**: freeze proto + Avro schemas in a `contracts/` package; generate stubs for all services. No service ships without a registered schema.
+- **One trace per document**: verify OpenTelemetry propagation end-to-end before feature work.
+- **Golden set**: assemble a labeled multi-format eval set (per doc-type) on day 1; every service's quality metric (§per-service) runs against it in CI (offline).
+- **GPU pools**: two logical pools — `gpu0` (Qwen2.5-VL-32B via vLLM, extraction/confidence/validation), `gpu1` (parsing stack via Triton/vLLM). Pin with `CUDA_VISIBLE_DEVICES`; enforce VRAM budgets (§14.1).
+- **Backpressure**: bounded Kafka consumer concurrency sized to VRAM; never oversubscribe GPU0.
+- **Calibration ownership**: S15 owns all calibration curves; each new doc-type requires ≥500 labeled samples before a type-specific curve replaces the generic one.
+- **Air-gap CI**: all model digests, wheels, and images vendored; build host may have internet, runtime must not.
