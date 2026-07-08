@@ -594,3 +594,128 @@ Documents exceeding the VLM's context window (even with 131K extended context) r
 8. **Make HITL first-class** — configurable thresholds, role-based review, feedback loops
 9. **Per-field-type calibration** — separate confidence models for different extraction types
 10. **Self-correcting retry loop** — reformulate + re-extract on low confidence, max 2 retries
+
+---
+
+## 13. Repository Architecture Diagram (Implementation Spec)
+
+**Decision**: Diagram-as-code in **Mermaid**, embedded in `docs/architecture.md`, plus exported `SVG/PNG`. Chosen because it renders natively on GitHub/GitLab (visible as an image directly in the repo), is version-controlled and PR-reviewable, and exports to raster/vector images via `mermaid-cli`.
+
+### 13.1 Implementation Tasks (for implementation-capable agent)
+
+1. Create `docs/architecture.md` containing the Mermaid source below (verbatim) plus the resource table.
+2. Install mermaid-cli: `npm i -g @mermaid-js/mermaid-cli`.
+3. Export images:
+   - `mmdc -i docs/architecture.md -o docs/architecture.svg`
+   - `mmdc -i docs/architecture.md -o docs/architecture.png -w 2400`
+4. Embed in root `README.md`: `![IDP Architecture](docs/architecture.svg)`.
+5. (Optional) Add a CI job that re-exports the image on change to `docs/architecture.md` so the picture never drifts from the source.
+
+### 13.2 Mermaid Source (paste into `docs/architecture.md`)
+
+```mermaid
+flowchart TD
+    classDef ingest fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
+    classDef parse fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    classDef extract fill:#fff3e0,stroke:#ef6c00,color:#e65100
+    classDef conf fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
+    classDef route fill:#fce4ec,stroke:#c2185b,color:#880e4f
+    classDef gpu fill:#ffebee,stroke:#c62828,color:#b71c1c
+
+    A["📥 INGESTION<br/><b>Что:</b> приём + immutable-хранение<br/><b>Чем:</b> Kafka/SQS + S3/MinIO + PostgreSQL<br/><b>Ресурс:</b> CPU, сеть<br/><b>Зачем:</b> идемпотентный вход, оригинал = источник истины"]:::ingest
+
+    B["🔄 NORMALIZATION + MULTI-RES RENDER<br/><b>Чем:</b> PyMuPDF, pdf2image/Ghostscript, Pillow/OpenCV,<br/>LibreOffice, Playwright, extract-msg<br/><b>Ресурс:</b> CPU-bound, 8-16 vCPU pool<br/><b>Зачем:</b> разрешение задаёт потолок точности"]:::ingest
+
+    C{"🔍 TEXT-LAYER TRUST CHECK<br/><b>Чем:</b> эвристики + Tesseract sample-cross-check<br/><b>Ресурс:</b> CPU<br/><b>Зачем:</b> решает 'битый/сдвинутый text layer'"}:::ingest
+
+    D["✂️ PACKET SEGMENTATION<br/><b>Чем:</b> LayoutLMv3/Donut + BIO-tagging (DocSplit)<br/><b>Ресурс:</b> 1×GPU T4<br/><b>Зачем:</b> инвойс+договор+W9 в одном файле"]:::parse
+
+    subgraph PARSE["🧩 STAGE 3 — COARSE-TO-FINE PARSING"]
+        direction TB
+        E["📐 3a LAYOUT DETECTION<br/><b>Чем:</b> RT-DETR / PP-DocLayoutV2 (YOLOv8 lite)<br/><b>Ресурс:</b> 1×GPU T4, ~35ms/стр<br/><b>Зачем:</b> стабильные bbox без галлюцинаций"]:::gpu
+        F["🔢 3b READING ORDER<br/><b>Чем:</b> Pointer Network (6 transformer layers)<br/><b>Ресурс:</b> shared GPU<br/><b>Зачем:</b> multi-column, sidebars, footnotes"]:::gpu
+        G["🔤 Text → PaddleOCR-VL-0.9B / SmolDocling<br/>ИЛИ доверенный text-layer"]:::gpu
+        H["📊 Table → TATR/POTATR + VLM ячейки<br/>GriTS 0.964"]:::gpu
+        I["📈 Figure/Chart/Formula → Qwen2.5-VL / Nougat"]:::gpu
+        J["✍️ Signature/Seal → детектор + seal-recognition"]:::gpu
+        K["🗂️ 3d ASSEMBLY<br/><b>Чем:</b> Docling / DocTags → Markdown+JSON+bbox<br/><b>Зачем:</b> единый формат + грудинг для цитат"]:::parse
+        E --> F
+        F --> G & H & I & J
+        G & H & I & J --> K
+    end
+
+    subgraph EXTRACT["🎯 STAGE 4 — DUAL-PATH EXTRACTION"]
+        direction TB
+        L["Path A: SPECIALIST<br/><b>Чем:</b> LayoutLMv3 fine-tuned<br/><b>Ресурс:</b> self-host T4, ~40ms<br/>стабилен, слаб на OOD"]:::extract
+        M["Path B: FRONTIER VLM<br/><b>Чем:</b> Claude 3.5 / GPT-4o / Qwen2.5-VL<br/><b>Ресурс:</b> API, ~$0.008/стр<br/>+ Layout-as-Thought, устойчив к верстке"]:::extract
+        N{"⚖️ RECONCILIATION<br/><b>Чем:</b> Stickler-компаратор (exact/fuzzy/numeric)<br/><b>Зачем:</b> расхождение = сигнал ошибки<br/>99.2% @ 4.1% review"}:::extract
+        L --> N
+        M --> N
+    end
+
+    subgraph CONF["📊 STAGE 5-6 — CONFIDENCE + VALIDATION"]
+        direction TB
+        O["🧮 MULTI-SIGNAL CONFIDENCE<br/><b>Чем:</b> Hunter-Mapper + CatBoost (ExtractConf)<br/>OCR-conf, logprob-entropy, agreement,<br/>image-quality, spatial, reconstruction-fidelity<br/><b>Калибровка:</b> isotonic, ECE<0.03"]:::conf
+        P["✅ VALIDATION<br/><b>Чем:</b> rules + LLM cross-field + DB/API +<br/>Reconstruction-as-Validation (RaV-IDP)<br/><b>Зачем:</b> ловит галлюцинации до вывода"]:::conf
+        O --> P
+    end
+
+    Q{"🚦 CONFIDENCE ROUTER"}:::route
+    R["🟢 ≥0.95 AUTO-ACCEPT"]:::route
+    S["🟡 0.85-0.95 ACCEPT + AUDIT 5%"]:::route
+    T["🟠 0.50-0.85 HUMAN REVIEW<br/>(role-based portal)"]:::route
+    U["🔴 <0.50 SELF-CORRECT LOOP<br/>reformulate/alt-OCR/alt-VLM, max 2 retry"]:::route
+    V["📤 OUTPUT<br/>JSON/Markdown + confidence + bbox-citations"]:::route
+    W["🔁 FEEDBACK LOOP<br/>corrections → retrain + recalibrate"]:::route
+
+    A --> B --> C
+    C -->|multi-doc| D
+    C -->|single| E
+    D --> E
+    K --> L & M
+    N --> O
+    P --> Q
+    Q --> R & S & T & U
+    R & S --> V
+    T --> V
+    U -->|retry| E
+    U -->|fail| T
+    T --> W
+    W -.retrain.-> L
+    W -.recalibrate.-> O
+```
+
+### 13.3 Color Legend (stages)
+
+| Color | Stage group |
+|-------|-------------|
+| Blue | Intake (ingestion, normalization, trust check) |
+| Green | Parsing (segmentation, layout, assembly) |
+| Red border | GPU-bound recognition nodes |
+| Orange | Dual-path extraction + reconciliation |
+| Purple | Confidence + validation |
+| Pink | Routing, output, feedback |
+
+### 13.4 Resource Table (place under the diagram in `docs/architecture.md`)
+
+| Стадия | Compute | Модель/сервис | Латентность/стр | Стоимость/стр | Масштабирование |
+|--------|---------|---------------|-----------------|---------------|-----------------|
+| Ingestion | CPU | Kafka+S3+PG | ~50ms | ~$0.0001 | горизонтальное (workers) |
+| Normalize | 8-16 vCPU | PyMuPDF/LibreOffice | ~80-800ms | ~$0.0001 | CPU pool |
+| Trust check | CPU | Tesseract | ~200ms | ~$0.00005 | CPU |
+| Segmentation | 1×T4 GPU | LayoutLMv3 | ~50ms | ~$0.0002 | GPU batch |
+| Layout+Order | 1×T4 GPU | RT-DETR+Pointer | ~40ms | ~$0.0002 | GPU batch |
+| Recognition | 1×A10/L4 GPU | PaddleOCR-VL-0.9B | ~150-400ms | ~$0.0008 | GPU pool, vLLM |
+| Path A | 1×T4 GPU | LayoutLMv3 | ~40ms | ~$0.0002 | self-host |
+| Path B | API | Claude/GPT-4o | ~900-2400ms | ~$0.008 | rate-limited, только low-conf |
+| Confidence | CPU | CatBoost | ~20ms | ~$0.00005 | CPU |
+| Validation | CPU+API | rules+LLM+DB | ~100ms | ~$0.0005 | CPU |
+
+> Cost/latency — ориентиры на январь 2026 (per-page). Path B запускается выборочно (по низкой уверенности Path A), а не на каждый документ — это ключ к контролю бюджета.
+
+### 13.5 Notes for Implementer
+
+- Mermaid label text uses `<br/>` for line breaks and inline `<b>` tags; keep them — GitHub renders them.
+- Do not exceed ~8 lines per node label or the diagram becomes unreadable; move detail to the resource table.
+- If the diagram grows, split into two files: `docs/architecture.md` (high-level flow) and `docs/architecture-parsing.md` (Stage 3 detail).
+- Regenerate `docs/architecture.svg` / `.png` whenever the Mermaid source changes (CI recommended).
