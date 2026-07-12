@@ -1,0 +1,75 @@
+"""Typed records used before persistence adapters are implemented."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from idp.domain.states import BatchItemState, BatchState, QualityState
+
+
+class ArtifactReference(BaseModel):
+    """Immutable object-store artifact identity."""
+
+    model_config = ConfigDict(frozen=True)
+
+    object_key: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    media_type: str = Field(min_length=1)
+
+
+class Entity(BaseModel):
+    """Schema-v1 entity contract emitted after Fenic extraction."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    normalized_value: str | None = None
+    page: int = Field(ge=0)
+    block_id: str = Field(min_length=1)
+    bbox: tuple[float, float, float, float]
+    evidence: str = Field(min_length=1)
+    confidence: float = Field(ge=0, le=1)
+
+
+class FinalManifest(BaseModel):
+    """Minimum publication manifest contract, independent of MinIO."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    pipeline_profile_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    quality: QualityState
+    final_markdown: ArtifactReference
+    entities: ArtifactReference
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class BatchItemSnapshot(BaseModel):
+    """One file occurrence in an immutable batch scan snapshot."""
+
+    model_config = ConfigDict(frozen=True)
+
+    item_id: UUID = Field(default_factory=uuid4)
+    root: Path
+    path: Path
+    source_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    state: BatchItemState
+    observed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class BatchSnapshot(BaseModel):
+    """In-memory representation of a submitted batch before persistence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    batch_id: UUID = Field(default_factory=uuid4)
+    state: BatchState = BatchState.QUEUED
+    profile_name: str = Field(min_length=1)
+    roots: tuple[Path, ...]
+    items: tuple[BatchItemSnapshot, ...] = ()
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

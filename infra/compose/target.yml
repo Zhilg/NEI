@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: ${IDP_POSTGRES_IMAGE:?Set immutable offline image digest}
+    environment:
+      POSTGRES_DB: ${IDP_POSTGRES_DB:-idp}
+      POSTGRES_USER: ${IDP_POSTGRES_USER:-idp}
+      POSTGRES_PASSWORD: ${IDP_POSTGRES_PASSWORD:?Set from target secret store}
+    networks: [idp_internal]
+
+  minio:
+    image: ${IDP_MINIO_IMAGE:?Set immutable offline image digest}
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${IDP_MINIO_ROOT_USER:?Set from target secret store}
+      MINIO_ROOT_PASSWORD: ${IDP_MINIO_ROOT_PASSWORD:?Set from target secret store}
+    networks: [idp_internal]
+
+  controller:
+    image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
+    command: ["idp", "config"]
+    environment:
+      IDP_OFFLINE_MODE: "true"
+      IDP_TELEMETRY_ENABLED: "false"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    depends_on: [postgres, minio]
+    networks: [idp_internal]
+    read_only: true
+
+networks:
+  idp_internal:
+    internal: true
