@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180" role="img" aria-labelledby="title description">
+  <title id="title">Offline PDF Batch Pipeline</title>
+  <desc id="description">Русскоязычная схема локального air-gapped pipeline: submit, PostgreSQL, MinIO, MinerU, PaddleOCR, Qwen-VL, Fenic и публикация результата.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#071529"/>
+      <stop offset="55%" stop-color="#0c2037"/>
+      <stop offset="100%" stop-color="#132b42"/>
+    </linearGradient>
+    <linearGradient id="header" x1="0" x2="1">
+      <stop offset="0%" stop-color="#15b8a6"/>
+      <stop offset="100%" stop-color="#6dd6c8"/>
+    </linearGradient>
+    <linearGradient id="gpu" x1="0" x2="1">
+      <stop offset="0%" stop-color="#f39a37"/>
+      <stop offset="100%" stop-color="#ffd071"/>
+    </linearGradient>
+    <linearGradient id="result" x1="0" x2="1">
+      <stop offset="0%" stop-color="#d95991"/>
+      <stop offset="100%" stop-color="#fb94ba"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+    <marker id="arrow-teal" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#55d7ca"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f9bf64"/>
+    </marker>
+    <marker id="arrow-pink" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#f58bb4"/>
+    </marker>
+    <style>
+      .heading { font: 700 42px Arial, Helvetica, sans-serif; fill: #f5fbff; letter-spacing: .4px; }
+      .subtitle { font: 400 19px Arial, Helvetica, sans-serif; fill: #b8cddd; }
+      .section { font: 700 15px Arial, Helvetica, sans-serif; fill: #8ca9bc; letter-spacing: 1.8px; }
+      .node-title { font: 700 20px Arial, Helvetica, sans-serif; fill: #f4fbff; }
+      .node-body { font: 400 15px Arial, Helvetica, sans-serif; fill: #c7d8e5; }
+      .node-small { font: 400 13px Arial, Helvetica, sans-serif; fill: #a9c1d1; }
+      .tag { font: 700 12px Arial, Helvetica, sans-serif; fill: #062535; letter-spacing: .8px; }
+      .tag-dark { font: 700 12px Arial, Helvetica, sans-serif; fill: #4b2706; letter-spacing: .8px; }
+      .tag-result { font: 700 12px Arial, Helvetica, sans-serif; fill: #4b1030; letter-spacing: .8px; }
+      .label { font: 600 13px Arial, Helvetica, sans-serif; fill: #aac8d7; }
+      .footer { font: 400 14px Arial, Helvetica, sans-serif; fill: #94b1c4; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1180" fill="url(#background)"/>
+  <circle cx="1435" cy="80" r="250" fill="#0d3b55" opacity=".42"/>
+  <circle cx="135" cy="1110" r="270" fill="#123e50" opacity=".34"/>
+  <path d="M0 174 H1600" stroke="#2a5169" stroke-width="1"/>
+
+  <text x="76" y="82" class="heading">OFFLINE PDF BATCH PIPELINE</text>
+  <text x="78" y="119" class="subtitle">Локальная обработка PDF без интернета: от разрешённой папки до Markdown, сущностей и проверяемого результата</text>
+  <rect x="1278" y="55" width="242" height="48" rx="24" fill="url(#header)"/>
+  <text x="1399" y="85" text-anchor="middle" class="tag">AIR-GAPPED · 2×A100</text>
+
+  <!-- Section labels -->
+  <text x="78" y="219" class="section">ВХОД И УПРАВЛЕНИЕ BATCH</text>
+  <text x="78" y="488" class="section">VISION-ONLY ОБРАБОТКА СТРАНИЦ</text>
+  <text x="78" y="850" class="section">СБОРКА ДОКУМЕНТА И ПУБЛИКАЦИЯ</text>
+
+  <!-- Top row -->
+  <g filter="url(#shadow)">
+    <rect x="78" y="242" width="245" height="168" rx="18" fill="#102e47" stroke="#55d7ca" stroke-width="2"/>
+    <rect x="99" y="263" width="83" height="25" rx="12" fill="#55d7ca"/>
+    <text x="140" y="281" text-anchor="middle" class="tag">CLI</text>
+    <text x="99" y="323" class="node-title">Запуск batch</text>
+    <text x="99" y="350" class="node-body">Абсолютные каталоги</text>
+    <text x="99" y="373" class="node-body">только из allowlist</text>
+    <text x="99" y="395" class="node-small">idp batch submit /data/...</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="390" y="242" width="290" height="168" rx="18" fill="#102e47" stroke="#55d7ca" stroke-width="2"/>
+    <rect x="412" y="263" width="110" height="25" rx="12" fill="#55d7ca"/>
+    <text x="467" y="281" text-anchor="middle" class="tag">SCANNER</text>
+    <text x="412" y="323" class="node-title">Снимок файлов</text>
+    <text x="412" y="350" class="node-body">Рекурсивный обход PDF</text>
+    <text x="412" y="373" class="node-body">2× stat + SHA-256</text>
+    <text x="412" y="395" class="node-small">Без symlink и изменений исходника</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="747" y="222" width="375" height="208" rx="18" fill="#1b244a" stroke="#a993ef" stroke-width="2"/>
+    <rect x="770" y="244" width="129" height="25" rx="12" fill="#a993ef"/>
+    <text x="835" y="262" text-anchor="middle" class="tag">CONTROL PLANE</text>
+    <text x="770" y="304" class="node-title">PostgreSQL</text>
+    <text x="770" y="331" class="node-body">batches · items · jobs · leases</text>
+    <text x="770" y="354" class="node-body">retries · states · reservations</text>
+    <text x="770" y="386" class="node-small">FOR UPDATE SKIP LOCKED · heartbeat · reaper</text>
+    <rect x="770" y="396" width="313" height="1" fill="#7367b9" opacity=".65"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1189" y="242" width="332" height="168" rx="18" fill="#102e47" stroke="#55d7ca" stroke-width="2"/>
+    <rect x="1211" y="263" width="134" height="25" rx="12" fill="#55d7ca"/>
+    <text x="1278" y="281" text-anchor="middle" class="tag">OBJECT STORAGE</text>
+    <text x="1211" y="323" class="node-title">MinIO</text>
+    <text x="1211" y="350" class="node-body">Временные PDF, страницы,</text>
+    <text x="1211" y="373" class="node-body">crops и manifests</text>
+    <text x="1211" y="395" class="node-small">Immutable final bundles</text>
+  </g>
+
+  <path d="M323 326 H376" stroke="#55d7ca" stroke-width="3" fill="none" marker-end="url(#arrow-teal)"/>
+  <path d="M680 326 H733" stroke="#55d7ca" stroke-width="3" fill="none" marker-end="url(#arrow-teal)"/>
+  <path d="M1122 326 H1175" stroke="#55d7ca" stroke-width="3" fill="none" marker-end="url(#arrow-teal)"/>
+  <path d="M934 430 V462 H201 V477" stroke="#a993ef" stroke-width="2.5" fill="none" marker-end="url(#arrow-teal)"/>
+  <text x="954" y="455" class="label">jobs + resource reservation</text>
+
+  <!-- Middle pipeline -->
+  <g filter="url(#shadow)">
+    <rect x="78" y="510" width="244" height="177" rx="18" fill="#123a38" stroke="#55d7ca" stroke-width="2"/>
+    <rect x="100" y="532" width="88" height="25" rx="12" fill="#55d7ca"/>
+    <text x="144" y="550" text-anchor="middle" class="tag">CPU</text>
+    <text x="100" y="592" class="node-title">Рендер PDF</text>
+    <text x="100" y="619" class="node-body">Страницы-изображения</text>
+    <text x="100" y="642" class="node-body">Text layer отбрасывается</text>
+    <text x="100" y="665" class="node-small">Координаты и DPI в manifest</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="389" y="510" width="244" height="177" rx="18" fill="#49320f" stroke="#f9bf64" stroke-width="2"/>
+    <rect x="411" y="532" width="88" height="25" rx="12" fill="url(#gpu)"/>
+    <text x="455" y="550" text-anchor="middle" class="tag-dark">GPU 1</text>
+    <text x="411" y="592" class="node-title">SwinIR x4</text>
+    <text x="411" y="619" class="node-body">Upscale каждой страницы</text>
+    <text x="411" y="642" class="node-body">Quality gate + fallback</text>
+    <text x="411" y="665" class="node-small">Ухудшение → original render</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="700" y="490" width="356" height="217" rx="18" fill="#49320f" stroke="#f9bf64" stroke-width="2"/>
+    <rect x="723" y="513" width="88" height="25" rx="12" fill="url(#gpu)"/>
+    <text x="767" y="531" text-anchor="middle" class="tag-dark">GPU 1</text>
+    <text x="723" y="572" class="node-title">MinerU 3.4</text>
+    <text x="723" y="599" class="node-body">Полный layout без потерь</text>
+    <text x="723" y="622" class="node-body">Все block types · bbox · hierarchy</text>
+    <text x="723" y="645" class="node-body">relations · reading order · crops</text>
+    <text x="723" y="680" class="node-small">Текст MinerU не используется как content source</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1123" y="490" width="398" height="217" rx="18" fill="#49320f" stroke="#f9bf64" stroke-width="2"/>
+    <rect x="1146" y="513" width="88" height="25" rx="12" fill="url(#gpu)"/>
+    <text x="1190" y="531" text-anchor="middle" class="tag-dark">GPU 1</text>
+    <text x="1146" y="572" class="node-title">PaddleOCR</text>
+    <text x="1146" y="599" class="node-body">Lines только внутри text blocks</text>
+    <text x="1146" y="622" class="node-body">RU/UK/BY/EN → East-Slavic v5</text>
+    <text x="1146" y="645" class="node-body">Cyrillic v5 · Latin/CJK → v6</text>
+    <text x="1146" y="680" class="node-small">Token bbox · confidence · script · model revision</text>
+  </g>
+
+  <path d="M322 598 H375" stroke="#f9bf64" stroke-width="3" fill="none" marker-end="url(#arrow-orange)"/>
+  <path d="M633 598 H686" stroke="#f9bf64" stroke-width="3" fill="none" marker-end="url(#arrow-orange)"/>
+  <path d="M1056 598 H1109" stroke="#f9bf64" stroke-width="3" fill="none" marker-end="url(#arrow-orange)"/>
+  <path d="M878 707 V748" stroke="#f9bf64" stroke-width="3" fill="none" marker-end="url(#arrow-orange)"/>
+  <text x="894" y="735" class="label">layout manifest + all crops</text>
+  <path d="M1322 707 V748 H1032" stroke="#f9bf64" stroke-width="3" fill="none" marker-end="url(#arrow-orange)"/>
+  <text x="1170" y="735" class="label">OCR manifest</text>
+
+  <!-- Bottom -->
+  <g filter="url(#shadow)">
+    <rect x="528" y="770" width="555" height="198" rx="20" fill="#502237" stroke="#f58bb4" stroke-width="2"/>
+    <rect x="553" y="793" width="88" height="25" rx="12" fill="url(#result)"/>
+    <text x="597" y="811" text-anchor="middle" class="tag-result">GPU 0</text>
+    <text x="553" y="852" class="node-title">Qwen2.5-VL-32B · один reconstruction run</text>
+    <text x="553" y="881" class="node-body">Изображения + crops + layout + OCR → полный Markdown</text>
+    <text x="553" y="906" class="node-body">OCR validation · таблицы · диаграммы · картинки · формулы</text>
+    <text x="553" y="931" class="node-body">Лёгкая проверка сумм, дат, нумерации и ссылок</text>
+    <text x="553" y="955" class="node-small">Каждый факт привязан к block_id, page, bbox и source evidence</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="78" y="787" width="366" height="165" rx="18" fill="#1b244a" stroke="#a993ef" stroke-width="2"/>
+    <rect x="101" y="809" width="152" height="25" rx="12" fill="#a993ef"/>
+    <text x="177" y="827" text-anchor="middle" class="tag">GPU0 SCHEDULER</text>
+    <text x="101" y="869" class="node-title">Admission control</text>
+    <text x="101" y="896" class="node-body">На GPU0 одна тяжёлая роль:</text>
+    <text x="101" y="919" class="node-body">Qwen-VL или Qwen3/Fenic</text>
+    <text x="101" y="941" class="node-small">VRAM reservation + heartbeat</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1151" y="787" width="370" height="165" rx="18" fill="#502237" stroke="#f58bb4" stroke-width="2"/>
+    <rect x="1174" y="809" width="88" height="25" rx="12" fill="url(#result)"/>
+    <text x="1218" y="827" text-anchor="middle" class="tag-result">GPU 0</text>
+    <text x="1174" y="869" class="node-title">Fenic + Qwen3-14B</text>
+    <text x="1174" y="896" class="node-body">Schema-driven entity extraction</text>
+    <text x="1174" y="919" class="node-body">Evidence обязателен для сущности</text>
+    <text x="1174" y="941" class="node-small">Pydantic schema · local vLLM</text>
+  </g>
+
+  <path d="M444 869 H514" stroke="#a993ef" stroke-width="3" fill="none" marker-end="url(#arrow-pink)"/>
+  <path d="M1083 869 H1137" stroke="#f58bb4" stroke-width="3" fill="none" marker-end="url(#arrow-pink)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="78" y="1018" width="1443" height="96" rx="18" fill="#2f1730" stroke="#f58bb4" stroke-width="2"/>
+    <rect x="103" y="1042" width="158" height="25" rx="12" fill="url(#result)"/>
+    <text x="182" y="1060" text-anchor="middle" class="tag-result">ATOMIC PUBLISH</text>
+    <text x="290" y="1058" class="node-title">Immutable MinIO bundle</text>
+    <text x="290" y="1085" class="node-body">final.md</text>
+    <text x="430" y="1085" class="node-body">entities.json</text>
+    <text x="610" y="1085" class="node-body">manifest.json</text>
+    <path d="M774 1042 V1090" stroke="#754059" stroke-width="1"/>
+    <text x="807" y="1058" class="node-title">Итоговый статус в PostgreSQL</text>
+    <text x="807" y="1085" class="node-body">COMPLETED · COMPLETED_WITH_WARNINGS · QUARANTINED</text>
+    <text x="1360" y="1085" text-anchor="end" class="node-small">CSV / JSON report по batch</text>
+  </g>
+
+  <path d="M1336 952 V1004" stroke="#f58bb4" stroke-width="3" fill="none" marker-end="url(#arrow-pink)"/>
+  <path d="M805 968 V1004" stroke="#f58bb4" stroke-width="3" fill="none" marker-end="url(#arrow-pink)"/>
+
+  <!-- Error rail -->
+  <path d="M1522 326 V756" stroke="#758c9b" stroke-width="2" stroke-dasharray="6 7" fill="none"/>
+  <path d="M1510 756 L1522 768 L1534 756" fill="none" stroke="#758c9b" stroke-width="2"/>
+  <rect x="1370" y="440" width="130" height="35" rx="10" fill="#263945" stroke="#758c9b"/>
+  <text x="1435" y="462" text-anchor="middle" class="node-small">Тех. ошибка</text>
+  <rect x="1327" y="713" width="173" height="43" rx="12" fill="#263945" stroke="#758c9b"/>
+  <text x="1414" y="740" text-anchor="middle" class="node-small">QUARANTINED</text>
+
+  <text x="78" y="1153" class="footer">PostgreSQL - единственная очередь и источник истины. MinIO - артефакты. Runtime не имеет интернет-доступа.</text>
+</svg>
