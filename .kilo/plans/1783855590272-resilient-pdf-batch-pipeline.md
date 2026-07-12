@@ -23,6 +23,27 @@ absolute directory roots
 
 ## Зафиксированные решения
 
+### Air-gapped delivery и разделение сред
+
+- Целевой сервер полностью изолирован от интернета. На нём запрещены package/model/image downloads, telemetry и любые внешние LLM/OCR API. Runtime containers запускаются с deny-by-default network policy; допустимы только необходимые локальные связи между controller, PostgreSQL, MinIO и model services.
+- Разработка разделена на две среды. Lightweight developer/CI environment не требует A100, полного набора весов или full pipeline: там выполняются deterministic unit, schema, migration, queue, storage, contract и mocked-model tests. Target GPU environment выполняет реальные model/integration/soak проверки и не считается обязательной средой для каждого изменения.
+- Создать connected build/release environment как единственное место с интернетом. Оно создаёт versioned offline release bundle, но не является production runtime и не хранит production data.
+- Offline release bundle содержит locked source distribution, OCI images by immutable digest, Python wheelhouse with hashes, OS package repository/snapshot or signed package set, model/tokenizer/config/dictionary assets, model profile, SBOM, license inventory, checksums manifest, import/verification scripts и signed release manifest.
+- На connected build host bundle собирается только из pinned revisions. После скачивания выполняются checksum/signature verification, vulnerability/license review и offline installation rehearsal в network-disabled container/VM. Теги `latest` и floating dependency ranges запрещены.
+- Transfer на target производится через контролируемый носитель или approved internal offline channel. Target importer verifies release manifest and every SHA-256 before import; несовпадение блокирует deployment. Imported artifacts получают release ID и не изменяются in place.
+- `idp profile validate` на target дополнительно проверяет отсутствие internet egress, наличие всех локальных files/images, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` и эквивалентные offline flags, disabled telemetry, model startup, GPU/VRAM, PostgreSQL/MinIO и free-storage limits. Неуспешная проверка не активирует profile.
+- Upgrade и rollback выполняются только переключением immutable release/profile pointer после target validation; откат не требует интернета и не перезаписывает ранее импортированный bundle.
+
+### Многоуровневая стратегия тестирования
+
+- Tier 0, на рабочей машине и обычном CI: formatting, lint, type checks, unit tests, Pydantic/JSON schema validation, Alembic migration tests, PostgreSQL queue/lease/recovery tests, MinIO adapter tests, scanner/path safety tests, coordinate-transform tests, prompts/manifest contract tests. GPU, реальные веса и внешняя сеть не требуются.
+- Tier 1, containerized integration without real models: controller, PostgreSQL, MinIO, mocked model endpoints and fault injection. Проверяются bounded queues, idempotency, retry/quarantine, atomic publication, cache invalidation, disk capacity pause, controller/worker restart and terminal reports.
+- Tier 2, target hardware smoke suite: по одному проверенному PDF на render, upscale, MinerU, each OCR route, Qwen-VL, Fenic/Qwen3 and final publication. Suite должна быть resumable per stage, сохранять diagnostics and environment fingerprints, и завершаться в фиксированный bounded runtime; это обязательная проверка imported profile.
+- Tier 3, target hardware canary/soak suite: небольшой неизменяемый corpus, отдельно хранимый в offline release/test bundle, покрывающий русские scans, digital PDFs with ignored text layer, tables, multi-column pages, formulas/images, long PDFs, corrupt/encrypted/oversized inputs, retries and restart recovery. Запускается перед активацией нового profile и по явному release decision, не на каждый commit.
+- Tier 4, production-like batch run: выполняется только после Tier 2/3; controller сохраняет stage manifests and resumable state, поэтому прерванные длительные проверки не начинаются заново и не требуют повторного полного model execution.
+- Так как labelled ground truth отсутствует, Tier 2/3 не заявляют OCR/Markdown/entity accuracy. Они проверяют operational correctness, schemas, provenance/evidence coverage, determinism bounds, resource envelopes and absence of silent failure. Sampled audit results создают первый набор для будущих accuracy gates.
+- CI обязан разделять изменения: changes to queue/storage/docs/config run Tier 0/1; model/runtime/profile changes additionally require a recorded target Tier 2/3 evidence bundle before promotion. Отсутствие доступа к target hardware блокирует promotion profile, но не локальную разработку unrelated code.
+
 ### Режим работы и безопасность доступа
 
 - Развёртывается постоянный локальный controller/worker service через Docker Compose или systemd. Он переживает выход пользователя, рестарт процесса и reboot хоста.
@@ -160,7 +181,9 @@ State transitions, job claims, lease updates, publication pointer updates и res
 2. Establish project skeleton and local operational stack.
    - Create Python workspace, configuration validation, typed domain models, Make targets and CI checks.
    - Provision PostgreSQL, MinIO, controller, workers, Prometheus/Grafana or equivalent local observability and authenticated model services with pinned image digests.
-   - Build offline provisioning manifest for wheels, container images and model files; runtime must use offline mode and fail if a dependency tries to download.
+   - Build connected-release pipeline producing an immutable offline release bundle: pinned OCI images, hashed wheelhouse, OS package snapshot, models/tokenizers/OCR dictionaries, SBOM/licenses, checksums and import/verification tooling.
+   - Add target-side import, offline verification, activation and rollback commands. Runtime must use offline mode and fail if a dependency tries to download.
+   - Add separate local/CI and target-GPU Compose/profiles so developers can run all non-model tests without full weights or GPU capacity.
 
 3. Implement persistence, work queue and recovery before ML stages.
    - Add Alembic migrations for the schema above, transactional repositories, idempotency keys, stage state machine and event log.
@@ -200,12 +223,16 @@ State transitions, job claims, lease updates, publication pointer updates и res
 10. Add observability, operations and validation.
    - Emit structured logs and metrics for throughput, queue depth, lease recovery, retries, quarantine reasons, stage latency, GPU VRAM, batch size, artifacts/disk quota, cache reuse and quality distributions.
    - Implement alerts for stuck leases, repeated OOM, no capacity, failed model endpoint, MinIO failure and high quarantine rate.
+   - Implement Tier 0/1 local/CI suites using mocks and synthetic small PDFs; they must never fetch model weights or require the target GPU server.
+   - Build Tier 2 target-hardware smoke suite and Tier 3 resumable canary/soak suite from an immutable offline test bundle; only profile/runtime changes require their recorded evidence for promotion.
    - Add `profile validate` and operational smoke tests because no labelled benchmark corpus exists.
    - Select deterministic audit sample per batch: 1% of published items, minimum 20. Store review outcomes to create the first labelled corpus; do not claim accuracy metrics before labels exist.
 
 ## Validation and acceptance criteria
 
 - `profile validate` succeeds in a fully air-gapped environment: all image digests, wheelhouse dependencies and model checksums are local; no network download occurs.
+- A target import rejects a missing, unpinned or checksum-mismatched image, wheel, model, tokenizer, OCR dictionary or OS package; a verified immutable offline release can be activated and rolled back without internet access.
+- Tier 0/1 pass on a machine without A100 GPUs or full model weights. Tier 2/3 target evidence is required only for a model/runtime/profile promotion and is resumable after a target restart.
 - `batch submit` rejects non-absolute paths, paths outside the allowlist, symlink escapes and unsupported file types according to documented dispositions.
 - A batch with valid, duplicate, changing, corrupt, encrypted and oversized PDFs reaches a terminal state; one failing document never blocks independent items.
 - Killing any worker/controller during each stage recovers through lease expiry without duplicate final publication or lost item state.
@@ -223,3 +250,4 @@ State transitions, job claims, lease updates, publication pointer updates и res
 - No custom review portal or automated human-in-the-loop routing; audit records are persisted for future review tooling.
 - No accuracy claim, calibration curve or supervised quality metric until manually reviewed ground truth exists.
 - No external cloud APIs or model downloads at runtime.
+- No requirement to execute real full-model end-to-end tests on developer laptops or ordinary CI runners.
