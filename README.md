@@ -1,51 +1,160 @@
 # Offline PDF Batch Pipeline
 
-Air-gapped local pipeline that turns PDFs from allowlisted directories into grounded Markdown and typed entities.
+Локальный полностью изолированный pipeline для пакетной обработки PDF. Система рекурсивно обходит разрешённые каталоги, превращает документы в заземлённый Markdown, извлекает сущности и публикует воспроизводимый результат в MinIO.
 
-## What It Does
+PDF text layer намеренно не используется: документ обрабатывается только как изображение страниц.
 
-```text
-PDF image render (text layer ignored)
--> SwinIR x4 with fallback
--> MinerU full layout
--> PaddleOCR for text blocks
--> Qwen2.5-VL reconstruction, OCR validation, tables and visual blocks
--> Fenic + Qwen3 entity extraction
--> MinIO result bundle
+## Логика работы
+
+```mermaid
+flowchart TB
+    classDef input fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
+    classDef control fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
+    classDef cpu fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    classDef gpu1 fill:#fff3e0,stroke:#ef6c00,color:#e65100
+    classDef gpu0 fill:#ffebee,stroke:#c62828,color:#b71c1c
+    classDef output fill:#fce4ec,stroke:#c2185b,color:#880e4f
+    classDef error fill:#eceff1,stroke:#546e7a,color:#263238
+
+    subgraph INPUT["1. Постановка batch"]
+        A["Оператор<br/><code>idp batch submit /allowed/root ...</code>"]:::input
+        B["Проверка absolute path + realpath<br/>allowlist roots, read-only mounts"]:::control
+        C["Рекурсивный scanner<br/>без перехода по symbolic links"]:::cpu
+        D["Два одинаковых stat-снимка<br/>SHA-256 PDF"]:::cpu
+        A --> B --> C --> D
+    end
+
+    subgraph CONTROL["2. Durable control plane"]
+        PG[("PostgreSQL<br/>batches, items, jobs,<br/>leases, retries, state")]:::control
+        J["Bounded job queues<br/><code>FOR UPDATE SKIP LOCKED</code>"]:::control
+        R["Resource reservations<br/>CPU / GPU / storage"]:::control
+        D --> PG --> J --> R
+    end
+
+    subgraph SAFE["Входные исключения"]
+        S1["SKIPPED_UNSUPPORTED"]:::error
+        S2["SKIPPED_UNSTABLE"]:::error
+        S3["SKIPPED_SYMLINK"]:::error
+        Q["QUARANTINED<br/>corrupt/encrypted/limit/error"]:::error
+    end
+
+    C -. symlink .-> S3
+    D -. non-PDF .-> S1
+    D -. changed file .-> S2
+
+    subgraph PREPARE["3. Vision-only preparation"]
+        M0[("MinIO temporary artifacts<br/>source PDF, pages, crops, manifests")]:::control
+        E["CPU render<br/>PDF -> page images<br/>text layer discarded"]:::cpu
+        F["GPU1: SwinIR x4<br/>image-quality gate"]:::gpu1
+        G{"Upscale improves image?"}:::gpu1
+        H["Use upscaled page"]:::gpu1
+        I["Use original rendered page<br/>record fallback reason"]:::gpu1
+        R --> M0 --> E --> F --> G
+        G -->|yes| H
+        G -->|no| I
+    end
+
+    subgraph LAYOUT["4. Full document structure"]
+        L["GPU1: MinerU 3.4<br/>complete layout from every page"]:::gpu1
+        LM["Internal layout manifest<br/>all blocks, bbox, hierarchy,<br/>relations, reading order, crops"]:::gpu1
+        H --> L
+        I --> L
+        L --> LM
+    end
+
+    subgraph OCR["5. OCR only inside text blocks"]
+        O1["GPU1: PP-OCRv5 detector<br/>lines within MinerU text blocks"]:::gpu1
+        O2{"Script / language router"}:::gpu1
+        O3["East-Slavic PP-OCRv5<br/>RU / UK / BY / EN"]:::gpu1
+        O4["Cyrillic PP-OCRv5<br/>other Cyrillic"]:::gpu1
+        O5["PP-OCRv6 medium<br/>supported Latin / CJK"]:::gpu1
+        OM["OCR manifest<br/>text, token bbox, confidence,<br/>language, model revision"]:::gpu1
+        LM --> O1 --> O2
+        O2 --> O3 --> OM
+        O2 --> O4 --> OM
+        O2 --> O5 --> OM
+    end
+
+    subgraph RECONSTRUCT["6. One Qwen-VL reconstruction run"]
+        GS["GPU0 admission scheduler<br/>only one heavy role at a time"]:::control
+        V["GPU0: Qwen2.5-VL-32B<br/>images + crops + layout + OCR"]:::gpu0
+        MD["Grounded document Markdown<br/>block_id, page, bbox, evidence"]:::gpu0
+        VF["Evidence-based findings<br/>OCR corrections, unreadable blocks,<br/>missing blocks, simple logic checks"]:::gpu0
+        LM --> GS
+        OM --> GS
+        GS --> V
+        V --> MD
+        V --> VF
+    end
+
+    subgraph ENTITIES["7. Entity extraction"]
+        FN["GPU0: Fenic + Qwen3-14B<br/>schema-driven semantic.extract"]:::gpu0
+        EN["Typed entities<br/>type, value, page, block_id,<br/>bbox, evidence, confidence"]:::gpu0
+        MD --> GS --> FN --> EN
+    end
+
+    subgraph PUBLISH["8. Publication and report"]
+        P["Validate schemas, hashes<br/>and every evidence reference"]:::output
+        BUNDLE["Immutable MinIO result bundle<br/><code>final.md</code><br/><code>entities.json</code><br/><code>manifest.json</code>"]:::output
+        STATE{"Quality state"}:::output
+        DONE["COMPLETED<br/>quality=pass"]:::output
+        WARN["COMPLETED_WITH_WARNINGS<br/>quality=warning or failed"]:::output
+        REPORT["PostgreSQL state + CSV/JSON report"]:::control
+        EN --> P
+        VF --> P
+        P --> BUNDLE --> STATE
+        STATE -->|pass| DONE --> REPORT
+        STATE -->|warning / failed| WARN --> REPORT
+    end
+
+    E -. terminal technical failure .-> Q
+    F -. terminal technical failure .-> Q
+    L -. terminal technical failure .-> Q
+    O1 -. terminal technical failure .-> Q
+    V -. terminal technical failure .-> Q
+    FN -. terminal technical failure .-> Q
+    Q --> REPORT
 ```
 
-PostgreSQL is both the durable state store and job queue. No external broker is used.
+## Компоненты
 
-## Requirements
+| Компонент | Назначение | Ресурс |
+|---|---|---|
+| PostgreSQL | Источник истины, очередь работ, leases, retries, статусы и reservations | CPU / disk |
+| MinIO | Временные артефакты и immutable result bundles | Local storage |
+| Render | Детерминированный PDF-to-image; text layer игнорируется | CPU |
+| SwinIR x4 | Upscale каждой страницы с автоматическим fallback | GPU1 |
+| MinerU 3.4 | Полный layout всех блоков и reading order | GPU1 |
+| PaddleOCR | Построчный OCR только внутри текстовых блоков MinerU | GPU1 |
+| Qwen2.5-VL-32B | OCR validation, таблицы, изображения, диаграммы, формулы и сборка Markdown | GPU0 |
+| Fenic + Qwen3-14B | Schema-driven extraction сущностей из Markdown | GPU0 |
 
-- Linux target server with 2x NVIDIA A100 40 GB.
-- PostgreSQL and MinIO available locally to the deployment.
-- Source directories mounted read-only under configured allowlist roots.
-- Imported offline release bundle containing all container images, Python dependencies, models, tokenizers and OCR dictionaries.
-- No network access is required or permitted at runtime.
+## Что сохраняет MinerU
 
-## Operations
+Внутренний `layout_manifest` сохраняет каждый блок без потерь: текст, заголовки, списки, таблицы, изображения, диаграммы, формулы, header/footer, сноски, печати и подписи. Для каждого блока доступны `block_id`, страница, bbox, hierarchy, relations, reading order и ссылка на crop.
 
-Start the persistent controller and workers with the target deployment profile. The exact Compose/systemd assets are added during implementation.
+OCR обрабатывает только текстовые блоки. Все остальные блоки передаются в Qwen-VL вместе с изображением и metadata: модель расшифровывает таблицы, интерпретирует диаграммы, графики и формулы, затем включает значимую информацию в единый Markdown.
 
-Submit a one-shot batch:
+## Запуск
+
+Controller и workers работают как постоянный сервис через target deployment profile. Команда submit только создаёт batch и сразу возвращает его идентификатор:
 
 ```bash
 idp batch submit /data/incoming/contracts /data/incoming/reports
 ```
 
-Check progress and obtain a complete report:
+Проверка состояния и полный отчёт:
 
 ```bash
 idp batch status <batch-id>
 idp batch report <batch-id> --format json
 ```
 
-The controller continues processing if the submitting terminal closes. It recovers interrupted jobs with PostgreSQL leases after a controller or worker restart.
+Controller продолжает обработку после закрытия терминала. После падения worker/controller задания возвращаются в очередь по истечении lease.
 
-## Outputs
+## Результаты
 
-Each technically processed PDF receives an immutable MinIO bundle:
+Для каждого технически обработанного PDF публикуется immutable bundle в MinIO:
 
 ```text
 final.md
@@ -53,20 +162,18 @@ entities.json
 manifest.json
 ```
 
-`manifest.json` contains source and artifact hashes, model/profile versions, provenance, OCR/VLM findings, fallback decisions, retries and `quality=pass|warning|failed`.
+`manifest.json` содержит hashes, artifact lineage, profile/model/prompt/schema versions, OCR coverage, VLM findings, fallback decisions, попытки обработки и `quality=pass|warning|failed`.
 
-`quality=failed` is still published as a technically completed result. Files that cannot be processed are explicitly reported as `QUARANTINED`; they do not stop the rest of the batch.
+`quality=failed` не скрывает технически готовый результат: он публикуется со статусом `COMPLETED_WITH_WARNINGS`. Файлы, которые невозможно обработать технически, получают `QUARANTINED` и не блокируют оставшийся batch.
 
-## Offline Release Process
+## Air-Gapped Развёртывание
 
-1. Build a pinned release bundle on a connected build host.
-2. Verify hashes and rehearse installation in a network-disabled environment.
-3. Transfer the bundle to the target server.
-4. Import and validate it with `idp profile validate <profile>`.
-5. Activate only a verified immutable profile; rollback switches to a previously imported profile without internet access.
+Runtime не имеет доступа к интернету и не выполняет model/package downloads. Connected build host готовит immutable release bundle с pinned OCI images, Python wheelhouse, системными пакетами, моделями, tokenizers, OCR dictionaries, checksums, SBOM и import scripts.
 
-## Testing
+Перед активацией target server проверяет все assets через `idp profile validate <profile>`. Rollback переключает на уже импортированный immutable profile и не требует интернет-доступа.
 
-- Local development and standard CI run unit, schema, queue, storage and mocked integration tests without GPUs or full model weights.
-- The target server runs resumable real-model smoke and canary/soak suites only for model/runtime/profile promotion.
-- Initial quality checks validate provenance, schema, recovery and resource behavior. Accuracy claims wait for manually audited ground truth.
+## Тестирование
+
+- Local CI запускает unit, schema, queue, storage и mocked integration tests без GPU и model weights.
+- Target server запускает resumable real-model smoke и canary/soak suites только перед promotion model/runtime/profile.
+- Пока нет размеченного ground truth, quality checks подтверждают схемы, lineage, evidence, recovery и resource limits, но не заявляют accuracy metrics.
