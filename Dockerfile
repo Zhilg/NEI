@@ -12,6 +12,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY alembic.ini ./
 COPY alembic ./alembic
-RUN pip install --no-cache-dir .
+COPY wheels ./wheels
+RUN pip install --no-index --find-links=/app/wheels . && rm -rf /app/wheels
 
 CMD ["idp"]

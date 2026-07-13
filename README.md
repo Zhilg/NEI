@@ -69,7 +69,26 @@ manifest.json
 
 Runtime не имеет доступа к интернету и не выполняет model/package downloads. Connected build host готовит immutable release bundle с pinned OCI images, Python wheelhouse, системными пакетами, моделями, tokenizers, OCR dictionaries, checksums, SBOM и import scripts.
 
-Перед активацией target server проверяет все assets через `idp profile validate <profile>`. Rollback переключает на уже импортированный immutable profile и не требует интернет-доступа.
+Release bundle содержит подписанный Ed25519 `manifest.json`: для каждого asset в нём зафиксированы путь, тип, размер и SHA-256. Private signing key остаётся только на connected build host; target хранит только public verification key. Target не может выпустить доверенный release самостоятельно.
+
+```bash
+# Connected build host: явный JSON build spec + private key.
+idp release build release-spec.json ./out/release-2026.07.13 --private-key ./release-private.pem
+
+# Target: проверить транспортируемый bundle, импортировать, активировать.
+idp release verify /media/release-2026.07.13 --public-key /etc/idp/release-public.pem
+idp release import /media/release-2026.07.13
+idp release activate release-2026.07.13
+idp profile validate
+```
+
+Импорт сначала проверяет signature и SHA-256 всех assets, копирует bundle в staging, повторно проверяет его и только затем атомарно публикует immutable release directory. OCI archives загружаются только из проверенных локальных файлов. Rollback переключает активный symlink на уже импортированный проверенный release и не требует интернет-доступа:
+
+```bash
+idp release rollback release-2026.07.12
+```
+
+`profile validate` проверяет active release, offline flags, PostgreSQL и MinIO до запуска controller/worker. Systemd units в `infra/systemd/` делают эту проверку обязательной startup dependency.
 
 ## Тестирование
 

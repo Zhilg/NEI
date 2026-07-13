@@ -1,4 +1,6 @@
 services:
+  # Images are loaded from a verified release bundle before this profile is started.
+  # The internal network intentionally denies internet egress at runtime.
   postgres:
     image: ${IDP_POSTGRES_IMAGE:?Set immutable offline image digest}
     environment:
@@ -27,12 +29,17 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - ${IDP_RELEASE_ROOT:-/var/lib/idp}:/var/lib/idp:ro
+      - ${IDP_RELEASE_PUBLIC_KEY:-/etc/idp/release-public.pem}:/etc/idp/release-public.pem:ro
 
   controller:
     image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
     command: ["idp", "controller", "run"]
     environment:
       IDP_DATABASE_URL: postgresql+psycopg://${IDP_POSTGRES_USER:-idp}:${IDP_POSTGRES_PASSWORD}@postgres:5432/${IDP_POSTGRES_DB:-idp}
+      IDP_MINIO_ACCESS_KEY: ${IDP_MINIO_ROOT_USER}
+      IDP_MINIO_SECRET_KEY: ${IDP_MINIO_ROOT_PASSWORD}
       IDP_MINIO_ENDPOINT: minio:9000
       IDP_OFFLINE_MODE: "true"
       IDP_TELEMETRY_ENABLED: "false"
@@ -47,12 +54,17 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - ${IDP_RELEASE_ROOT:-/var/lib/idp}:/var/lib/idp:ro
+      - ${IDP_RELEASE_PUBLIC_KEY:-/etc/idp/release-public.pem}:/etc/idp/release-public.pem:ro
 
   worker:
     image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
     command: ["idp", "worker", "run"]
     environment:
       IDP_DATABASE_URL: postgresql+psycopg://${IDP_POSTGRES_USER:-idp}:${IDP_POSTGRES_PASSWORD}@postgres:5432/${IDP_POSTGRES_DB:-idp}
+      IDP_MINIO_ACCESS_KEY: ${IDP_MINIO_ROOT_USER}
+      IDP_MINIO_SECRET_KEY: ${IDP_MINIO_ROOT_PASSWORD}
       IDP_MINIO_ENDPOINT: minio:9000
       IDP_OFFLINE_MODE: "true"
       IDP_TELEMETRY_ENABLED: "false"
@@ -67,6 +79,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - ${IDP_RELEASE_ROOT:-/var/lib/idp}:/var/lib/idp:ro
+      - ${IDP_RELEASE_PUBLIC_KEY:-/etc/idp/release-public.pem}:/etc/idp/release-public.pem:ro
 
 networks:
   idp_internal:

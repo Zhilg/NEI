@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     offline_mode: bool = True
     telemetry_enabled: bool = False
     release_manifest_path: Path | None = None
+    release_root: Path = Path("/var/lib/idp")
+    release_public_key_path: Path = Path("/etc/idp/release-public.pem")
+    container_runtime: str = "docker"
 
     @field_validator("allowed_roots")
     @classmethod
@@ -48,5 +51,14 @@ class Settings(BaseSettings):
         """Release manifests are local files; remote URLs violate air-gapped runtime."""
         if value is not None and not value.is_absolute():
             msg = "release manifest path must be absolute"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("release_root", "release_public_key_path")
+    @classmethod
+    def require_absolute_release_path(cls, value: Path) -> Path:
+        """Target release state and trust material must never resolve relatively."""
+        if not value.is_absolute():
+            msg = f"release path must be absolute: {value}"
             raise ValueError(msg)
         return value
