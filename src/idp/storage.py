@@ -87,6 +87,14 @@ class LocalArtifactStore(ArtifactStore):
         actual, _ = sha256_file(target)
         return actual == reference.sha256
 
+    def get_file(self, reference: ArtifactReference, target: Path) -> None:
+        """Copy a verified artifact into a new local file without path traversal."""
+        source = self._target(reference.object_key)
+        self._assert_hash(source, reference.sha256)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with source.open("rb") as input_file, target.open("xb") as output_file:
+            copyfileobj(input_file, output_file)
+
     def delete(self, artifact: StoredArtifact) -> None:
         if artifact.retention != ArtifactRetention.TEMPORARY:
             msg = "refusing to delete a final artifact"
@@ -175,6 +183,26 @@ class MinioArtifactStore(ArtifactStore):
                 return False
             raise ArtifactStoreError(str(error)) from error
         return self._metadata_value(stat.metadata, "sha256") == reference.sha256
+
+    def get_file(self, reference: ArtifactReference, target: Path) -> None:
+        """Download a local MinIO object and verify its content hash before use."""
+        validate_object_key(reference.object_key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            response = self._client.get_object(self._bucket, reference.object_key)
+            with target.open("xb") as output_file:
+                for chunk in response.stream(amt=1024 * 1024):
+                    output_file.write(chunk)
+            response.close()
+            response.release_conn()
+        except (OSError, S3Error) as error:
+            target.unlink(missing_ok=True)
+            raise ArtifactStoreError(str(error)) from error
+        actual, _ = sha256_file(target)
+        if actual != reference.sha256:
+            target.unlink(missing_ok=True)
+            msg = f"downloaded artifact SHA-256 mismatch: {reference.object_key}"
+            raise ArtifactStoreError(msg)
 
     def delete(self, artifact: StoredArtifact) -> None:
         if artifact.retention != ArtifactRetention.TEMPORARY:

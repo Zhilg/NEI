@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     scan_max_candidates: int = Field(default=100_000, gt=0)
     scan_max_depth: int = Field(default=64, ge=1, le=1024)
     scan_hash_chunk_bytes: int = Field(default=1024 * 1024, gt=0)
+    render_dpi: int = Field(default=200, ge=72, le=600)
+    render_max_pages: int = Field(default=2_000, gt=0)
+    render_max_pixels_per_page: int = Field(default=80_000_000, gt=0)
+    render_max_total_pixels: int = Field(default=2_000_000_000, gt=0)
+    upscale_entropy_tolerance: float = Field(default=0.12, ge=0, le=1)
+    upscale_clipping_tolerance: float = Field(default=0.01, ge=0, le=1)
     batch_staging_root: Path = Path("/var/lib/idp/staging")
     offline_mode: bool = True
     telemetry_enabled: bool = False

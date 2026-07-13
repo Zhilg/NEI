@@ -35,5 +35,8 @@ class ArtifactStore(Protocol):
     def exists(self, reference: ArtifactReference) -> bool:
         """Verify that a referenced immutable object exists with its expected hash."""
 
+    def get_file(self, reference: ArtifactReference, target: Path) -> None:
+        """Materialize a verified immutable object to a controlled local file path."""
+
     def delete(self, artifact: StoredArtifact) -> None:
         """Delete only a retention-eligible temporary artifact."""

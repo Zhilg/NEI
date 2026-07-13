@@ -4,6 +4,8 @@
 
 PDF text layer намеренно не используется: документ обрабатывается только как изображение страниц.
 
+Перед MinerU каждый PDF рендерится через vision-only renderer в RGB page images с фиксированным DPI и сохранёнными transform координат. Каждая страница передаётся в локальный SwinIR x4 adapter. Если enhanced image меньше исходника, превышает pixel quota, теряет entropy или заметно увеличивает clipping, pipeline сохраняет enhanced artifact для аудита, но в MinerU передаёт original render с записанной причиной fallback. Ни renderer, ни quality gate не читают PDF text layer и не используют OCR.
+
 ## Логика работы
 
 ![Схема offline PDF batch pipeline](docs/pipeline-overview.svg)

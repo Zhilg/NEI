@@ -153,5 +153,12 @@ class BatchRepository(Protocol):
     def attach_source_artifacts(self, sources: dict[UUID, ArtifactReference]) -> None:
         """Attach immutable source object references to queued source snapshot jobs."""
 
-    def attach_source_artifacts(self, sources: dict[UUID, ArtifactReference]) -> None:
-        """Attach immutable source object references to queued source snapshot jobs."""
+    def record_vision_output(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        manifest: StoredArtifact,
+        artifacts: tuple[StoredArtifact, ...],
+    ) -> None:
+        """Catalog render artifacts before an owned vision stage is completed."""
