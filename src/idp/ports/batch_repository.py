@@ -173,3 +173,13 @@ class BatchRepository(Protocol):
         crops: tuple[StoredArtifact, ...],
     ) -> None:
         """Catalog raw MinerU output, internal layout manifest, and crops before completion."""
+
+    def record_ocr_output(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        manifest: StoredArtifact,
+        line_crops: tuple[StoredArtifact, ...],
+    ) -> None:
+        """Catalog OCR manifest and line crops before an owned OCR stage is completed."""

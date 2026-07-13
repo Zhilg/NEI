@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     render_max_total_pixels: int = Field(default=2_000_000_000, gt=0)
     upscale_entropy_tolerance: float = Field(default=0.12, ge=0, le=1)
     upscale_clipping_tolerance: float = Field(default=0.01, ge=0, le=1)
+    ocr_max_lines_per_block: int = Field(default=500, gt=0)
+    ocr_min_token_confidence: float = Field(default=0.0, ge=0, le=1)
     batch_staging_root: Path = Path("/var/lib/idp/staging")
     offline_mode: bool = True
     telemetry_enabled: bool = False

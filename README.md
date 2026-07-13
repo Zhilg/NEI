@@ -8,6 +8,8 @@ PDF text layer намеренно не используется: докумен�
 
 MinerU получает только выбранные page images и создаёт локальный `middle.json`. Этот raw artifact сохраняется неизменно для аудита, но его OCR/text/Markdown/HTML/LaTeX никогда не становятся content source. Внутренний `layout_manifest` сохраняет геометрию, тип, reading order, hierarchy, relations и crop каждого блока, включая неизвестные будущие типы. Таблицы, изображения, диаграммы, формулы, headers/footers, печати и подписи не отбрасываются; их смысл будет восстановлен единым Qwen-VL этапом.
 
+PaddleOCR не создаёт новый page layout: `PP-OCRv5_server_det` выделяет строки только внутри text-bearing MinerU blocks. Router запускает East-Slavic PP-OCRv5 для RU/UK/BY/EN, Cyrillic PP-OCRv5 для другой кириллицы и PP-OCRv6 medium для поддерживаемых Latin/CJK scripts. У каждого token сохраняются page bbox, block ID, detector/recognizer confidence, script, language, model ID, revision и line crop. Неподдерживаемый script не превращается в текст: он остаётся image evidence с `unsupported_script` finding для Qwen-VL.
+
 ## Логика работы
 
 ![Схема offline PDF batch pipeline](docs/pipeline-overview.svg)
