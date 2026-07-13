@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,6 +40,14 @@ class Settings(BaseSettings):
     upscale_clipping_tolerance: float = Field(default=0.01, ge=0, le=1)
     ocr_max_lines_per_block: int = Field(default=500, gt=0)
     ocr_min_token_confidence: float = Field(default=0.0, ge=0, le=1)
+    qwen_vl_endpoint: str = "http://qwen-vl:8000/v1"
+    qwen_vl_model_id: str = "Qwen2.5-VL-32B-Instruct"
+    qwen_vl_model_revision: str = "pinned-in-profile"
+    qwen_vl_prompt_version: str = "reconstruction-v1"
+    qwen_vl_timeout_seconds: float = Field(default=600, gt=0, le=3600)
+    qwen_vl_max_blocks_per_request: int = Field(default=100, gt=0)
+    qwen_vl_max_images_per_request: int = Field(default=40, gt=0)
+    qwen_vl_gpu0_slot_unit: str = "role"
     batch_staging_root: Path = Path("/var/lib/idp/staging")
     offline_mode: bool = True
     telemetry_enabled: bool = False
@@ -76,3 +85,18 @@ class Settings(BaseSettings):
             msg = f"release path must be absolute: {value}"
             raise ValueError(msg)
         return value
+
+    @field_validator("qwen_vl_endpoint")
+    @classmethod
+    def require_local_qwen_endpoint(cls, value: str) -> str:
+        """The VLM endpoint must be an internal service, never an external API URL."""
+        endpoint = urlparse(value)
+        if endpoint.scheme != "http" or endpoint.hostname not in {
+            "qwen-vl",
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }:
+            msg = "Qwen-VL endpoint must use an approved local/internal HTTP host"
+            raise ValueError(msg)
+        return value.rstrip("/")

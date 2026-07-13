@@ -10,6 +10,8 @@ MinerU получает только выбранные page images и созд�
 
 PaddleOCR не создаёт новый page layout: `PP-OCRv5_server_det` выделяет строки только внутри text-bearing MinerU blocks. Router запускает East-Slavic PP-OCRv5 для RU/UK/BY/EN, Cyrillic PP-OCRv5 для другой кириллицы и PP-OCRv6 medium для поддерживаемых Latin/CJK scripts. У каждого token сохраняются page bbox, block ID, detector/recognizer confidence, script, language, model ID, revision и line crop. Неподдерживаемый script не превращается в текст: он остаётся image evidence с `unsupported_script` finding для Qwen-VL.
 
+Qwen2.5-VL-32B работает в одном logical reconstruction run на эксклюзивном GPU0 role slot. Он получает selected page images, все relevant block crops, полный MinerU layout/reading order, PaddleOCR tokens и OCR findings. При длинных страницах controller дробит блоки только по image/block budget, затем детерминированно склеивает ответы в один Markdown, без второго validation pipeline. Structured output обязан вернуть каждый block ID ровно один раз в исходном reading order; OCR correction допустима только для существующего token в том же block с visual evidence. В том же output модель расшифровывает таблицы, изображения, diagrams, charts, formulas, stamps/signatures и возвращает findings по OCR disagreement, unreadable regions, missing blocks и очевидным суммам/датам/нумерации/ссылкам.
+
 ## Логика работы
 
 ![Схема offline PDF batch pipeline](docs/pipeline-overview.svg)

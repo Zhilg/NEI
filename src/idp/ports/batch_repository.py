@@ -183,3 +183,13 @@ class BatchRepository(Protocol):
         line_crops: tuple[StoredArtifact, ...],
     ) -> None:
         """Catalog OCR manifest and line crops before an owned OCR stage is completed."""
+
+    def record_reconstruction_output(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        markdown: StoredArtifact,
+        manifest: StoredArtifact,
+    ) -> None:
+        """Catalog Qwen-VL Markdown and provenance manifest before stage completion."""

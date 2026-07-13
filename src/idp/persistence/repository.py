@@ -890,6 +890,49 @@ class SqlAlchemyBatchRepository:
                 "ocr_manifest_sha256": manifest.reference.sha256,
             }
 
+    def record_reconstruction_output(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        markdown: StoredArtifact,
+        manifest: StoredArtifact,
+    ) -> None:
+        """Persist one grounded document reconstruction under the active GPU0 job lease."""
+        current_time = self._clock()
+        with self._session_factory.begin() as session:
+            job = session.get(JobModel, job_id, with_for_update=True)
+            self._require_active_lease(job, worker_id, current_time)
+            assert job is not None
+            for artifact in (markdown, manifest):
+                existing = session.scalar(
+                    select(ArtifactModel)
+                    .where(ArtifactModel.object_key == artifact.reference.object_key)
+                    .with_for_update()
+                )
+                if existing is None:
+                    session.add(
+                        ArtifactModel(
+                            producing_job_id=job_id,
+                            object_key=artifact.reference.object_key,
+                            sha256=artifact.reference.sha256,
+                            media_type=artifact.reference.media_type,
+                            size_bytes=artifact.size_bytes,
+                            retention=artifact.retention,
+                        )
+                    )
+                elif existing.sha256 != artifact.reference.sha256:
+                    raise RepositoryError(
+                        f"reconstruction artifact key collision: {artifact.reference.object_key}"
+                    )
+            job.payload = {
+                **job.payload,
+                "reconstructed_markdown_key": markdown.reference.object_key,
+                "reconstructed_markdown_sha256": markdown.reference.sha256,
+                "reconstruction_manifest_key": manifest.reference.object_key,
+                "reconstruction_manifest_sha256": manifest.reference.sha256,
+            }
+
     @staticmethod
     def _get_or_create_document(session: Session, source_sha256: str) -> UUID:
         identifier = session.scalar(
