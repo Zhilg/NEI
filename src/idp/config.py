@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import AnyUrl, Field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,10 +21,14 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://idp:idp@postgres:5432/idp"
     minio_endpoint: str = "minio:9000"
     minio_secure: bool = False
+    minio_bucket: str = "idp-artifacts"
+    minio_access_key: str | None = None
+    minio_secret_key: str | None = None
     metrics_port: int = Field(default=9100, ge=1, le=65535)
+    controller_poll_seconds: float = Field(default=5.0, gt=0, le=300)
     offline_mode: bool = True
     telemetry_enabled: bool = False
-    release_manifest_url: AnyUrl | None = None
+    release_manifest_path: Path | None = None
 
     @field_validator("allowed_roots")
     @classmethod
@@ -38,11 +42,11 @@ class Settings(BaseSettings):
             normalized.append(root.resolve(strict=False))
         return tuple(normalized)
 
-    @field_validator("release_manifest_url")
+    @field_validator("release_manifest_path")
     @classmethod
-    def reject_remote_manifest_in_offline_mode(cls, value: AnyUrl | None) -> AnyUrl | None:
-        """A remote release manifest would violate target runtime assumptions."""
-        if value is not None and value.scheme not in {"file"}:
-            msg = "release manifest must be a local file URL"
+    def require_local_release_manifest(cls, value: Path | None) -> Path | None:
+        """Release manifests are local files; remote URLs violate air-gapped runtime."""
+        if value is not None and not value.is_absolute():
+            msg = "release manifest path must be absolute"
             raise ValueError(msg)
         return value

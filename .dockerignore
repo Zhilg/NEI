@@ -1,0 +1,10 @@
+.git
+.kilo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+tests
+docs
+infra

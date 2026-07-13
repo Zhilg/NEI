@@ -15,17 +15,58 @@ services:
       MINIO_ROOT_PASSWORD: ${IDP_MINIO_ROOT_PASSWORD:?Set from target secret store}
     networks: [idp_internal]
 
+  migrate:
+    image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      IDP_DATABASE_URL: postgresql+psycopg://${IDP_POSTGRES_USER:-idp}:${IDP_POSTGRES_PASSWORD}@postgres:5432/${IDP_POSTGRES_DB:-idp}
+      IDP_OFFLINE_MODE: "true"
+      IDP_TELEMETRY_ENABLED: "false"
+    depends_on: [postgres]
+    networks: [idp_internal]
+    read_only: true
+    tmpfs:
+      - /tmp
+
   controller:
     image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
-    command: ["idp", "config"]
+    command: ["idp", "controller", "run"]
     environment:
+      IDP_DATABASE_URL: postgresql+psycopg://${IDP_POSTGRES_USER:-idp}:${IDP_POSTGRES_PASSWORD}@postgres:5432/${IDP_POSTGRES_DB:-idp}
+      IDP_MINIO_ENDPOINT: minio:9000
       IDP_OFFLINE_MODE: "true"
       IDP_TELEMETRY_ENABLED: "false"
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-    depends_on: [postgres, minio]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
     networks: [idp_internal]
     read_only: true
+    tmpfs:
+      - /tmp
+
+  worker:
+    image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
+    command: ["idp", "worker", "run"]
+    environment:
+      IDP_DATABASE_URL: postgresql+psycopg://${IDP_POSTGRES_USER:-idp}:${IDP_POSTGRES_PASSWORD}@postgres:5432/${IDP_POSTGRES_DB:-idp}
+      IDP_MINIO_ENDPOINT: minio:9000
+      IDP_OFFLINE_MODE: "true"
+      IDP_TELEMETRY_ENABLED: "false"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    networks: [idp_internal]
+    read_only: true
+    tmpfs:
+      - /tmp
 
 networks:
   idp_internal:

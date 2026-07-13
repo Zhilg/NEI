@@ -29,7 +29,14 @@ OCR обрабатывает только текстовые блоки. Все 
 
 ## Запуск
 
-Controller и workers работают как постоянный сервис через target deployment profile. Команда submit только создаёт batch и сразу возвращает его идентификатор:
+В репозитории есть два deployment profile:
+
+- `infra/compose/local.yml` поднимает PostgreSQL, MinIO, Alembic migration, controller и idle worker для локальной проверки control plane.
+- `infra/compose/target.yml` требует immutable image digests и секреты, отключает внешний network egress через internal network и запускает migration до controller/worker.
+
+Второй этап уже реализует PostgreSQL control plane: `FOR UPDATE SKIP LOCKED`, leases/heartbeat recovery, retries/quarantine, resource pools, MinIO artifact contract и atomic final-output pointer. Model stage handlers и `idp batch submit/status/report` появятся на этапах scanner и ML pipeline.
+
+После их добавления команда submit будет создавать batch и сразу возвращать его идентификатор:
 
 ```bash
 idp batch submit /data/incoming/contracts /data/incoming/reports

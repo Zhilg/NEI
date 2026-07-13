@@ -13,6 +13,7 @@ dependencies = [
   "minio>=7.2,<8",
   "pydantic>=2.12,<3",
   "pydantic-settings>=2.10,<3",
+  "prometheus-client>=0.21,<1",
   "psycopg[binary]>=3.2,<3.3",
   "sqlalchemy>=2.0,<2.1",
   "typer>=0.26,<0.27",

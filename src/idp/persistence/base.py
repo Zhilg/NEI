@@ -1,4 +1,4 @@
-"""Shared SQLAlchemy metadata; tables arrive with the scheduler phase."""
+"""Shared SQLAlchemy metadata for the Alembic-managed control plane."""
 
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
@@ -14,6 +14,6 @@ NAMING_CONVENTION = {
 
 
 class Base(DeclarativeBase):
-    """Base for future Alembic-managed persistence models."""
+    """Base for durable controller persistence models."""
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)

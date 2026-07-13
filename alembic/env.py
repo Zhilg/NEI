@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from logging.config import fileConfig
+from os import environ
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from idp.persistence.base import Base
+from idp.persistence import models  # noqa: F401
 
 config = context.config
+if database_url := environ.get("IDP_DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

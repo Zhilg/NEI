@@ -1,0 +1,17 @@
+groups:
+  - name: idp-controller
+    rules:
+      - alert: IdpLeaseRecoverySpike
+        expr: increase(idp_leases_recovered_total[15m]) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Repeated worker lease recovery detected
+      - alert: IdpCapacityPaused
+        expr: idp_batches_paused_capacity > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Batch processing paused because a bounded resource is unavailable

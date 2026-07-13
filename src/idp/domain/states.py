@@ -34,6 +34,32 @@ class QualityState(StrEnum):
     FAILED = "failed"
 
 
+class JobState(StrEnum):
+    """Lifecycle of one leased, idempotent stage invocation."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ArtifactRetention(StrEnum):
+    """Artifact lifecycle classes enforced by the artifact-store boundary."""
+
+    TEMPORARY = "temporary"
+    FINAL = "final"
+
+
+class ReservationKind(StrEnum):
+    """Globally bounded controller resource pools."""
+
+    CPU = "cpu"
+    GPU0 = "gpu0"
+    GPU1 = "gpu1"
+    STORAGE = "storage"
+
+
 TERMINAL_ITEM_STATES = frozenset(
     {
         BatchItemState.REUSED,
@@ -43,5 +69,13 @@ TERMINAL_ITEM_STATES = frozenset(
         BatchItemState.SKIPPED_UNSUPPORTED,
         BatchItemState.SKIPPED_UNSTABLE,
         BatchItemState.SKIPPED_SYMLINK,
+    }
+)
+
+TERMINAL_JOB_STATES = frozenset(
+    {
+        JobState.SUCCEEDED,
+        JobState.FAILED,
+        JobState.CANCELLED,
     }
 )

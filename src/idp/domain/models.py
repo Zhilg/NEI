@@ -8,7 +8,14 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from idp.domain.states import BatchItemState, BatchState, QualityState
+from idp.domain.states import (
+    ArtifactRetention,
+    BatchItemState,
+    BatchState,
+    JobState,
+    QualityState,
+    ReservationKind,
+)
 
 
 class ArtifactReference(BaseModel):
@@ -73,3 +80,38 @@ class BatchSnapshot(BaseModel):
     roots: tuple[Path, ...]
     items: tuple[BatchItemSnapshot, ...] = ()
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class StoredArtifact(BaseModel):
+    """Verified immutable artifact metadata returned by an object store."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reference: ArtifactReference
+    size_bytes: int = Field(ge=0)
+    retention: ArtifactRetention
+
+
+class ResourceRequest(BaseModel):
+    """One bounded controller resource needed before a stage starts."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: ReservationKind
+    amount: int = Field(gt=0)
+    unit: str = Field(min_length=1, max_length=32)
+
+
+class JobClaim(BaseModel):
+    """An owned lease returned by the durable PostgreSQL job queue."""
+
+    model_config = ConfigDict(frozen=True)
+
+    job_id: UUID
+    batch_item_id: UUID
+    stage: str = Field(min_length=1)
+    attempt: int = Field(ge=1)
+    payload: dict[str, object]
+    state: JobState = JobState.RUNNING
+    lease_owner: str = Field(min_length=1)
+    lease_expires_at: datetime
