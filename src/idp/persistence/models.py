@@ -11,6 +11,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    BigInteger,
     Enum as SqlEnum,
     ForeignKey,
     Index,
@@ -145,6 +146,16 @@ class BatchItemModel(Base):
     )
     root_path: Mapped[str] = mapped_column(Text, nullable=False)
     source_path: Mapped[str] = mapped_column(Text, nullable=False)
+    scan_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_mtime_ns: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_device: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_inode: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reused_from_item_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("batch_items.id", ondelete="RESTRICT"), nullable=True
+    )
+    cancellation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     state: Mapped[BatchItemState] = mapped_column(
         _enum_type(BatchItemState, "batch_item_state"), nullable=False
     )

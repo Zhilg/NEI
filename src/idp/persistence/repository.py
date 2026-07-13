@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from idp.domain.models import (
+    ArtifactReference,
     BatchSnapshot,
     Entity,
     FinalManifest,
@@ -19,6 +20,7 @@ from idp.domain.models import (
     StoredArtifact,
 )
 from idp.domain.states import (
+    ArtifactRetention,
     BatchItemState,
     BatchState,
     JobState,
@@ -101,6 +103,21 @@ class SqlAlchemyBatchRepository:
                 raise RepositoryError(msg)
             return existing
 
+    def resolve_profile_hash(self, identifier: str) -> str:
+        """Resolve an explicit profile name or immutable hash before submission."""
+        with self._session_factory() as session:
+            profile_hash = session.scalar(
+                select(PipelineProfileModel.profile_hash).where(
+                    or_(
+                        PipelineProfileModel.name == identifier,
+                        PipelineProfileModel.profile_hash == identifier,
+                    )
+                )
+            )
+            if profile_hash is None:
+                raise UnknownProfileError(f"unknown pipeline profile: {identifier}")
+            return profile_hash
+
     def configure_resource_pool(
         self, *, kind: ReservationKind, capacity: int, unit: str
     ) -> UUID:
@@ -122,7 +139,12 @@ class SqlAlchemyBatchRepository:
                 pool.capacity = capacity
             return pool.id
 
-    def create_batch(self, snapshot: BatchSnapshot, profile_hash: str) -> None:
+    def create_batch(
+        self,
+        snapshot: BatchSnapshot,
+        profile_hash: str,
+        source_artifacts: dict[UUID, ArtifactReference] | None = None,
+    ) -> None:
         """Store the whole scan snapshot atomically, including content deduplication."""
         with self._session_factory.begin() as session:
             profile_id = session.scalar(
@@ -142,23 +164,76 @@ class SqlAlchemyBatchRepository:
             session.add_all(
                 [BatchRootModel(batch_id=snapshot.batch_id, path=str(root)) for root in snapshot.roots]
             )
+            reusable = self._reusable_items(session, profile_hash)
             for item in snapshot.items:
                 document_id = (
                     self._get_or_create_document(session, item.source_sha256)
                     if item.source_sha256 is not None
                     else None
                 )
-                session.add(
-                    BatchItemModel(
+                model = BatchItemModel(
                         id=item.item_id,
                         batch_id=snapshot.batch_id,
                         document_id=document_id,
                         root_path=str(item.root),
                         source_path=str(item.path),
                         state=item.state,
+                        scan_reason=item.reason,
+                        source_size_bytes=item.size_bytes,
+                        source_mtime_ns=item.mtime_ns,
+                        source_device=item.device,
+                        source_inode=item.inode,
                         observed_at=item.observed_at,
                     )
-                )
+                if item.state == BatchItemState.QUEUED and item.source_sha256 in reusable:
+                    source = reusable[item.source_sha256]
+                    model.state = BatchItemState.REUSED
+                    model.quality = source.quality
+                    model.final_bundle_prefix = source.final_bundle_prefix
+                    model.final_manifest_key = source.final_manifest_key
+                    model.reused_from_item_id = source.id
+                    model.scan_reason = "strict_compatible_final_bundle_reuse"
+                session.add(model)
+                session.flush()
+                if model.state == BatchItemState.QUEUED:
+                    source_artifact = (source_artifacts or {}).get(model.id)
+                    if source_artifact is None:
+                        # Low-level fixtures may build a batch before explicitly
+                        # enqueuing jobs. Production submit always provides source artifacts.
+                        continue
+                    model.source_object_key = source_artifact.object_key
+                    job_payload = {
+                        "source_object_key": source_artifact.object_key,
+                        "source_object_sha256": source_artifact.sha256,
+                    }
+                    job_id = self._enqueue_in_session(
+                        session,
+                        model.id,
+                        "source_snapshot",
+                        job_payload,
+                        3,
+                        None,
+                    )
+                    existing_artifact = session.scalar(
+                        select(ArtifactModel)
+                        .where(ArtifactModel.object_key == source_artifact.object_key)
+                        .with_for_update()
+                    )
+                    if existing_artifact is None:
+                        session.add(
+                            ArtifactModel(
+                                producing_job_id=job_id,
+                                object_key=source_artifact.object_key,
+                                sha256=source_artifact.sha256,
+                                media_type=source_artifact.media_type,
+                                size_bytes=model.source_size_bytes or 0,
+                                retention=ArtifactRetention.TEMPORARY,
+                            )
+                        )
+                    elif existing_artifact.sha256 != source_artifact.sha256:
+                        raise RepositoryError(
+                            f"source artifact key collision: {source_artifact.object_key}"
+                        )
 
     def enqueue_job(
         self,
@@ -314,6 +389,11 @@ class SqlAlchemyBatchRepository:
             job.lease_expires_at = None
             self._finish_stage_run(session, job, current_time)
             self._release_resources(session, job_id, worker_id, current_time)
+            item = self._locked_item(session, job.batch_item_id)
+            batch = self._locked_batch(session, item.batch_id)
+            if batch.state == BatchState.CANCELLED or item.cancellation_requested_at is not None:
+                job.state = JobState.CANCELLED
+                item.state = BatchItemState.CANCELLED
 
     def fail_job(
         self,
@@ -364,6 +444,8 @@ class SqlAlchemyBatchRepository:
             )
             for job in jobs:
                 owner = job.lease_owner
+                item = self._locked_item(session, job.batch_item_id)
+                batch = self._locked_batch(session, item.batch_id)
                 self._finish_stage_run(
                     session,
                     job,
@@ -375,9 +457,14 @@ class SqlAlchemyBatchRepository:
                     self._release_resources(session, job.id, owner, current_time)
                 job.lease_owner = None
                 job.lease_expires_at = None
+                if batch.state == BatchState.CANCELLED or item.cancellation_requested_at is not None:
+                    job.state = JobState.CANCELLED
+                    job.completed_at = current_time
+                    if item.state == BatchItemState.RUNNING:
+                        item.state = BatchItemState.CANCELLED
+                    continue
                 if job.attempt_count < job.max_attempts:
                     job.state = JobState.PENDING
-                    item = self._locked_item(session, job.batch_item_id)
                     if item.state == BatchItemState.RUNNING:
                         require_item_transition(item.state, BatchItemState.QUEUED)
                         item.state = BatchItemState.QUEUED
@@ -526,6 +613,9 @@ class SqlAlchemyBatchRepository:
         )
         with self._session_factory.begin() as session:
             item = self._locked_item(session, item_id)
+            batch = self._locked_batch(session, item.batch_id)
+            if batch.state == BatchState.CANCELLED or item.cancellation_requested_at is not None:
+                raise RepositoryError("cannot publish output for a cancelled batch item")
             if item.final_manifest_key is not None:
                 if item.final_manifest_key == manifest_key:
                     return
@@ -579,6 +669,101 @@ class SqlAlchemyBatchRepository:
                 require_item_transition(item.state, state)
                 item.state = state
 
+    def get_batch_status(self, batch_id: UUID) -> dict[str, object]:
+        """Return PostgreSQL-only aggregate state for a submitted batch."""
+        with self._session_factory() as session:
+            batch = session.get(BatchModel, batch_id)
+            if batch is None:
+                raise RepositoryError(f"unknown batch: {batch_id}")
+            items = list(session.scalars(select(BatchItemModel).where(BatchItemModel.batch_id == batch_id)))
+            counts: dict[str, int] = {}
+            for item in items:
+                counts[item.state.value] = counts.get(item.state.value, 0) + 1
+            active_jobs = session.scalar(
+                select(func.count()).select_from(JobModel).join(BatchItemModel).where(
+                    BatchItemModel.batch_id == batch_id, JobModel.state == JobState.RUNNING
+                )
+            )
+            return {"batch_id": str(batch.id), "state": batch.state.value, "item_counts": counts, "active_jobs": int(active_jobs or 0)}
+
+    def get_batch_report(self, batch_id: UUID) -> list[dict[str, object]]:
+        """Return every scanned item deterministically, including skipped/reused paths."""
+        with self._session_factory() as session:
+            rows = list(
+                session.scalars(
+                    select(BatchItemModel)
+                    .where(BatchItemModel.batch_id == batch_id)
+                    .order_by(BatchItemModel.root_path, BatchItemModel.source_path)
+                )
+            )
+            if not rows and session.get(BatchModel, batch_id) is None:
+                raise RepositoryError(f"unknown batch: {batch_id}")
+            report: list[dict[str, object]] = []
+            for row in rows:
+                attempts = session.scalar(
+                    select(func.coalesce(func.max(JobModel.attempt_count), 0)).where(
+                        JobModel.batch_item_id == row.id
+                    )
+                )
+                report.append(
+                    {
+                        "item_id": str(row.id),
+                        "root": row.root_path,
+                        "path": row.source_path,
+                        "state": row.state.value,
+                        "reason": row.scan_reason or row.quarantine_reason,
+                        "quality": None if row.quality is None else row.quality.value,
+                        "source_sha256": None if row.document is None else row.document.source_sha256,
+                        "attempts": int(attempts or 0),
+                        "final_manifest_key": row.final_manifest_key,
+                    }
+                )
+            return report
+
+    def cancel_batch(self, batch_id: UUID, now: datetime | None = None) -> None:
+        """Prevent future claims and request cooperative cancellation for running work."""
+        current_time = now or self._clock()
+        with self._session_factory.begin() as session:
+            batch = self._locked_batch(session, batch_id)
+            if batch.state != BatchState.CANCELLED:
+                batch.state = BatchState.CANCELLED
+            items = list(session.scalars(select(BatchItemModel).where(BatchItemModel.batch_id == batch_id).with_for_update()))
+            for item in items:
+                if item.state in {BatchItemState.QUEUED, BatchItemState.RUNNING}:
+                    item.cancellation_requested_at = current_time
+                    if item.state == BatchItemState.QUEUED:
+                        item.state = BatchItemState.CANCELLED
+            session.execute(update(JobModel).where(JobModel.batch_item_id.in_([item.id for item in items]), JobModel.state == JobState.PENDING).values(state=JobState.CANCELLED, completed_at=current_time))
+
+    def retry_quarantined_item(self, item_id: UUID) -> UUID:
+        """Create a new root snapshot job for one quarantined item without altering final output."""
+        with self._session_factory.begin() as session:
+            item = self._locked_item(session, item_id)
+            if item.state != BatchItemState.QUARANTINED:
+                raise RepositoryError("only quarantined items can be retried")
+            item.state = BatchItemState.QUEUED
+            item.quarantine_reason = None
+            item.cancellation_requested_at = None
+            if item.source_object_key is None or item.document is None:
+                raise RepositoryError("quarantined item has no immutable source object for retry")
+            prior_retries = session.scalar(
+                select(func.count())
+                .select_from(JobModel)
+                .where(JobModel.batch_item_id == item.id, JobModel.stage == "source_snapshot")
+            )
+            return self._enqueue_in_session(
+                session,
+                item.id,
+                "source_snapshot",
+                {
+                    "source_object_key": item.source_object_key,
+                    "source_object_sha256": item.document.source_sha256,
+                },
+                3,
+                None,
+                suffix=f"retry-{int(prior_retries or 0)}",
+            )
+
     @staticmethod
     def _get_or_create_document(session: Session, source_sha256: str) -> UUID:
         identifier = session.scalar(
@@ -596,6 +781,19 @@ class SqlAlchemyBatchRepository:
             msg = f"document insert conflicted but {source_sha256} is unavailable"
             raise RepositoryError(msg)
         return existing
+
+    @staticmethod
+    def _reusable_items(session: Session, profile_hash: str) -> dict[str, BatchItemModel]:
+        rows = session.scalars(select(BatchItemModel).join(BatchModel).join(PipelineProfileModel).join(DocumentModel).where(PipelineProfileModel.profile_hash == profile_hash, BatchItemModel.state.in_((BatchItemState.COMPLETED, BatchItemState.COMPLETED_WITH_WARNINGS)), BatchItemModel.final_manifest_key.is_not(None))).all()
+        return {row.document.source_sha256: row for row in rows if row.document is not None}
+
+    @staticmethod
+    def _enqueue_in_session(session: Session, batch_item_id: UUID, stage: str, payload: dict[str, object], max_attempts: int, depends_on: UUID | None, suffix: str = "root") -> UUID:
+        key = f"{batch_item_id}:{stage}:{depends_on or suffix}"
+        job = JobModel(batch_item_id=batch_item_id, depends_on_id=depends_on, stage=stage, idempotency_key=key, payload=payload, state=JobState.PENDING, priority=0, attempt_count=0, max_attempts=max_attempts)
+        session.add(job)
+        session.flush()
+        return job.id
 
     @staticmethod
     def _locked_item(session: Session, item_id: UUID) -> BatchItemModel:

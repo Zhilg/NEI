@@ -26,6 +26,7 @@ class BatchItemState(StrEnum):
     SKIPPED_UNSUPPORTED = "skipped_unsupported"
     SKIPPED_UNSTABLE = "skipped_unstable"
     SKIPPED_SYMLINK = "skipped_symlink"
+    CANCELLED = "cancelled"
 
 
 class QualityState(StrEnum):
@@ -69,6 +70,7 @@ TERMINAL_ITEM_STATES = frozenset(
         BatchItemState.SKIPPED_UNSUPPORTED,
         BatchItemState.SKIPPED_UNSTABLE,
         BatchItemState.SKIPPED_SYMLINK,
+        BatchItemState.CANCELLED,
     }
 )
 

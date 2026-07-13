@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     minio_secret_key: str | None = None
     metrics_port: int = Field(default=9100, ge=1, le=65535)
     controller_poll_seconds: float = Field(default=5.0, gt=0, le=300)
+    scan_stability_seconds: float = Field(default=1.0, ge=0, le=60)
+    scan_max_file_bytes: int = Field(default=2 * 1024 * 1024 * 1024, gt=0)
+    scan_max_candidates: int = Field(default=100_000, gt=0)
+    scan_max_depth: int = Field(default=64, ge=1, le=1024)
+    scan_hash_chunk_bytes: int = Field(default=1024 * 1024, gt=0)
+    batch_staging_root: Path = Path("/var/lib/idp/staging")
     offline_mode: bool = True
     telemetry_enabled: bool = False
     release_manifest_path: Path | None = None
@@ -54,7 +60,7 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
-    @field_validator("release_root", "release_public_key_path")
+    @field_validator("release_root", "release_public_key_path", "batch_staging_root")
     @classmethod
     def require_absolute_release_path(cls, value: Path) -> Path:
         """Target release state and trust material must never resolve relatively."""

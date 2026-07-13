@@ -34,9 +34,9 @@ OCR обрабатывает только текстовые блоки. Все 
 - `infra/compose/local.yml` поднимает PostgreSQL, MinIO, Alembic migration, controller и idle worker для локальной проверки control plane.
 - `infra/compose/target.yml` требует immutable image digests и секреты, отключает внешний network egress через internal network и запускает migration до controller/worker.
 
-Второй этап уже реализует PostgreSQL control plane: `FOR UPDATE SKIP LOCKED`, leases/heartbeat recovery, retries/quarantine, resource pools, MinIO artifact contract и atomic final-output pointer. Model stage handlers и `idp batch submit/status/report` появятся на этапах scanner и ML pipeline.
+PostgreSQL control plane реализует `FOR UPDATE SKIP LOCKED`, leases/heartbeat recovery, retries/quarantine, resource pools, MinIO artifact contract и atomic final-output pointer. Batch API принимает только абсолютные каталоги внутри `IDP_ALLOWED_ROOTS`, не следует symbolic links, сохраняет все dispositions и перед постановкой работы копирует stable PDF из проверенного file descriptor в temporary artifact storage.
 
-После их добавления команда submit будет создавать batch и сразу возвращать его идентификатор:
+Команда submit создаёт immutable snapshot и сразу возвращает batch ID:
 
 ```bash
 idp batch submit /data/incoming/contracts /data/incoming/reports
@@ -50,6 +50,16 @@ idp batch report <batch-id> --format json
 ```
 
 Controller продолжает обработку после закрытия терминала. После падения worker/controller задания возвращаются в очередь по истечении lease.
+
+Отчёт всегда содержит все пути: queued, reused, skipped, quarantined и cancelled. Повторить можно только quarantined item, используя уже скопированный immutable source object, а не изменившийся исходный файл:
+
+```bash
+idp batch report <batch-id> --format csv
+idp batch cancel <batch-id>
+idp batch retry <item-id>
+```
+
+Повторное содержимое PDF переиспользует published final bundle только при совпадении SHA-256 и immutable `pipeline_profile_hash`; промежуточные, cancelled и незавершённые результаты не переиспользуются.
 
 ## Результаты
 

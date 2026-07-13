@@ -35,15 +35,19 @@ _ITEM_TRANSITIONS: dict[BatchItemState, frozenset[BatchItemState]] = {
             BatchItemState.SKIPPED_UNSUPPORTED,
             BatchItemState.SKIPPED_UNSTABLE,
             BatchItemState.SKIPPED_SYMLINK,
+            BatchItemState.CANCELLED,
         }
     ),
-    BatchItemState.QUEUED: frozenset({BatchItemState.RUNNING, BatchItemState.QUARANTINED}),
+    BatchItemState.QUEUED: frozenset(
+        {BatchItemState.RUNNING, BatchItemState.QUARANTINED, BatchItemState.CANCELLED}
+    ),
     BatchItemState.RUNNING: frozenset(
         {
             BatchItemState.QUEUED,
             BatchItemState.COMPLETED,
             BatchItemState.COMPLETED_WITH_WARNINGS,
             BatchItemState.QUARANTINED,
+            BatchItemState.CANCELLED,
         }
     ),
     BatchItemState.REUSED: frozenset(),
@@ -53,6 +57,7 @@ _ITEM_TRANSITIONS: dict[BatchItemState, frozenset[BatchItemState]] = {
     BatchItemState.SKIPPED_UNSUPPORTED: frozenset(),
     BatchItemState.SKIPPED_UNSTABLE: frozenset(),
     BatchItemState.SKIPPED_SYMLINK: frozenset(),
+    BatchItemState.CANCELLED: frozenset(),
 }
 
 

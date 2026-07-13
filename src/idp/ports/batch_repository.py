@@ -7,6 +7,8 @@ from typing import Protocol
 from uuid import UUID
 
 from idp.domain.models import (
+    ArtifactReference,
+    ArtifactReference,
     BatchSnapshot,
     Entity,
     FinalManifest,
@@ -20,11 +22,19 @@ from idp.domain.states import BatchItemState, BatchState, JobState, ReservationK
 class BatchRepository(Protocol):
     """The controller's durable state and queue operations."""
 
-    def create_batch(self, snapshot: BatchSnapshot, profile_hash: str) -> None:
+    def create_batch(
+        self,
+        snapshot: BatchSnapshot,
+        profile_hash: str,
+        source_artifacts: dict[UUID, ArtifactReference],
+    ) -> None:
         """Persist a snapshot and every discovered item atomically."""
 
     def register_profile(self, *, name: str, profile_hash: str) -> UUID:
         """Register an immutable pipeline profile and return its identifier."""
+
+    def resolve_profile_hash(self, identifier: str) -> str:
+        """Resolve a profile name or immutable profile hash for batch submission."""
 
     def configure_resource_pool(
         self, *, kind: ReservationKind, capacity: int, unit: str
@@ -127,3 +137,21 @@ class BatchRepository(Protocol):
 
     def set_item_state(self, *, item_id: UUID, state: BatchItemState) -> None:
         """Apply a validated batch-item lifecycle transition."""
+
+    def get_batch_status(self, batch_id: UUID) -> dict[str, object]:
+        """Return current batch aggregate without relying on in-memory worker state."""
+
+    def get_batch_report(self, batch_id: UUID) -> list[dict[str, object]]:
+        """Return every snapshot item in deterministic report order."""
+
+    def cancel_batch(self, batch_id: UUID, now: datetime | None = None) -> None:
+        """Cancel pending jobs and request cooperative cancellation of running work."""
+
+    def retry_quarantined_item(self, item_id: UUID) -> UUID:
+        """Requeue one quarantined item through a fresh source snapshot stage."""
+
+    def attach_source_artifacts(self, sources: dict[UUID, ArtifactReference]) -> None:
+        """Attach immutable source object references to queued source snapshot jobs."""
+
+    def attach_source_artifacts(self, sources: dict[UUID, ArtifactReference]) -> None:
+        """Attach immutable source object references to queued source snapshot jobs."""

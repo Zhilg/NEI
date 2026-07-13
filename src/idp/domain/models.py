@@ -66,6 +66,11 @@ class BatchItemSnapshot(BaseModel):
     path: Path
     source_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     state: BatchItemState
+    reason: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    mtime_ns: int | None = Field(default=None, ge=0)
+    device: int | None = Field(default=None, ge=0)
+    inode: int | None = Field(default=None, ge=0)
     observed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
