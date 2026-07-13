@@ -6,6 +6,8 @@ PDF text layer намеренно не используется: докумен�
 
 Перед MinerU каждый PDF рендерится через vision-only renderer в RGB page images с фиксированным DPI и сохранёнными transform координат. Каждая страница передаётся в локальный SwinIR x4 adapter. Если enhanced image меньше исходника, превышает pixel quota, теряет entropy или заметно увеличивает clipping, pipeline сохраняет enhanced artifact для аудита, но в MinerU передаёт original render с записанной причиной fallback. Ни renderer, ни quality gate не читают PDF text layer и не используют OCR.
 
+MinerU получает только выбранные page images и создаёт локальный `middle.json`. Этот raw artifact сохраняется неизменно для аудита, но его OCR/text/Markdown/HTML/LaTeX никогда не становятся content source. Внутренний `layout_manifest` сохраняет геометрию, тип, reading order, hierarchy, relations и crop каждого блока, включая неизвестные будущие типы. Таблицы, изображения, диаграммы, формулы, headers/footers, печати и подписи не отбрасываются; их смысл будет восстановлен единым Qwen-VL этапом.
+
 ## Логика работы
 
 ![Схема offline PDF batch pipeline](docs/pipeline-overview.svg)

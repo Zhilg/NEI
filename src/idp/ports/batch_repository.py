@@ -162,3 +162,14 @@ class BatchRepository(Protocol):
         artifacts: tuple[StoredArtifact, ...],
     ) -> None:
         """Catalog render artifacts before an owned vision stage is completed."""
+
+    def record_layout_output(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        raw_mineru: StoredArtifact,
+        manifest: StoredArtifact,
+        crops: tuple[StoredArtifact, ...],
+    ) -> None:
+        """Catalog raw MinerU output, internal layout manifest, and crops before completion."""
