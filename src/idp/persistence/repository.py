@@ -592,6 +592,13 @@ class SqlAlchemyBatchRepository:
 
     def resume_capacity_paused_batches(self) -> int:
         """Resume only capacity-paused batches whose next GPU role has spare capacity."""
+        dependency = aliased(JobModel)
+        dependency_succeeded = exists(
+            select(dependency.id).where(
+                dependency.id == JobModel.depends_on_id,
+                dependency.state == JobState.SUCCEEDED,
+            )
+        )
         with self._session_factory.begin() as session:
             batches = list(
                 session.scalars(
@@ -608,6 +615,7 @@ class SqlAlchemyBatchRepository:
                     .where(
                         BatchItemModel.batch_id == batch.id,
                         JobModel.state == JobState.PENDING,
+                        or_(JobModel.depends_on_id.is_(None), dependency_succeeded),
                     )
                     .order_by(JobModel.priority.desc(), JobModel.created_at, JobModel.id)
                     .with_for_update(skip_locked=True)
@@ -628,6 +636,8 @@ class SqlAlchemyBatchRepository:
         artifacts: tuple[StoredArtifact, ...],
         entities: tuple[Entity, ...],
         schema_version: str,
+        job_id: UUID | None = None,
+        worker_id: str | None = None,
     ) -> None:
         """Expose a bundle exactly once after all immutable object writes complete."""
         prefix = bundle_prefix.rstrip("/")
@@ -651,6 +661,16 @@ class SqlAlchemyBatchRepository:
             else BatchItemState.COMPLETED_WITH_WARNINGS
         )
         with self._session_factory.begin() as session:
+            publish_job: JobModel | None = None
+            current_time = self._clock()
+            if (job_id is None) != (worker_id is None):
+                raise ValueError("publication job_id and worker_id must be supplied together")
+            if job_id is not None and worker_id is not None:
+                publish_job = session.get(JobModel, job_id, with_for_update=True)
+                self._require_active_lease(publish_job, worker_id, current_time)
+                assert publish_job is not None
+                if publish_job.batch_item_id != item_id or publish_job.stage != "publish":
+                    raise RepositoryError("publication job does not own the requested batch item")
             item = self._locked_item(session, item_id)
             batch = self._locked_batch(session, item.batch_id)
             if batch.state == BatchState.CANCELLED or item.cancellation_requested_at is not None:
@@ -666,6 +686,13 @@ class SqlAlchemyBatchRepository:
                         or existing_manifest.sha256 != supplied_manifest.reference.sha256
                     ):
                         raise RepositoryError("publication retry does not match existing final manifest")
+                    if publish_job is not None:
+                        publish_job.state = JobState.SUCCEEDED
+                        publish_job.completed_at = current_time
+                        publish_job.lease_owner = None
+                        publish_job.lease_expires_at = None
+                        self._finish_stage_run(session, publish_job, current_time)
+                        self._release_resources(session, publish_job.id, worker_id, current_time)
                     return
                 msg = f"item {item_id} already points to a different final bundle"
                 raise RepositoryError(msg)
@@ -700,7 +727,14 @@ class SqlAlchemyBatchRepository:
             item.quality = manifest.quality
             item.final_bundle_prefix = prefix
             item.final_manifest_key = manifest_key
-            self._finalize_batch_if_terminal(session, batch, current_time=self._clock())
+            if publish_job is not None:
+                publish_job.state = JobState.SUCCEEDED
+                publish_job.completed_at = current_time
+                publish_job.lease_owner = None
+                publish_job.lease_expires_at = None
+                self._finish_stage_run(session, publish_job, current_time)
+                self._release_resources(session, publish_job.id, worker_id, current_time)
+            self._finalize_batch_if_terminal(session, batch, current_time=current_time)
 
     def set_batch_state(self, *, batch_id: UUID, state: BatchState) -> None:
         """Apply a checked batch lifecycle transition."""
@@ -1337,7 +1371,7 @@ class SqlAlchemyBatchRepository:
             else None
         )
         if kind is None:
-            return False
+            return True
         pool = session.scalar(
             select(ResourcePoolModel).where(ResourcePoolModel.kind == kind).with_for_update()
         )

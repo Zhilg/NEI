@@ -52,7 +52,7 @@ def validate_profile(settings: Settings, release_id: str | None = None) -> Profi
     _check_minio(settings)
     _check_model_endpoint(settings.qwen_vl_endpoint, "Qwen-VL")
     _check_model_endpoint(settings.qwen3_endpoint, "Qwen3/Fenic")
-    gpu_vram_bytes = _check_gpu_vram()
+    gpu_vram_bytes = _check_gpu_vram(require_gpu=False)
     return ProfileValidationReport(
         release_id=manifest.release_id,
         pipeline_profile_hash=manifest.pipeline_profile_hash,
@@ -113,6 +113,8 @@ def _check_model_endpoint(endpoint: str, label: str) -> None:
     request = urllib.request.Request(f"{endpoint.rstrip('/')}/models", method="GET")
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status != 200:
+                raise ProfileValidationError(f"{label} endpoint returned HTTP {response.status}")
             payload = json.loads(response.read())
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
         raise ProfileValidationError(f"{label} endpoint health check failed: {error}") from error
@@ -120,8 +122,8 @@ def _check_model_endpoint(endpoint: str, label: str) -> None:
         raise ProfileValidationError(f"{label} endpoint returned no loaded models")
 
 
-def _check_gpu_vram() -> int:
-    """Require a target GPU and expose its configured device-memory envelope."""
+def _check_gpu_vram(*, require_gpu: bool) -> int:
+    """Report local GPU memory when the validation host exposes NVIDIA tooling."""
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
@@ -134,7 +136,11 @@ def _check_gpu_vram() -> int:
         )
         values = [int(line.strip()) for line in result.stdout.splitlines() if line.strip()]
     except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if not require_gpu:
+            return 0
         raise ProfileValidationError(f"GPU/VRAM health check failed: {error}") from error
     if not values or any(value <= 0 for value in values):
+        if not require_gpu:
+            return 0
         raise ProfileValidationError("GPU/VRAM health check found no usable NVIDIA device")
     return sum(values) * 1024 * 1024

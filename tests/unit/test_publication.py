@@ -2,8 +2,10 @@ from pathlib import Path
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from idp.domain.models import Entity, FinalManifest, StoredArtifact
-from idp.domain.states import QualityState
+import pytest
+
+from idp.domain.models import ArtifactReference, Entity, FinalManifest, StoredArtifact
+from idp.domain.states import ArtifactRetention, QualityState
 from idp.services.publication import FinalBundlePublisher
 from idp.storage import LocalArtifactStore
 
@@ -21,6 +23,8 @@ class RecordingRepository:
         artifacts: tuple[StoredArtifact, ...],
         entities: tuple[Entity, ...],
         schema_version: str,
+        job_id: UUID | None = None,
+        worker_id: str | None = None,
     ) -> None:
         self.publication = {
             "item_id": item_id,
@@ -29,6 +33,8 @@ class RecordingRepository:
             "artifacts": artifacts,
             "entities": entities,
             "schema_version": schema_version,
+            "job_id": job_id,
+            "worker_id": worker_id,
         }
 
 
@@ -91,3 +97,53 @@ def test_publisher_keeps_manifest_bytes_stable_for_a_retry(tmp_path: Path) -> No
     second = publisher.publish(**arguments)
 
     assert first.created_at == second.created_at == created_at
+
+
+def test_publisher_copies_reconstruction_provenance_into_final_bundle(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    source = store.put_bytes(
+        object_key="temporary/reconstruction.json",
+        payload=b'{"blocks":[]}',
+        media_type="application/json",
+        retention=ArtifactRetention.TEMPORARY,
+    )
+    repository = RecordingRepository()
+    publisher = FinalBundlePublisher(store, repository)  # type: ignore[arg-type]
+
+    manifest = publisher.publish(
+        item_id=uuid4(),
+        bundle_prefix="results/document/provenance",
+        source_sha256="a" * 64,
+        pipeline_profile_hash="b" * 64,
+        quality=QualityState.PASS,
+        markdown="Evidence",
+        entities=(),
+        schema_version="entity-v1",
+        reconstruction=source.reference,
+    )
+
+    assert manifest.reconstruction == ArtifactReference(
+        object_key="results/document/provenance/reconstruction_manifest.json",
+        sha256=source.reference.sha256,
+        media_type="application/json",
+    )
+    assert store.exists(manifest.reconstruction)
+
+
+def test_publisher_rejects_partial_publish_job_ownership(tmp_path: Path) -> None:
+    publisher = FinalBundlePublisher(
+        LocalArtifactStore(tmp_path / "artifacts"), RecordingRepository()  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="job_id and worker_id"):
+        publisher.publish(
+            item_id=uuid4(),
+            bundle_prefix="results/document/partial-job",
+            source_sha256="a" * 64,
+            pipeline_profile_hash="b" * 64,
+            quality=QualityState.PASS,
+            markdown="Evidence",
+            entities=(),
+            schema_version="entity-v1",
+            job_id=uuid4(),
+        )

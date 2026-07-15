@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
@@ -103,12 +105,17 @@ class Settings(BaseSettings):
     def require_local_qwen_endpoint(cls, value: str) -> str:
         """The VLM endpoint must be an internal service, never an external API URL."""
         endpoint = urlparse(value)
-        if endpoint.scheme != "http" or endpoint.hostname not in {
+        if (
+            endpoint.scheme != "http"
+            or endpoint.hostname not in {
             "qwen-vl",
             "localhost",
             "127.0.0.1",
             "::1",
-        }:
+            }
+            or endpoint.port != 8000
+            or endpoint.path.rstrip("/") != "/v1"
+        ):
             msg = "Qwen-VL endpoint must use an approved local/internal HTTP host"
             raise ValueError(msg)
         return value.rstrip("/")
@@ -118,7 +125,9 @@ class Settings(BaseSettings):
     def require_local_qwen3_endpoint(cls, value: str) -> str:
         """The entity endpoint is an internal Qwen3/Fenic-compatible service only."""
         endpoint = urlparse(value)
-        if endpoint.scheme != "http" or endpoint.hostname not in {
+        if (
+            endpoint.scheme != "http"
+            or endpoint.hostname not in {
             "qwen3",
             "qwen3-fenic",
             "qwen3-vllm",
@@ -126,7 +135,38 @@ class Settings(BaseSettings):
             "localhost",
             "127.0.0.1",
             "::1",
-        }:
+            }
+            or endpoint.port != 8000
+            or endpoint.path.rstrip("/") != "/v1"
+        ):
             msg = "Qwen3 endpoint must use an approved local/internal HTTP host"
             raise ValueError(msg)
         return value.rstrip("/")
+
+    @field_validator(
+        "mineru_command",
+        "ocr_detector_command",
+        "ocr_router_command",
+        "ocr_east_slavic_command",
+        "ocr_cyrillic_command",
+        "ocr_latin_cjk_command",
+        mode="before",
+    )
+    @classmethod
+    def require_json_command_array(cls, value: Any) -> tuple[str, ...]:
+        """Accept only explicit JSON command arrays from deployment environment variables."""
+        if value in (None, (), ""):
+            return ()
+        decoded = value
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError as error:
+                raise ValueError("command must be a JSON array of non-empty strings") from error
+        if (
+            not isinstance(decoded, (list, tuple))
+            or not decoded
+            or not all(isinstance(argument, str) and argument for argument in decoded)
+        ):
+            raise ValueError("command must be a JSON array of non-empty strings")
+        return tuple(decoded)

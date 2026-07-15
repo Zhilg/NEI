@@ -117,6 +117,7 @@ services:
     command: ${IDP_QWEN_VL_COMMAND:?Set pinned local vLLM launch command}
     environment:
       CUDA_VISIBLE_DEVICES: "0"
+      HF_HOME: /models/qwen-vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
@@ -124,6 +125,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - ${IDP_MODEL_ROOT:?Set release-verified model root}:/models:ro
+    gpus: all
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/v1/models\", timeout=2)' "]
       interval: 15s
@@ -136,6 +140,7 @@ services:
     command: ${IDP_QWEN3_COMMAND:?Set pinned local Qwen3/Fenic vLLM launch command}
     environment:
       CUDA_VISIBLE_DEVICES: "0"
+      HF_HOME: /models/qwen3/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
@@ -143,6 +148,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - ${IDP_MODEL_ROOT:?Set release-verified model root}:/models:ro
+    gpus: all
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/v1/models\", timeout=2)' "]
       interval: 15s

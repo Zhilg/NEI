@@ -8,7 +8,6 @@ from uuid import UUID
 
 from idp.domain.models import (
     ArtifactReference,
-    ArtifactReference,
     BatchSnapshot,
     Entity,
     FinalManifest,
@@ -142,8 +141,10 @@ class BatchRepository(Protocol):
         artifacts: tuple[StoredArtifact, ...],
         entities: tuple[Entity, ...],
         schema_version: str,
+        job_id: UUID | None = None,
+        worker_id: str | None = None,
     ) -> None:
-        """Catalog artifacts and atomically expose the final output pointer."""
+        """Catalog final artifacts, expose their pointer, and optionally close the owned job."""
 
     def set_batch_state(self, *, batch_id: UUID, state: BatchState) -> None:
         """Apply a validated controller lifecycle transition."""

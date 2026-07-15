@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import json
 import shutil
+import threading
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -17,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from idp.config import Settings
 from idp.metrics import ControllerMetrics
-from idp.persistence.repository import ResourceCapacityError, SqlAlchemyBatchRepository
+from idp.persistence.repository import LeaseOwnershipError, ResourceCapacityError, SqlAlchemyBatchRepository
 from idp.domain.models import ArtifactReference, JobClaim
 from idp.domain.states import JobState, QualityState, ReservationKind
 from idp.services.entities import (
@@ -242,6 +243,8 @@ def _dispatch_worker_claim(
 ) -> None:
     """Load only verified artifacts, dispatch one leased stage, and apply retry policy on failure."""
     started_at = time.monotonic()
+    heartbeat = _LeaseHeartbeat(repository, claim.job_id, worker_id)
+    heartbeat.start()
     try:
         if claim.stage in {"reconstruction", "entity_extract"}:
             _wait_for_model_endpoint(
@@ -253,7 +256,7 @@ def _dispatch_worker_claim(
                 worker_id=worker_id,
                 source_object_key=_payload_string(claim.payload, "source_object_key"),
                 source_sha256=_payload_string(claim.payload, "source_object_sha256"),
-                artifact_prefix=f"items/{claim.batch_item_id}/attempt-{claim.attempt}",
+                artifact_prefix=_artifact_prefix(claim),
             )
             ControllerMetrics().observe_stage_duration(
                 stage=claim.stage, outcome="succeeded", seconds=time.monotonic() - started_at
@@ -268,7 +271,7 @@ def _dispatch_worker_claim(
                 job_id=claim.job_id,
                 worker_id=worker_id,
                 vision=vision_manifest_from_payload(_load_json_artifact(artifacts, render_reference)),
-                artifact_prefix=f"items/{claim.batch_item_id}/attempt-{claim.attempt}",
+                artifact_prefix=_artifact_prefix(claim),
             )
             ControllerMetrics().observe_stage_duration(
                 stage=claim.stage, outcome="succeeded", seconds=time.monotonic() - started_at
@@ -284,7 +287,7 @@ def _dispatch_worker_claim(
                 worker_id=worker_id,
                 layout=layout_manifest_from_payload(_load_json_artifact(artifacts, layout_reference)),
                 layout_reference=layout_reference,
-                artifact_prefix=f"items/{claim.batch_item_id}/attempt-{claim.attempt}",
+                artifact_prefix=_artifact_prefix(claim),
             )
             ControllerMetrics().observe_stage_duration(
                 stage=claim.stage, outcome="succeeded", seconds=time.monotonic() - started_at
@@ -300,7 +303,7 @@ def _dispatch_worker_claim(
                 layout_reference=layout_reference,
                 ocr=ocr_manifest_from_payload(_load_json_artifact(artifacts, ocr_reference)),
                 ocr_reference=ocr_reference,
-                artifact_prefix=f"items/{claim.batch_item_id}/attempt-{claim.attempt}",
+                artifact_prefix=_artifact_prefix(claim),
             )
             ControllerMetrics().observe_stage_duration(
                 stage=claim.stage, outcome="succeeded", seconds=time.monotonic() - started_at
@@ -316,7 +319,7 @@ def _dispatch_worker_claim(
                 worker_id=worker_id,
                 reconstruction=reconstruction,
                 reconstruction_reference=reconstruction_reference,
-                artifact_prefix=f"items/{claim.batch_item_id}/attempt-{claim.attempt}",
+                artifact_prefix=_artifact_prefix(claim),
             )
             ControllerMetrics().observe_stage_duration(
                 stage=claim.stage, outcome="succeeded", seconds=time.monotonic() - started_at
@@ -366,8 +369,9 @@ def _dispatch_worker_claim(
                     for finding in entities.findings
                 ),
                 created_at=claim.created_at,
+                job_id=claim.job_id,
+                worker_id=worker_id,
             )
-            repository.complete_job(job_id=claim.job_id, worker_id=worker_id, state=JobState.SUCCEEDED)
             _cleanup_temporary_artifacts(repository, artifacts, claim.batch_item_id)
             ControllerMetrics().observe_stage_duration(
                 stage=claim.stage, outcome="succeeded", seconds=time.monotonic() - started_at
@@ -411,6 +415,8 @@ def _dispatch_worker_claim(
             metrics.record_retry(stage=claim.stage, reason=type(error).__name__)
         else:
             metrics.record_quarantine(stage=claim.stage, reason=type(error).__name__)
+    finally:
+        heartbeat.stop()
 
 
 def _reference_from_payload(payload: dict[str, object], field: str) -> ArtifactReference:
@@ -429,8 +435,44 @@ def _payload_string(payload: dict[str, object], field: str) -> str:
     return value
 
 
+def _artifact_prefix(claim: JobClaim) -> str:
+    """Make intermediate keys unique across a quarantined-item retry graph."""
+    return f"items/{claim.batch_item_id}/jobs/{claim.job_id}/attempt-{claim.attempt}"
+
+
 class ModelEndpointNotReady(RuntimeError):
     """A local model process is still starting and must not consume stage retries."""
+
+
+class _LeaseHeartbeat:
+    """Keep a long local stage and its reservations owned until its handler returns."""
+
+    def __init__(self, repository: SqlAlchemyBatchRepository, job_id: UUID, worker_id: str) -> None:
+        self._repository = repository
+        self._job_id = job_id
+        self._worker_id = worker_id
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f"idp-lease-{job_id}", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=1)
+
+    def _run(self) -> None:
+        while not self._stop.wait(60):
+            try:
+                self._repository.renew_lease(
+                    job_id=self._job_id,
+                    worker_id=self._worker_id,
+                    lease_duration=timedelta(minutes=20),
+                )
+            except LeaseOwnershipError:
+                return
+            except Exception:
+                LOGGER.exception("worker lease heartbeat failed; job_id=%s", self._job_id)
 
 
 def _wait_for_model_endpoint(endpoint: str) -> None:
