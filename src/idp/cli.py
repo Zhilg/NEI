@@ -21,7 +21,7 @@ from idp.releases.manifest import (
     verify_bundle,
 )
 from idp.releases.validation import ProfileValidationError, validate_profile
-from idp.runtime import create_batch_service, run_controller, run_idle_worker
+from idp.runtime import create_batch_service, run_controller, run_worker
 
 app = typer.Typer(no_args_is_help=True, help="Offline PDF batch pipeline operations.")
 profile_app = typer.Typer(no_args_is_help=True, help="Pipeline profile operations.")
@@ -215,6 +215,6 @@ def run_controller_process() -> None:
 
 @worker_app.command("run")
 def run_worker_process() -> None:
-    """Start the phase-two worker process without model stage handlers."""
+    """Start the durable reconstruction, entity extraction, and publication worker."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    run_idle_worker(Settings())
+    run_worker(Settings())

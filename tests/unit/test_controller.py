@@ -22,6 +22,7 @@ class CapacityConstrainedRepository:
             stage="render",
             attempt=1,
             payload={},
+            created_at=datetime.now(UTC),
             lease_owner=worker_id,
             lease_expires_at=datetime.now(UTC) + lease_duration,
         )

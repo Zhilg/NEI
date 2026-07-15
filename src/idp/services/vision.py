@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from math import log2
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Mapping, Protocol
 from uuid import UUID
 
 from PIL import Image, ImageStat
@@ -443,6 +443,49 @@ def _manifest_payload(manifest: VisionManifest) -> dict[str, object]:
             for page in manifest.pages
         ],
     }
+
+
+def vision_manifest_from_payload(payload: Mapping[str, Any]) -> VisionManifest:
+    """Load a persisted vision manifest before handing images to local MinerU."""
+    try:
+        pages = tuple(
+            PreparedPage(
+                page_number=int(value["page_number"]),
+                render=StoredArtifact(
+                    reference=ArtifactReference.model_validate(value["render"]),
+                    size_bytes=0,
+                    retention=ArtifactRetention.TEMPORARY,
+                ),
+                enhanced=(
+                    None
+                    if value.get("enhanced") is None
+                    else StoredArtifact(
+                        reference=ArtifactReference.model_validate(value["enhanced"]),
+                        size_bytes=0,
+                        retention=ArtifactRetention.TEMPORARY,
+                    )
+                ),
+                selected=StoredArtifact(
+                    reference=ArtifactReference.model_validate(value["selected"]),
+                    size_bytes=0,
+                    retention=ArtifactRetention.TEMPORARY,
+                ),
+                render_transform=PageTransform(**value["render_transform"]),
+                selected_transform=PageTransform(**value["selected_transform"]),
+                decision=UpscaleDecision(
+                    selected=str(value["decision"]["selected"]),
+                    reason=str(value["decision"]["reason"]),
+                    original=ImageSignals(**value["decision"]["original"]),
+                    enhanced=ImageSignals(**value["decision"]["enhanced"]),
+                ),
+            )
+            for value in payload["pages"]
+        )
+        return VisionManifest(
+            source_sha256=str(payload["source_sha256"]), dpi=int(payload["dpi"]), pages=pages
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise VisionPreparationError(f"persisted vision manifest is invalid: {error}") from error
 
 
 def _transform_for_selected_image(render_transform: PageTransform, png: bytes) -> PageTransform:

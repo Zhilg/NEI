@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -33,6 +33,7 @@ class GroundedBlock:
     page_number: int
     bbox: tuple[float, float, float, float]
     markdown: str
+    evidence: str
     corrections: tuple["OcrCorrection", ...]
 
 
@@ -55,6 +56,7 @@ class ValidationFinding:
     detail: str
     block_ids: tuple[str, ...]
     evidence: str
+    locations: tuple[tuple[str, int, tuple[float, float, float, float]], ...]
 
 
 @dataclass(frozen=True)
@@ -183,6 +185,7 @@ class ReconstructionAssembler:
         layout_reference: ArtifactReference,
         ocr: OcrManifest,
         ocr_reference: ArtifactReference,
+        heartbeat: Callable[[], None] | None = None,
     ) -> ReconstructionManifest:
         """Run page chunks as one logical reconstruction and join only validated block order."""
         if layout.source_sha256 != ocr.source_sha256:
@@ -191,10 +194,14 @@ class ReconstructionAssembler:
         assembled_blocks: list[GroundedBlock] = []
         findings: list[ValidationFinding] = []
         for page_numbers, expected_blocks in chunks:
+            if heartbeat is not None:
+                heartbeat()
             context = self._context(layout, ocr, page_numbers, expected_blocks)
             chunk = self._validate_chunk(
                 self._client.reconstruct(context), page_numbers, expected_blocks, ocr
             )
+            if heartbeat is not None:
+                heartbeat()
             assembled_blocks.extend(chunk.blocks)
             findings.extend(chunk.findings)
         markdown = "\n\n".join(block.markdown for block in assembled_blocks if block.markdown.strip())
@@ -244,6 +251,13 @@ class ReconstructionAssembler:
         return {
             "prompt_version": self._prompt_version,
             "page_numbers": page_numbers,
+            "page_transforms": [
+                {
+                    "page_number": page_number,
+                    "transform": asdict(layout_pages[page_number].transform),
+                }
+                for page_number in page_numbers
+            ],
             "layout_blocks": [
                 {
                     "block_id": block.block_id,
@@ -301,8 +315,9 @@ class ReconstructionAssembler:
         block_id = value.get("block_id")
         block = expected.get(block_id) if isinstance(block_id, str) else None
         markdown = value.get("markdown")
-        if block is None or not isinstance(markdown, str):
-            raise ReconstructionError("Qwen-VL block lacks valid block_id or markdown")
+        evidence = value.get("evidence")
+        if block is None or not isinstance(markdown, str) or not isinstance(evidence, str) or not evidence.strip():
+            raise ReconstructionError("Qwen-VL block lacks valid block_id, markdown, or evidence")
         if value.get("page_number") != block.page_number or tuple(value.get("bbox", ())) != block.bbox:
             raise ReconstructionError(f"Qwen-VL block geometry mismatch: {block.block_id}")
         corrections: list[OcrCorrection] = []
@@ -327,7 +342,14 @@ class ReconstructionAssembler:
             ):
                 raise ReconstructionError(f"invalid OCR correction for block {block.block_id}")
             corrections.append(OcrCorrection(token_id, original, corrected, evidence))
-        return GroundedBlock(block.block_id, block.page_number, block.bbox, markdown, tuple(corrections))
+        return GroundedBlock(
+            block.block_id,
+            block.page_number,
+            block.bbox,
+            markdown,
+            evidence,
+            tuple(corrections),
+        )
 
     @staticmethod
     def _finding(value: Any, expected: Mapping[str, LayoutBlock]) -> ValidationFinding:
@@ -339,14 +361,18 @@ class ReconstructionAssembler:
         evidence = value.get("evidence")
         block_ids = value.get("block_ids")
         if (
-            not all(isinstance(item, str) and item in expected for item in block_ids)
-            if isinstance(block_ids, list)
-            else True
+            not isinstance(block_ids, list)
+            or not block_ids
+            or not all(isinstance(item, str) and item in expected for item in block_ids)
         ):
-            raise ReconstructionError("Qwen-VL finding references unknown block IDs")
+            raise ReconstructionError("Qwen-VL finding requires one or more known block IDs")
         if not all(isinstance(item, str) and item for item in (code, severity, detail, evidence)):
             raise ReconstructionError("Qwen-VL finding lacks code/severity/detail/evidence")
-        return ValidationFinding(code, severity, detail, tuple(block_ids), evidence)
+        locations = tuple(
+            (block_id, expected[block_id].page_number, expected[block_id].bbox)
+            for block_id in block_ids
+        )
+        return ValidationFinding(code, severity, detail, tuple(block_ids), evidence, locations)
 
 
 class QwenVLStageHandler:
@@ -401,6 +427,11 @@ class QwenVLStageHandler:
             layout_reference=layout_reference,
             ocr=ocr,
             ocr_reference=ocr_reference,
+            heartbeat=lambda: self._repository.renew_lease(
+                job_id=job_id,
+                worker_id=worker_id,
+                lease_duration=lease_duration,
+            ),
         )
         markdown_artifact = self._artifacts.put_bytes(
             object_key=f"{artifact_prefix.rstrip('/')}/reconstructed.md",
@@ -437,12 +468,13 @@ def _prompt(context: Mapping[str, Any]) -> str:
     return (
         "Reconstruct this document chunk into grounded Markdown. Return JSON exactly with "
         "`blocks` and `findings`. Return every provided layout block exactly once, in the input "
-        "reading order. Each block must contain block_id, page_number, bbox, markdown, corrections. "
+        "reading order. Each block must contain block_id, page_number, bbox, markdown, evidence, corrections. "
         "Use page and block images to validate OCR; correct an OCR token only with visual evidence. "
         "Interpret tables, images, charts, diagrams, formulas, stamps, signatures, headers, footers, "
         "and footnotes when meaningful. Findings must cover OCR disagreement, unreadable regions, "
         "missing/contradictory content, and obvious sums/dates/numbering/reference inconsistencies. "
-        "Every finding must cite one or more supplied block IDs and an evidence string. "
+        "Every block and finding must include non-empty visual or OCR evidence. Every finding must "
+        "cite one or more supplied block IDs and an evidence string. "
         "GROUND_TRUTH_CONTEXT="
         f"{json.dumps(_prompt_context(context), ensure_ascii=False, separators=(',', ':'))}"
     )
@@ -506,15 +538,73 @@ def _manifest_payload(manifest: ReconstructionManifest) -> dict[str, Any]:
         "model_id": manifest.model_id,
         "model_revision": manifest.model_revision,
         "prompt_version": manifest.prompt_version,
+        "markdown": manifest.markdown,
         "blocks": [
             {
                 "block_id": block.block_id,
                 "page_number": block.page_number,
                 "bbox": block.bbox,
                 "markdown": block.markdown,
+                "evidence": block.evidence,
                 "corrections": [asdict(correction) for correction in block.corrections],
             }
             for block in manifest.blocks
         ],
         "findings": [asdict(finding) for finding in manifest.findings],
     }
+
+
+def reconstruction_manifest_from_payload(payload: Mapping[str, Any]) -> ReconstructionManifest:
+    """Load a persisted reconstruction contract without trusting untyped job payloads."""
+    try:
+        blocks = tuple(
+            GroundedBlock(
+                block_id=str(value["block_id"]),
+                page_number=int(value["page_number"]),
+                bbox=tuple(float(coordinate) for coordinate in value["bbox"]),
+                markdown=str(value["markdown"]),
+                evidence=str(value["evidence"]),
+                corrections=tuple(
+                    OcrCorrection(
+                        token_id=str(correction["token_id"]),
+                        original_text=str(correction["original_text"]),
+                        corrected_text=str(correction["corrected_text"]),
+                        evidence=str(correction["evidence"]),
+                    )
+                    for correction in value.get("corrections", [])
+                ),
+            )
+            for value in payload["blocks"]
+        )
+        findings = tuple(
+            ValidationFinding(
+                code=str(value["code"]),
+                severity=str(value["severity"]),
+                detail=str(value["detail"]),
+                block_ids=tuple(str(block_id) for block_id in value["block_ids"]),
+                evidence=str(value["evidence"]),
+                locations=tuple(
+                    (
+                        str(location[0]),
+                        int(location[1]),
+                        tuple(float(coordinate) for coordinate in location[2]),
+                    )
+                    for location in value.get("locations", [])
+                ),
+            )
+            for value in payload.get("findings", [])
+        )
+        return ReconstructionManifest(
+            schema_version=str(payload["schema_version"]),
+            source_sha256=str(payload["source_sha256"]),
+            layout_manifest=ArtifactReference.model_validate(payload["layout_manifest"]),
+            ocr_manifest=ArtifactReference.model_validate(payload["ocr_manifest"]),
+            model_id=str(payload["model_id"]),
+            model_revision=str(payload["model_revision"]),
+            prompt_version=str(payload["prompt_version"]),
+            markdown=str(payload["markdown"]),
+            blocks=blocks,
+            findings=findings,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ReconstructionError(f"persisted reconstruction manifest is invalid: {error}") from error

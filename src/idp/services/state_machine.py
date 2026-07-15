@@ -10,7 +10,15 @@ class InvalidStateTransition(ValueError):
 
 
 _BATCH_TRANSITIONS: dict[BatchState, frozenset[BatchState]] = {
-    BatchState.QUEUED: frozenset({BatchState.RUNNING, BatchState.CANCELLED}),
+    BatchState.QUEUED: frozenset(
+        {
+            BatchState.RUNNING,
+            BatchState.COMPLETED,
+            BatchState.COMPLETED_WITH_WARNINGS,
+            BatchState.COMPLETED_WITH_ERRORS,
+            BatchState.CANCELLED,
+        }
+    ),
     BatchState.RUNNING: frozenset(
         {
             BatchState.PAUSED_CAPACITY,
@@ -23,7 +31,7 @@ _BATCH_TRANSITIONS: dict[BatchState, frozenset[BatchState]] = {
     BatchState.PAUSED_CAPACITY: frozenset({BatchState.RUNNING, BatchState.CANCELLED}),
     BatchState.COMPLETED: frozenset(),
     BatchState.COMPLETED_WITH_WARNINGS: frozenset(),
-    BatchState.COMPLETED_WITH_ERRORS: frozenset(),
+    BatchState.COMPLETED_WITH_ERRORS: frozenset({BatchState.RUNNING}),
     BatchState.CANCELLED: frozenset(),
 }
 
@@ -53,7 +61,7 @@ _ITEM_TRANSITIONS: dict[BatchItemState, frozenset[BatchItemState]] = {
     BatchItemState.REUSED: frozenset(),
     BatchItemState.COMPLETED: frozenset(),
     BatchItemState.COMPLETED_WITH_WARNINGS: frozenset(),
-    BatchItemState.QUARANTINED: frozenset(),
+    BatchItemState.QUARANTINED: frozenset({BatchItemState.QUEUED}),
     BatchItemState.SKIPPED_UNSUPPORTED: frozenset(),
     BatchItemState.SKIPPED_UNSTABLE: frozenset(),
     BatchItemState.SKIPPED_SYMLINK: frozenset(),

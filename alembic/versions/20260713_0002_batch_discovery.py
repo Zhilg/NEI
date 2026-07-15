@@ -31,7 +31,6 @@ def upgrade() -> None:
     op.add_column("batch_items", sa.Column("source_device", sa.BigInteger(), nullable=True))
     op.add_column("batch_items", sa.Column("source_inode", sa.BigInteger(), nullable=True))
     op.add_column("batch_items", sa.Column("source_object_key", sa.Text(), nullable=True))
-    op.add_column("batch_items", sa.Column("source_object_key", sa.Text(), nullable=True))
     op.add_column("batch_items", sa.Column("reused_from_item_id", sa.Uuid(), nullable=True))
     op.add_column(
         "batch_items", sa.Column("cancellation_requested_at", sa.DateTime(timezone=True), nullable=True)
@@ -58,7 +57,6 @@ def downgrade() -> None:
     op.drop_column("batch_items", "cancellation_requested_at")
     op.drop_column("batch_items", "reused_from_item_id")
     op.drop_column("batch_items", "source_inode")
-    op.drop_column("batch_items", "source_object_key")
     op.drop_column("batch_items", "source_object_key")
     op.drop_column("batch_items", "source_device")
     op.drop_column("batch_items", "source_mtime_ns")

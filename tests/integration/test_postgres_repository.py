@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from idp.domain.models import BatchItemSnapshot, BatchSnapshot, ResourceRequest
 from idp.domain.models import ArtifactReference, Entity, FinalManifest, StoredArtifact
-from idp.domain.states import ArtifactRetention, BatchItemState, JobState, QualityState, ReservationKind
+from idp.domain.states import ArtifactRetention, BatchItemState, BatchState, JobState, QualityState, ReservationKind
 from idp.persistence.base import Base
-from idp.persistence.models import BatchItemModel, JobModel
+from idp.persistence.models import AuditSampleModel, BatchItemModel, JobModel
 from idp.persistence.repository import ResourceCapacityError, SqlAlchemyBatchRepository
 
 POSTGRES_URL = os.getenv("IDP_TEST_POSTGRES_URL")
@@ -171,3 +171,42 @@ def test_cancel_includes_every_path_in_report(repository: SqlAlchemyBatchReposit
 
     assert repository.get_batch_status(snapshot.batch_id)["state"] == "cancelled"
     assert repository.get_batch_report(snapshot.batch_id)[0]["state"] == BatchItemState.CANCELLED.value
+
+
+def test_publication_finalizes_batch_and_selects_audit(repository: SqlAlchemyBatchRepository) -> None:
+    snapshot = _snapshot("finalized")
+    repository.create_batch(snapshot, "a" * 64)
+    item_id = snapshot.items[0].item_id
+    repository.set_item_state(item_id=item_id, state=BatchItemState.RUNNING)
+    markdown = ArtifactReference("final/finalized/final.md", "c" * 64, "text/markdown")
+    entities = ArtifactReference("final/finalized/entities.json", "d" * 64, "application/json")
+    manifest = FinalManifest(
+        source_sha256="b" * 64,
+        pipeline_profile_hash="a" * 64,
+        quality=QualityState.PASS,
+        final_markdown=markdown,
+        entities=entities,
+    )
+    repository.commit_publication(
+        item_id=item_id,
+        bundle_prefix="final/finalized",
+        manifest=manifest,
+        artifacts=(
+            StoredArtifact(reference=markdown, size_bytes=1, retention=ArtifactRetention.FINAL),
+            StoredArtifact(reference=entities, size_bytes=1, retention=ArtifactRetention.FINAL),
+            StoredArtifact(
+                reference=ArtifactReference(
+                    "final/finalized/manifest.json", "e" * 64, "application/json"
+                ),
+                size_bytes=1,
+                retention=ArtifactRetention.FINAL,
+            ),
+        ),
+        entities=(),
+        schema_version="entity-v1",
+    )
+
+    assert repository.get_batch_status(snapshot.batch_id)["state"] == BatchState.COMPLETED.value
+    factory = repository._session_factory  # type: ignore[attr-defined]
+    with factory() as session:
+        assert session.query(AuditSampleModel).filter_by(batch_item_id=item_id).count() == 1

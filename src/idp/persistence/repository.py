@@ -28,6 +28,7 @@ from idp.domain.states import (
     ReservationKind,
 )
 from idp.persistence.models import (
+    AuditSampleModel,
     ArtifactModel,
     BatchItemModel,
     BatchModel,
@@ -234,6 +235,8 @@ class SqlAlchemyBatchRepository:
                         raise RepositoryError(
                             f"source artifact key collision: {source_artifact.object_key}"
                         )
+            batch = self._locked_batch(session, snapshot.batch_id)
+            self._finalize_batch_if_terminal(session, batch, current_time=self._clock())
 
     def enqueue_job(
         self,
@@ -279,6 +282,7 @@ class SqlAlchemyBatchRepository:
         *,
         worker_id: str,
         lease_duration: timedelta,
+        stages: tuple[str, ...] | None = None,
         now: datetime | None = None,
     ) -> JobClaim | None:
         """Claim one dependency-ready job with PostgreSQL SKIP LOCKED semantics."""
@@ -291,17 +295,22 @@ class SqlAlchemyBatchRepository:
             )
         )
         with self._session_factory.begin() as session:
+            predicates = [
+                JobModel.state == JobState.PENDING,
+                JobModel.attempt_count < JobModel.max_attempts,
+                BatchItemModel.state.in_((BatchItemState.QUEUED, BatchItemState.RUNNING)),
+                BatchModel.state.in_((BatchState.QUEUED, BatchState.RUNNING)),
+                or_(JobModel.depends_on_id.is_(None), dependency_succeeded),
+            ]
+            if stages is not None:
+                if not stages:
+                    return None
+                predicates.append(JobModel.stage.in_(stages))
             job = session.scalar(
                 select(JobModel)
                 .join(BatchItemModel, JobModel.batch_item_id == BatchItemModel.id)
                 .join(BatchModel, BatchItemModel.batch_id == BatchModel.id)
-                .where(
-                    JobModel.state == JobState.PENDING,
-                    JobModel.attempt_count < JobModel.max_attempts,
-                    BatchItemModel.state.in_((BatchItemState.QUEUED, BatchItemState.RUNNING)),
-                    BatchModel.state.in_((BatchState.QUEUED, BatchState.RUNNING)),
-                    or_(JobModel.depends_on_id.is_(None), dependency_succeeded),
-                )
+                .where(*predicates)
                 .order_by(JobModel.priority.desc(), JobModel.created_at, JobModel.id)
                 .limit(1)
                 .with_for_update(skip_locked=True)
@@ -335,6 +344,7 @@ class SqlAlchemyBatchRepository:
                 stage=job.stage,
                 attempt=job.attempt_count,
                 payload=job.payload,
+                created_at=job.created_at,
                 lease_owner=worker_id,
                 lease_expires_at=job.lease_expires_at,
             )
@@ -580,6 +590,43 @@ class SqlAlchemyBatchRepository:
                 require_batch_transition(batch.state, BatchState.RUNNING)
                 batch.state = BatchState.RUNNING
 
+    def resume_capacity_paused_batches(self) -> int:
+        """Resume only capacity-paused batches whose next GPU role has spare capacity."""
+        dependency = aliased(JobModel)
+        dependency_succeeded = exists(
+            select(dependency.id).where(
+                dependency.id == JobModel.depends_on_id,
+                dependency.state == JobState.SUCCEEDED,
+            )
+        )
+        with self._session_factory.begin() as session:
+            batches = list(
+                session.scalars(
+                    select(BatchModel)
+                    .where(BatchModel.state == BatchState.PAUSED_CAPACITY)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            resumed = 0
+            for batch in batches:
+                job = session.scalar(
+                    select(JobModel)
+                    .join(BatchItemModel, JobModel.batch_item_id == BatchItemModel.id)
+                    .where(
+                        BatchItemModel.batch_id == batch.id,
+                        JobModel.state == JobState.PENDING,
+                        or_(JobModel.depends_on_id.is_(None), dependency_succeeded),
+                    )
+                    .order_by(JobModel.priority.desc(), JobModel.created_at, JobModel.id)
+                    .with_for_update(skip_locked=True)
+                )
+                if job is None or not self._has_stage_capacity(session, job.stage):
+                    continue
+                require_batch_transition(batch.state, BatchState.RUNNING)
+                batch.state = BatchState.RUNNING
+                resumed += 1
+            return resumed
+
     def commit_publication(
         self,
         *,
@@ -589,6 +636,8 @@ class SqlAlchemyBatchRepository:
         artifacts: tuple[StoredArtifact, ...],
         entities: tuple[Entity, ...],
         schema_version: str,
+        job_id: UUID | None = None,
+        worker_id: str | None = None,
     ) -> None:
         """Expose a bundle exactly once after all immutable object writes complete."""
         prefix = bundle_prefix.rstrip("/")
@@ -612,12 +661,38 @@ class SqlAlchemyBatchRepository:
             else BatchItemState.COMPLETED_WITH_WARNINGS
         )
         with self._session_factory.begin() as session:
+            publish_job: JobModel | None = None
+            current_time = self._clock()
+            if (job_id is None) != (worker_id is None):
+                raise ValueError("publication job_id and worker_id must be supplied together")
+            if job_id is not None and worker_id is not None:
+                publish_job = session.get(JobModel, job_id, with_for_update=True)
+                self._require_active_lease(publish_job, worker_id, current_time)
+                assert publish_job is not None
+                if publish_job.batch_item_id != item_id or publish_job.stage != "publish":
+                    raise RepositoryError("publication job does not own the requested batch item")
             item = self._locked_item(session, item_id)
             batch = self._locked_batch(session, item.batch_id)
             if batch.state == BatchState.CANCELLED or item.cancellation_requested_at is not None:
                 raise RepositoryError("cannot publish output for a cancelled batch item")
             if item.final_manifest_key is not None:
                 if item.final_manifest_key == manifest_key:
+                    existing_manifest = session.scalar(
+                        select(ArtifactModel).where(ArtifactModel.object_key == manifest_key)
+                    )
+                    supplied_manifest = supplied[manifest_key]
+                    if (
+                        existing_manifest is None
+                        or existing_manifest.sha256 != supplied_manifest.reference.sha256
+                    ):
+                        raise RepositoryError("publication retry does not match existing final manifest")
+                    if publish_job is not None:
+                        publish_job.state = JobState.SUCCEEDED
+                        publish_job.completed_at = current_time
+                        publish_job.lease_owner = None
+                        publish_job.lease_expires_at = None
+                        self._finish_stage_run(session, publish_job, current_time)
+                        self._release_resources(session, publish_job.id, worker_id, current_time)
                     return
                 msg = f"item {item_id} already points to a different final bundle"
                 raise RepositoryError(msg)
@@ -652,6 +727,14 @@ class SqlAlchemyBatchRepository:
             item.quality = manifest.quality
             item.final_bundle_prefix = prefix
             item.final_manifest_key = manifest_key
+            if publish_job is not None:
+                publish_job.state = JobState.SUCCEEDED
+                publish_job.completed_at = current_time
+                publish_job.lease_owner = None
+                publish_job.lease_expires_at = None
+                self._finish_stage_run(session, publish_job, current_time)
+                self._release_resources(session, publish_job.id, worker_id, current_time)
+            self._finalize_batch_if_terminal(session, batch, current_time=current_time)
 
     def set_batch_state(self, *, batch_id: UUID, state: BatchState) -> None:
         """Apply a checked batch lifecycle transition."""
@@ -741,7 +824,12 @@ class SqlAlchemyBatchRepository:
             item = self._locked_item(session, item_id)
             if item.state != BatchItemState.QUARANTINED:
                 raise RepositoryError("only quarantined items can be retried")
+            require_item_transition(item.state, BatchItemState.QUEUED)
             item.state = BatchItemState.QUEUED
+            batch = self._locked_batch(session, item.batch_id)
+            if batch.state == BatchState.COMPLETED_WITH_ERRORS:
+                require_batch_transition(batch.state, BatchState.RUNNING)
+                batch.state = BatchState.RUNNING
             item.quarantine_reason = None
             item.cancellation_requested_at = None
             if item.source_object_key is None or item.document is None:
@@ -804,6 +892,14 @@ class SqlAlchemyBatchRepository:
                 "render_manifest_key": manifest.reference.object_key,
                 "render_manifest_sha256": manifest.reference.sha256,
             }
+            self._enqueue_in_session(
+                session,
+                job.batch_item_id,
+                "layout",
+                {"render_manifest": manifest.reference.model_dump(mode="json")},
+                3,
+                job.id,
+            )
 
     def record_layout_output(
         self,
@@ -848,6 +944,14 @@ class SqlAlchemyBatchRepository:
                 "layout_manifest_key": manifest.reference.object_key,
                 "layout_manifest_sha256": manifest.reference.sha256,
             }
+            self._enqueue_in_session(
+                session,
+                job.batch_item_id,
+                "ocr",
+                {"layout_manifest": manifest.reference.model_dump(mode="json")},
+                3,
+                job.id,
+            )
 
     def record_ocr_output(
         self,
@@ -889,6 +993,20 @@ class SqlAlchemyBatchRepository:
                 "ocr_manifest_key": manifest.reference.object_key,
                 "ocr_manifest_sha256": manifest.reference.sha256,
             }
+            layout_manifest = job.payload.get("layout_manifest")
+            if not isinstance(layout_manifest, dict):
+                raise RepositoryError("OCR job lacks layout manifest reference")
+            self._enqueue_in_session(
+                session,
+                job.batch_item_id,
+                "reconstruction",
+                {
+                    "layout_manifest": layout_manifest,
+                    "ocr_manifest": manifest.reference.model_dump(mode="json"),
+                },
+                3,
+                job.id,
+            )
 
     def record_reconstruction_output(
         self,
@@ -932,6 +1050,133 @@ class SqlAlchemyBatchRepository:
                 "reconstruction_manifest_key": manifest.reference.object_key,
                 "reconstruction_manifest_sha256": manifest.reference.sha256,
             }
+            self._enqueue_in_session(
+                session,
+                job.batch_item_id,
+                "entity_extract",
+                {
+                    "reconstruction_manifest": manifest.reference.model_dump(mode="json"),
+                },
+                3,
+                job.id,
+            )
+
+    def record_entity_output(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        manifest: StoredArtifact,
+    ) -> None:
+        """Persist a validated entity manifest while the extraction lease remains owned."""
+        current_time = self._clock()
+        with self._session_factory.begin() as session:
+            job = session.get(JobModel, job_id, with_for_update=True)
+            self._require_active_lease(job, worker_id, current_time)
+            assert job is not None
+            self._catalog_artifact(session, manifest, job_id, "entity artifact")
+            job.payload = {
+                **job.payload,
+                "entity_manifest_key": manifest.reference.object_key,
+                "entity_manifest_sha256": manifest.reference.sha256,
+            }
+            reconstruction = job.payload.get("reconstruction_manifest")
+            if not isinstance(reconstruction, dict):
+                raise RepositoryError("entity extraction job lacks reconstruction manifest reference")
+            self._enqueue_in_session(
+                session,
+                job.batch_item_id,
+                "publish",
+                {
+                    "reconstruction_manifest": reconstruction,
+                    "entity_manifest": manifest.reference.model_dump(mode="json"),
+                },
+                3,
+                job.id,
+            )
+
+    def get_item_profile_hash(self, *, item_id: UUID) -> str:
+        """Return the immutable release profile recorded for an item batch."""
+        with self._session_factory() as session:
+            profile_hash = session.scalar(
+                select(PipelineProfileModel.profile_hash)
+                .join(BatchModel, BatchModel.profile_id == PipelineProfileModel.id)
+                .join(BatchItemModel, BatchItemModel.batch_id == BatchModel.id)
+                .where(BatchItemModel.id == item_id)
+            )
+            if profile_hash is None:
+                raise RepositoryError(f"unknown batch item: {item_id}")
+            return profile_hash
+
+    def get_observability_snapshot(self) -> dict[str, dict[tuple[str, ...], int]]:
+        """Collect low-cardinality durable state without relying on process-local workers."""
+        with self._session_factory() as session:
+            queue_depth = {
+                (str(stage), state.value): int(count)
+                for stage, state, count in session.execute(
+                    select(JobModel.stage, JobModel.state, func.count())
+                    .group_by(JobModel.stage, JobModel.state)
+                )
+            }
+            active_leases = {
+                (str(stage),): int(count)
+                for stage, count in session.execute(
+                    select(JobModel.stage, func.count())
+                    .where(JobModel.state == JobState.RUNNING)
+                    .group_by(JobModel.stage)
+                )
+            }
+            reservations = {
+                (kind.value, str(unit)): int(amount)
+                for kind, unit, amount in session.execute(
+                    select(
+                        ResourceReservationModel.kind,
+                        ResourceReservationModel.unit,
+                        func.coalesce(func.sum(ResourceReservationModel.amount), 0),
+                    )
+                    .where(ResourceReservationModel.released_at.is_(None))
+                    .group_by(ResourceReservationModel.kind, ResourceReservationModel.unit)
+                )
+            }
+            quality = {
+                (state.value,): int(count)
+                for state, count in session.execute(
+                    select(BatchItemModel.quality, func.count())
+                    .where(BatchItemModel.quality.is_not(None))
+                    .group_by(BatchItemModel.quality)
+                )
+            }
+        return {
+            "queue_depth": queue_depth,
+            "active_leases": active_leases,
+            "reservations": reservations,
+            "quality": quality,
+        }
+
+    def temporary_artifacts_for_item(self, *, item_id: UUID) -> tuple[StoredArtifact, ...]:
+        """List temporary lineage artifacts only after final publication has committed."""
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(ArtifactModel)
+                .join(JobModel, ArtifactModel.producing_job_id == JobModel.id)
+                .where(
+                    JobModel.batch_item_id == item_id,
+                    ArtifactModel.retention == ArtifactRetention.TEMPORARY,
+                )
+                .order_by(ArtifactModel.created_at, ArtifactModel.id)
+            )
+            return tuple(
+                StoredArtifact(
+                    reference=ArtifactReference(
+                        object_key=row.object_key,
+                        sha256=row.sha256,
+                        media_type=row.media_type,
+                    ),
+                    size_bytes=row.size_bytes,
+                    retention=row.retention,
+                )
+                for row in rows
+            )
 
     @staticmethod
     def _get_or_create_document(session: Session, source_sha256: str) -> UUID:
@@ -959,6 +1204,9 @@ class SqlAlchemyBatchRepository:
     @staticmethod
     def _enqueue_in_session(session: Session, batch_item_id: UUID, stage: str, payload: dict[str, object], max_attempts: int, depends_on: UUID | None, suffix: str = "root") -> UUID:
         key = f"{batch_item_id}:{stage}:{depends_on or suffix}"
+        existing = session.scalar(select(JobModel.id).where(JobModel.idempotency_key == key))
+        if existing is not None:
+            return existing
         job = JobModel(batch_item_id=batch_item_id, depends_on_id=depends_on, stage=stage, idempotency_key=key, payload=payload, state=JobState.PENDING, priority=0, attempt_count=0, max_attempts=max_attempts)
         session.add(job)
         session.flush()
@@ -971,6 +1219,29 @@ class SqlAlchemyBatchRepository:
             msg = f"unknown batch item: {item_id}"
             raise RepositoryError(msg)
         return item
+
+    @staticmethod
+    def _catalog_artifact(
+        session: Session, artifact: StoredArtifact, job_id: UUID, label: str
+    ) -> None:
+        existing = session.scalar(
+            select(ArtifactModel)
+            .where(ArtifactModel.object_key == artifact.reference.object_key)
+            .with_for_update()
+        )
+        if existing is None:
+            session.add(
+                ArtifactModel(
+                    producing_job_id=job_id,
+                    object_key=artifact.reference.object_key,
+                    sha256=artifact.reference.sha256,
+                    media_type=artifact.reference.media_type,
+                    size_bytes=artifact.size_bytes,
+                    retention=artifact.retention,
+                )
+            )
+        elif existing.sha256 != artifact.reference.sha256:
+            raise RepositoryError(f"{label} key collision: {artifact.reference.object_key}")
 
     @staticmethod
     def _locked_batch(session: Session, batch_id: UUID) -> BatchModel:
@@ -1035,3 +1306,82 @@ class SqlAlchemyBatchRepository:
             .where(JobModel.batch_item_id == item_id, JobModel.state == JobState.PENDING)
             .values(state=JobState.CANCELLED, completed_at=now)
         )
+        batch = self._locked_batch(session, item.batch_id)
+        self._finalize_batch_if_terminal(session, batch, current_time=now)
+
+    def _finalize_batch_if_terminal(
+        self, session: Session, batch: BatchModel, *, current_time: datetime
+    ) -> None:
+        """Derive an immutable terminal batch state when every scanned item is terminal."""
+        if batch.state in {
+            BatchState.CANCELLED,
+            BatchState.COMPLETED,
+            BatchState.COMPLETED_WITH_WARNINGS,
+            BatchState.COMPLETED_WITH_ERRORS,
+        }:
+            return
+        items = list(
+            session.scalars(
+                select(BatchItemModel)
+                .where(BatchItemModel.batch_id == batch.id)
+                .with_for_update()
+            )
+        )
+        active = {BatchItemState.DISCOVERED, BatchItemState.QUEUED, BatchItemState.RUNNING}
+        if any(item.state in active for item in items):
+            return
+        if any(item.state == BatchItemState.QUARANTINED for item in items):
+            target = BatchState.COMPLETED_WITH_ERRORS
+        elif any(item.state == BatchItemState.COMPLETED_WITH_WARNINGS for item in items):
+            target = BatchState.COMPLETED_WITH_WARNINGS
+        else:
+            target = BatchState.COMPLETED
+        require_batch_transition(batch.state, target)
+        batch.state = target
+        if target != BatchState.COMPLETED_WITH_ERRORS:
+            self._select_audit_samples(session, batch.id, items, current_time)
+
+    @staticmethod
+    def _select_audit_samples(
+        session: Session, batch_id: UUID, items: list[BatchItemModel], current_time: datetime
+    ) -> None:
+        """Select a reproducible one-percent audit sample, with a twenty-item floor when possible."""
+        import hashlib
+
+        candidates = [
+            item
+            for item in items
+            if item.state in {BatchItemState.COMPLETED, BatchItemState.COMPLETED_WITH_WARNINGS}
+        ]
+        count = min(len(candidates), max(20, (len(candidates) + 99) // 100))
+        ranked = sorted(
+            candidates,
+            key=lambda item: hashlib.sha256(f"{batch_id}:{item.id}".encode()).hexdigest(),
+        )
+        for item in ranked[:count]:
+            session.add(AuditSampleModel(batch_item_id=item.id, sample_seed=str(batch_id), selected_at=current_time))
+
+    def _has_stage_capacity(self, session: Session, stage: str) -> bool:
+        """Check the serialized GPU role needed by the next deferred model stage."""
+        kind = (
+            ReservationKind.GPU0
+            if stage in {"reconstruction", "entity_extract"}
+            else ReservationKind.GPU1
+            if stage in {"layout", "ocr"}
+            else None
+        )
+        if kind is None:
+            return True
+        pool = session.scalar(
+            select(ResourcePoolModel).where(ResourcePoolModel.kind == kind).with_for_update()
+        )
+        if pool is None:
+            return False
+        used = session.scalar(
+            select(func.coalesce(func.sum(ResourceReservationModel.amount), 0)).where(
+                ResourceReservationModel.pool_id == pool.id,
+                ResourceReservationModel.released_at.is_(None),
+                ResourceReservationModel.lease_expires_at > self._clock(),
+            )
+        )
+        return int(used or 0) < pool.capacity
