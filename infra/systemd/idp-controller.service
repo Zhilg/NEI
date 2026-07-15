@@ -1,0 +1,16 @@
+[Unit]
+Description=Offline PDF batch controller
+Requires=idp-release-validate.service
+After=idp-release-validate.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/idp/idp.env
+ExecStart=/usr/local/bin/idp controller run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

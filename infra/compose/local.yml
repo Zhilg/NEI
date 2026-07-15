@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16.9-alpine
+    environment:
+      POSTGRES_DB: idp
+      POSTGRES_USER: idp
+      POSTGRES_PASSWORD: idp
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idp -d idp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  migrate:
+    build:
+      context: ../..
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      IDP_DATABASE_URL: postgresql+psycopg://idp:idp@postgres:5432/idp
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  controller:
+    build:
+      context: ../..
+    command: ["idp", "controller", "run"]
+    environment:
+      IDP_DATABASE_URL: postgresql+psycopg://idp:idp@postgres:5432/idp
+      IDP_MINIO_ENDPOINT: minio:9000
+      IDP_OFFLINE_MODE: "true"
+      IDP_TELEMETRY_ENABLED: "false"
+      IDP_METRICS_PORT: "9100"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    ports:
+      - "9100:9100"
+
+  worker:
+    build:
+      context: ../..
+    command: ["idp", "worker", "run"]
+    environment:
+      IDP_DATABASE_URL: postgresql+psycopg://idp:idp@postgres:5432/idp
+      IDP_MINIO_ENDPOINT: minio:9000
+      IDP_OFFLINE_MODE: "true"
+      IDP_TELEMETRY_ENABLED: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started

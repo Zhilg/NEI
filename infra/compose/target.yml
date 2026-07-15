@@ -1,0 +1,88 @@
+services:
+  # Images are loaded from a verified release bundle before this profile is started.
+  # The internal network intentionally denies internet egress at runtime.
+  postgres:
+    image: ${IDP_POSTGRES_IMAGE:?Set immutable offline image digest}
+    environment:
+      POSTGRES_DB: ${IDP_POSTGRES_DB:-idp}
+      POSTGRES_USER: ${IDP_POSTGRES_USER:-idp}
+      POSTGRES_PASSWORD: ${IDP_POSTGRES_PASSWORD:?Set from target secret store}
+    networks: [idp_internal]
+
+  minio:
+    image: ${IDP_MINIO_IMAGE:?Set immutable offline image digest}
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${IDP_MINIO_ROOT_USER:?Set from target secret store}
+      MINIO_ROOT_PASSWORD: ${IDP_MINIO_ROOT_PASSWORD:?Set from target secret store}
+    networks: [idp_internal]
+
+  migrate:
+    image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      IDP_DATABASE_URL: postgresql+psycopg://${IDP_POSTGRES_USER:-idp}:${IDP_POSTGRES_PASSWORD}@postgres:5432/${IDP_POSTGRES_DB:-idp}
+      IDP_OFFLINE_MODE: "true"
+      IDP_TELEMETRY_ENABLED: "false"
+    depends_on: [postgres]
+    networks: [idp_internal]
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - ${IDP_RELEASE_ROOT:-/var/lib/idp}:/var/lib/idp:ro
+      - ${IDP_RELEASE_PUBLIC_KEY:-/etc/idp/release-public.pem}:/etc/idp/release-public.pem:ro
+
+  controller:
+    image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
+    command: ["idp", "controller", "run"]
+    environment:
+      IDP_DATABASE_URL: postgresql+psycopg://${IDP_POSTGRES_USER:-idp}:${IDP_POSTGRES_PASSWORD}@postgres:5432/${IDP_POSTGRES_DB:-idp}
+      IDP_MINIO_ACCESS_KEY: ${IDP_MINIO_ROOT_USER}
+      IDP_MINIO_SECRET_KEY: ${IDP_MINIO_ROOT_PASSWORD}
+      IDP_MINIO_ENDPOINT: minio:9000
+      IDP_OFFLINE_MODE: "true"
+      IDP_TELEMETRY_ENABLED: "false"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    networks: [idp_internal]
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - ${IDP_RELEASE_ROOT:-/var/lib/idp}:/var/lib/idp:ro
+      - ${IDP_RELEASE_PUBLIC_KEY:-/etc/idp/release-public.pem}:/etc/idp/release-public.pem:ro
+
+  worker:
+    image: ${IDP_CONTROLLER_IMAGE:?Set immutable offline image digest}
+    command: ["idp", "worker", "run"]
+    environment:
+      IDP_DATABASE_URL: postgresql+psycopg://${IDP_POSTGRES_USER:-idp}:${IDP_POSTGRES_PASSWORD}@postgres:5432/${IDP_POSTGRES_DB:-idp}
+      IDP_MINIO_ACCESS_KEY: ${IDP_MINIO_ROOT_USER}
+      IDP_MINIO_SECRET_KEY: ${IDP_MINIO_ROOT_PASSWORD}
+      IDP_MINIO_ENDPOINT: minio:9000
+      IDP_OFFLINE_MODE: "true"
+      IDP_TELEMETRY_ENABLED: "false"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    networks: [idp_internal]
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - ${IDP_RELEASE_ROOT:-/var/lib/idp}:/var/lib/idp:ro
+      - ${IDP_RELEASE_PUBLIC_KEY:-/etc/idp/release-public.pem}:/etc/idp/release-public.pem:ro
+
+networks:
+  idp_internal:
+    internal: true

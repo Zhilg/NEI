@@ -1,0 +1,18 @@
+ARG PYTHON_IMAGE=python:3.12-slim
+FROM ${PYTHON_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY wheels ./wheels
+RUN pip install --no-index --find-links=/app/wheels . && rm -rf /app/wheels
+
+CMD ["idp"]
