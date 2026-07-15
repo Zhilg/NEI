@@ -44,7 +44,7 @@ class Entity(BaseModel):
 
 
 class FinalManifest(BaseModel):
-    """Minimum publication manifest contract, independent of MinIO."""
+    """Versioned final bundle contract, independent of the object-store adapter."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -53,6 +53,11 @@ class FinalManifest(BaseModel):
     quality: QualityState
     final_markdown: ArtifactReference
     entities: ArtifactReference
+    schema_version: str = Field(default="entity-v1", min_length=1)
+    reconstruction: ArtifactReference | None = None
+    model_versions: dict[str, str] = Field(default_factory=dict)
+    findings: tuple[dict[str, object], ...] = ()
+    evidence_coverage: float = Field(default=1.0, ge=0, le=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -117,6 +122,7 @@ class JobClaim(BaseModel):
     stage: str = Field(min_length=1)
     attempt: int = Field(ge=1)
     payload: dict[str, object]
+    created_at: datetime
     state: JobState = JobState.RUNNING
     lease_owner: str = Field(min_length=1)
     lease_expires_at: datetime

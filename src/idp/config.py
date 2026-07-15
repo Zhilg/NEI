@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     qwen_vl_max_blocks_per_request: int = Field(default=100, gt=0)
     qwen_vl_max_images_per_request: int = Field(default=40, gt=0)
     qwen_vl_gpu0_slot_unit: str = "role"
+    qwen3_endpoint: str = "http://qwen3:8000/v1"
+    qwen3_model_id: str = "Qwen3-14B"
+    qwen3_model_revision: str = "pinned-in-profile"
+    qwen3_timeout_seconds: float = Field(default=300, gt=0, le=900)
+    qwen3_gpu0_slot_unit: str = "role"
+    gpu1_slot_unit: str = "role"
+    mineru_command: tuple[str, ...] = ()
+    ocr_detector_command: tuple[str, ...] = ()
+    ocr_router_command: tuple[str, ...] = ()
+    ocr_east_slavic_command: tuple[str, ...] = ()
+    ocr_cyrillic_command: tuple[str, ...] = ()
+    ocr_latin_cjk_command: tuple[str, ...] = ()
     batch_staging_root: Path = Path("/var/lib/idp/staging")
     offline_mode: bool = True
     telemetry_enabled: bool = False
@@ -98,5 +110,23 @@ class Settings(BaseSettings):
             "::1",
         }:
             msg = "Qwen-VL endpoint must use an approved local/internal HTTP host"
+            raise ValueError(msg)
+        return value.rstrip("/")
+
+    @field_validator("qwen3_endpoint")
+    @classmethod
+    def require_local_qwen3_endpoint(cls, value: str) -> str:
+        """The entity endpoint is an internal Qwen3/Fenic-compatible service only."""
+        endpoint = urlparse(value)
+        if endpoint.scheme != "http" or endpoint.hostname not in {
+            "qwen3",
+            "qwen3-fenic",
+            "qwen3-vllm",
+            "fenic",
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }:
+            msg = "Qwen3 endpoint must use an approved local/internal HTTP host"
             raise ValueError(msg)
         return value.rstrip("/")

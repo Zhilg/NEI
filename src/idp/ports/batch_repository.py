@@ -57,9 +57,22 @@ class BatchRepository(Protocol):
         *,
         worker_id: str,
         lease_duration: timedelta,
+        stages: tuple[str, ...] | None = None,
         now: datetime | None = None,
     ) -> JobClaim | None:
         """Atomically claim one runnable job with a durable lease."""
+
+    def get_item_profile_hash(self, *, item_id: UUID) -> str:
+        """Resolve the immutable profile hash that owns a batch item."""
+
+    def get_observability_snapshot(self) -> dict[str, dict[tuple[str, ...], int]]:
+        """Return bounded durable aggregates for Prometheus collection."""
+
+    def resume_capacity_paused_batches(self) -> int:
+        """Resume batches after the controller has confirmed resource admission is available."""
+
+    def temporary_artifacts_for_item(self, *, item_id: UUID) -> tuple[StoredArtifact, ...]:
+        """Return temporary artifacts eligible for post-publication best-effort cleanup."""
 
     def renew_lease(
         self,
@@ -193,3 +206,12 @@ class BatchRepository(Protocol):
         manifest: StoredArtifact,
     ) -> None:
         """Catalog Qwen-VL Markdown and provenance manifest before stage completion."""
+
+    def record_entity_output(
+        self,
+        *,
+        job_id: UUID,
+        worker_id: str,
+        manifest: StoredArtifact,
+    ) -> None:
+        """Catalog the validated entity manifest before its stage completes."""

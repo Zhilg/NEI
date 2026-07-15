@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from uuid import UUID
 
-from idp.domain.models import Entity, FinalManifest
+from idp.domain.models import ArtifactReference, Entity, FinalManifest
 from idp.domain.states import ArtifactRetention, QualityState
 from idp.ports.artifact_store import ArtifactStore
 from idp.ports.batch_repository import BatchRepository
@@ -30,6 +31,10 @@ class FinalBundlePublisher:
         markdown: str,
         entities: tuple[Entity, ...],
         schema_version: str,
+        reconstruction: ArtifactReference | None = None,
+        model_versions: dict[str, str] | None = None,
+        findings: tuple[dict[str, object], ...] = (),
+        created_at: datetime | None = None,
     ) -> FinalManifest:
         """Publish final Markdown, entities and manifest through immutable object keys."""
         prefix = str(validate_object_key(bundle_prefix)).rstrip("/")
@@ -59,6 +64,12 @@ class FinalBundlePublisher:
             quality=quality,
             final_markdown=markdown_artifact.reference,
             entities=entities_artifact.reference,
+            schema_version=schema_version,
+            reconstruction=reconstruction,
+            model_versions=model_versions or {},
+            findings=findings,
+            evidence_coverage=_evidence_coverage(markdown, entities),
+            **({"created_at": created_at} if created_at is not None else {}),
         )
         manifest_artifact = self._artifacts.put_bytes(
             object_key=f"{prefix}/manifest.json",
@@ -71,6 +82,9 @@ class FinalBundlePublisher:
             media_type="application/json",
             retention=ArtifactRetention.FINAL,
         )
+        for artifact in (markdown_artifact, entities_artifact, manifest_artifact):
+            if not self._artifacts.exists(artifact.reference):
+                raise RuntimeError(f"final artifact failed integrity verification: {artifact.reference.object_key}")
         self._repository.commit_publication(
             item_id=item_id,
             bundle_prefix=prefix,
@@ -80,3 +94,11 @@ class FinalBundlePublisher:
             schema_version=schema_version,
         )
         return manifest
+
+
+def _evidence_coverage(markdown: str, entities: tuple[Entity, ...]) -> float:
+    """Expose a conservative evidence signal without changing technical publication success."""
+    if not entities:
+        return 1.0
+    verified = sum(entity.evidence in markdown for entity in entities)
+    return verified / len(entities)

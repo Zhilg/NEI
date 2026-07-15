@@ -15,3 +15,24 @@ groups:
           severity: critical
         annotations:
           summary: Batch processing paused because a bounded resource is unavailable
+      - alert: IdpQueueBacklog
+        expr: sum(idp_queue_depth{state="pending"}) > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable pipeline queue backlog is sustained
+      - alert: IdpRetrySpike
+        expr: sum(increase(idp_stage_retries_total[15m])) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Pipeline stage retries are elevated
+      - alert: IdpQuarantineSpike
+        expr: sum(increase(idp_items_quarantined_total[15m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Multiple batch items were quarantined

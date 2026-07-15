@@ -506,3 +506,46 @@ def _manifest_payload(manifest: OcrManifest) -> dict[str, object]:
             for finding in manifest.findings
         ],
     }
+
+
+def ocr_manifest_from_payload(payload: Mapping[str, Any]) -> OcrManifest:
+    """Load a persisted OCR provenance manifest for the grounded VLM stage."""
+    try:
+        tokens = tuple(
+            OcrToken(
+                token_id=str(value["token_id"]),
+                block_id=str(value["block_id"]),
+                page_number=int(value["page_number"]),
+                bbox=tuple(float(coordinate) for coordinate in value["bbox"]),
+                raw_text=str(value["raw_text"]),
+                normalized_text=str(value["normalized_text"]),
+                confidence=float(value["confidence"]),
+                detector_confidence=float(value["detector_confidence"]),
+                script=str(value["script"]),
+                language=str(value["language"]),
+                model_id=str(value["model_id"]),
+                model_revision=str(value["model_revision"]),
+                line_crop=ArtifactReference.model_validate(value["line_crop"]),
+            )
+            for value in payload["tokens"]
+        )
+        findings = tuple(
+            OcrFinding(
+                block_id=str(value["block_id"]),
+                page_number=int(value["page_number"]),
+                bbox=tuple(float(coordinate) for coordinate in value["bbox"]),
+                code=str(value["code"]),
+                detail=str(value["detail"]),
+                crop=ArtifactReference.model_validate(value["crop"]),
+            )
+            for value in payload.get("findings", [])
+        )
+        return OcrManifest(
+            schema_version=str(payload["schema_version"]),
+            source_sha256=str(payload["source_sha256"]),
+            layout_manifest=ArtifactReference.model_validate(payload["layout_manifest"]),
+            tokens=tokens,
+            findings=findings,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise OcrError(f"persisted OCR manifest is invalid: {error}") from error

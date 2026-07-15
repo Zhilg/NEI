@@ -23,6 +23,17 @@ services:
       - "9000:9000"
       - "9001:9001"
 
+  minio-init:
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >-
+      until mc alias set local http://minio:9000 minioadmin minioadmin;
+      do sleep 1; done;
+      mc mb --ignore-existing local/idp-artifacts
+    depends_on:
+      minio:
+        condition: service_started
+
   migrate:
     build:
       context: ../..
@@ -40,6 +51,8 @@ services:
     environment:
       IDP_DATABASE_URL: postgresql+psycopg://idp:idp@postgres:5432/idp
       IDP_MINIO_ENDPOINT: minio:9000
+      IDP_MINIO_ACCESS_KEY: minioadmin
+      IDP_MINIO_SECRET_KEY: minioadmin
       IDP_OFFLINE_MODE: "true"
       IDP_TELEMETRY_ENABLED: "false"
       IDP_METRICS_PORT: "9100"
@@ -48,6 +61,8 @@ services:
         condition: service_completed_successfully
       minio:
         condition: service_started
+      minio-init:
+        condition: service_completed_successfully
     ports:
       - "9100:9100"
 
@@ -58,10 +73,42 @@ services:
     environment:
       IDP_DATABASE_URL: postgresql+psycopg://idp:idp@postgres:5432/idp
       IDP_MINIO_ENDPOINT: minio:9000
+      IDP_MINIO_ACCESS_KEY: minioadmin
+      IDP_MINIO_SECRET_KEY: minioadmin
       IDP_OFFLINE_MODE: "true"
       IDP_TELEMETRY_ENABLED: "false"
+      IDP_METRICS_PORT: "9101"
+      IDP_MINERU_COMMAND: ${IDP_MINERU_COMMAND:?Set pinned MinerU command JSON}
+      IDP_OCR_DETECTOR_COMMAND: ${IDP_OCR_DETECTOR_COMMAND:?Set pinned detector command JSON}
+      IDP_OCR_ROUTER_COMMAND: ${IDP_OCR_ROUTER_COMMAND:?Set pinned router command JSON}
+      IDP_OCR_EAST_SLAVIC_COMMAND: ${IDP_OCR_EAST_SLAVIC_COMMAND:?Set pinned East-Slavic recognizer command JSON}
+      IDP_OCR_CYRILLIC_COMMAND: ${IDP_OCR_CYRILLIC_COMMAND:?Set pinned Cyrillic recognizer command JSON}
+      IDP_OCR_LATIN_CJK_COMMAND: ${IDP_OCR_LATIN_CJK_COMMAND:?Set pinned Latin/CJK recognizer command JSON}
     depends_on:
       migrate:
         condition: service_completed_successfully
       minio:
         condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+      qwen-vl:
+        condition: service_started
+      qwen3:
+        condition: service_started
+    ports:
+      - "9101:9101"
+
+  # Optional local OpenAI-compatible endpoints. Target images are always pinned by digest.
+  qwen-vl:
+    image: ${IDP_QWEN_VL_IMAGE:?Set a pinned local vLLM image digest}
+    command: ${IDP_QWEN_VL_COMMAND:-serve Qwen/Qwen2.5-VL-32B-Instruct}
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+    gpus: all
+
+  qwen3:
+    image: ${IDP_QWEN3_IMAGE:?Set a pinned local vLLM image digest}
+    command: ${IDP_QWEN3_COMMAND:-serve Qwen/Qwen3-14B}
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+    gpus: all

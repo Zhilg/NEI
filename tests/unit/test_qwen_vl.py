@@ -108,6 +108,7 @@ def test_reconstruction_preserves_layout_order_and_validates_correction(tmp_path
                         "page_number": 1,
                         "bbox": [0.0, 0.0, 10.0, 10.0],
                         "markdown": "Исправленный текст",
+                        "evidence": "visible b0 crop",
                         "corrections": [
                             {
                                 "token_id": "t0",
@@ -122,6 +123,7 @@ def test_reconstruction_preserves_layout_order_and_validates_correction(tmp_path
                         "page_number": 1,
                         "bbox": [10.0, 0.0, 20.0, 10.0],
                         "markdown": "| A | B |\n|---|---|\n| 1 | 2 |",
+                        "evidence": "visible b1 crop",
                         "corrections": [],
                     },
                 ],
@@ -148,6 +150,7 @@ def test_reconstruction_preserves_layout_order_and_validates_correction(tmp_path
     assert result.findings[0].block_ids == ("b0",)
     assert len(client.contexts[0]["images"]) == 3
     assert client.contexts[0]["ocr_tokens"][0]["token_id"] == "t0"
+    assert client.contexts[0]["page_transforms"][0]["page_number"] == 1
 
 
 def test_reconstruction_rejects_missing_or_reordered_blocks(tmp_path: Path) -> None:
@@ -162,6 +165,7 @@ def test_reconstruction_rejects_missing_or_reordered_blocks(tmp_path: Path) -> N
                         "page_number": 1,
                         "bbox": [10.0, 0.0, 20.0, 10.0],
                         "markdown": "wrong order",
+                        "evidence": "visible b1 crop",
                         "corrections": [],
                     }
                 ],
@@ -171,6 +175,49 @@ def test_reconstruction_rejects_missing_or_reordered_blocks(tmp_path: Path) -> N
     )
 
     with pytest.raises(ReconstructionError, match="complete MinerU block order"):
+        _assembler(store, client).reconstruct(
+            layout=layout, layout_reference=layout_ref, ocr=ocr, ocr_reference=ocr_ref
+        )
+
+
+def test_reconstruction_rejects_finding_without_grounded_block(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    layout, layout_ref, ocr, ocr_ref = _documents(store)
+    client = RecordingClient(
+        [
+            {
+                "blocks": [
+                    {
+                        "block_id": "b0",
+                        "page_number": 1,
+                        "bbox": [0.0, 0.0, 10.0, 10.0],
+                        "markdown": "first",
+                        "evidence": "visible",
+                        "corrections": [],
+                    },
+                    {
+                        "block_id": "b1",
+                        "page_number": 1,
+                        "bbox": [10.0, 0.0, 20.0, 10.0],
+                        "markdown": "second",
+                        "evidence": "visible",
+                        "corrections": [],
+                    },
+                ],
+                "findings": [
+                    {
+                        "code": "unreadable",
+                        "severity": "warning",
+                        "detail": "region unclear",
+                        "block_ids": [],
+                        "evidence": "visible blur",
+                    }
+                ],
+            }
+        ]
+    )
+
+    with pytest.raises(ReconstructionError, match="one or more known block IDs"):
         _assembler(store, client).reconstruct(
             layout=layout, layout_reference=layout_ref, ocr=ocr, ocr_reference=ocr_ref
         )
@@ -189,6 +236,7 @@ def test_reconstruction_chunks_page_deterministically_with_image_budget(tmp_path
                         "page_number": 1,
                         "bbox": bbox,
                         "markdown": block_id,
+                        "evidence": f"visible {block_id} crop",
                         "corrections": [],
                     }
                 ],

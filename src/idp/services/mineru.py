@@ -454,3 +454,42 @@ def _layout_payload(manifest: LayoutManifest) -> dict[str, object]:
             for block in manifest.blocks
         ],
     }
+
+
+def layout_manifest_from_payload(payload: Mapping[str, Any]) -> LayoutManifest:
+    """Load a normalized layout manifest produced by the local MinerU adapter."""
+    try:
+        pages = tuple(
+            LayoutPage(
+                page_number=int(value["page_number"]),
+                image=ArtifactReference.model_validate(value["image"]),
+                transform=PageTransform(**value["transform"]),
+            )
+            for value in payload["pages"]
+        )
+        blocks = tuple(
+            LayoutBlock(
+                block_id=str(value["block_id"]),
+                page_number=int(value["page_number"]),
+                kind=str(value["kind"]),
+                bbox=tuple(float(coordinate) for coordinate in value["bbox"]),
+                reading_order=int(value["reading_order"]),
+                parent_block_id=(
+                    None if value.get("parent_block_id") is None else str(value["parent_block_id"])
+                ),
+                relations=tuple(str(relation) for relation in value.get("relations", [])),
+                crop=ArtifactReference.model_validate(value["crop"]),
+                vendor_path=str(value["vendor_path"]),
+                attributes=dict(value.get("attributes", {})),
+            )
+            for value in payload["blocks"]
+        )
+        return LayoutManifest(
+            schema_version=str(payload["schema_version"]),
+            source_sha256=str(payload["source_sha256"]),
+            raw_mineru=ArtifactReference.model_validate(payload["raw_mineru"]),
+            pages=pages,
+            blocks=blocks,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise MinerUError(f"persisted layout manifest is invalid: {error}") from error

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import os
+import json
+import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 from minio import Minio
@@ -27,6 +31,9 @@ class ProfileValidationReport:
     verified_bytes: int
     postgres_ok: bool
     minio_ok: bool
+    qwen_vl_ok: bool
+    qwen3_ok: bool
+    gpu_vram_bytes: int
 
 
 def validate_profile(settings: Settings, release_id: str | None = None) -> ProfileValidationReport:
@@ -43,6 +50,9 @@ def validate_profile(settings: Settings, release_id: str | None = None) -> Profi
     report = verify_bundle(bundle_root, manifest, verification_key)
     _check_postgres(settings)
     _check_minio(settings)
+    _check_model_endpoint(settings.qwen_vl_endpoint, "Qwen-VL")
+    _check_model_endpoint(settings.qwen3_endpoint, "Qwen3/Fenic")
+    gpu_vram_bytes = _check_gpu_vram()
     return ProfileValidationReport(
         release_id=manifest.release_id,
         pipeline_profile_hash=manifest.pipeline_profile_hash,
@@ -50,6 +60,9 @@ def validate_profile(settings: Settings, release_id: str | None = None) -> Profi
         verified_bytes=report.verified_bytes,
         postgres_ok=True,
         minio_ok=True,
+        qwen_vl_ok=True,
+        qwen3_ok=True,
+        gpu_vram_bytes=gpu_vram_bytes,
     )
 
 
@@ -93,3 +106,35 @@ def _check_minio(settings: Settings) -> None:
     except Exception as error:
         msg = f"MinIO health check failed: {error}"
         raise ProfileValidationError(msg) from error
+
+
+def _check_model_endpoint(endpoint: str, label: str) -> None:
+    """Verify a local vLLM-compatible endpoint without permitting external egress."""
+    request = urllib.request.Request(f"{endpoint.rstrip('/')}/models", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read())
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        raise ProfileValidationError(f"{label} endpoint health check failed: {error}") from error
+    if not isinstance(payload, dict) or not payload.get("data"):
+        raise ProfileValidationError(f"{label} endpoint returned no loaded models")
+
+
+def _check_gpu_vram() -> int:
+    """Require a target GPU and expose its configured device-memory envelope."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            check=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        values = [int(line.strip()) for line in result.stdout.splitlines() if line.strip()]
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise ProfileValidationError(f"GPU/VRAM health check failed: {error}") from error
+    if not values or any(value <= 0 for value in values):
+        raise ProfileValidationError("GPU/VRAM health check found no usable NVIDIA device")
+    return sum(values) * 1024 * 1024

@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from idp.domain.models import Entity, FinalManifest, StoredArtifact
@@ -66,3 +67,27 @@ def test_publisher_writes_all_bundle_objects_before_database_commit(tmp_path: Pa
         "entities.json",
         "manifest.json",
     }
+
+
+def test_publisher_keeps_manifest_bytes_stable_for_a_retry(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    repository = RecordingRepository()
+    publisher = FinalBundlePublisher(store, repository)  # type: ignore[arg-type]
+    item_id = uuid4()
+    created_at = datetime(2026, 7, 15, tzinfo=UTC)
+    arguments = {
+        "item_id": item_id,
+        "bundle_prefix": "results/document/stable",
+        "source_sha256": "a" * 64,
+        "pipeline_profile_hash": "b" * 64,
+        "quality": QualityState.PASS,
+        "markdown": "Evidence",
+        "entities": (),
+        "schema_version": "entity-v1",
+        "created_at": created_at,
+    }
+
+    first = publisher.publish(**arguments)
+    second = publisher.publish(**arguments)
+
+    assert first.created_at == second.created_at == created_at
