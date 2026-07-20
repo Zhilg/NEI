@@ -178,8 +178,14 @@ def test_publication_finalizes_batch_and_selects_audit(repository: SqlAlchemyBat
     repository.create_batch(snapshot, "a" * 64)
     item_id = snapshot.items[0].item_id
     repository.set_item_state(item_id=item_id, state=BatchItemState.RUNNING)
-    markdown = ArtifactReference("final/finalized/final.md", "c" * 64, "text/markdown")
-    entities = ArtifactReference("final/finalized/entities.json", "d" * 64, "application/json")
+    markdown = ArtifactReference(
+        object_key="final/finalized/final.md", sha256="c" * 64, media_type="text/markdown"
+    )
+    entities = ArtifactReference(
+        object_key="final/finalized/entities.json",
+        sha256="d" * 64,
+        media_type="application/json",
+    )
     manifest = FinalManifest(
         source_sha256="b" * 64,
         pipeline_profile_hash="a" * 64,
@@ -196,7 +202,9 @@ def test_publication_finalizes_batch_and_selects_audit(repository: SqlAlchemyBat
             StoredArtifact(reference=entities, size_bytes=1, retention=ArtifactRetention.FINAL),
             StoredArtifact(
                 reference=ArtifactReference(
-                    "final/finalized/manifest.json", "e" * 64, "application/json"
+                    object_key="final/finalized/manifest.json",
+                    sha256="e" * 64,
+                    media_type="application/json",
                 ),
                 size_bytes=1,
                 retention=ArtifactRetention.FINAL,

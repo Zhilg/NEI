@@ -40,16 +40,17 @@ OCR применяется только к текстовым блокам. Вс
 
 Для локальной машины и сервера используется один Compose-файл: `infra/compose/local.yml`. Отдельной target-конфигурации, systemd-юнитов, release bundle, подписей и ключей нет.
 
-Код, модели, команды MinerU/PaddleOCR, входящие PDF и постоянные данные не копируются в Compose-контейнеры. Они монтируются с хоста. Windows-скрипт собирает один переносимый образ `local/idp-app` с Python-зависимостями и тестами; на Linux он только импортируется. При изменении Python-кода достаточно перезапустить нужный контейнер: образ пересобирать не нужно.
+Код, модели, команды MinerU/PaddleOCR, входящие PDF и постоянные данные не копируются в Compose-контейнеры. Они монтируются с хоста. Windows-скрипт собирает `local/idp-app`, а AWQ-веса Qwen скачивает в `transfer/models`. На Linux images импортируются, а модели монтируются read-only как `/models`.
 
 Подготовьте на хосте следующие каталоги:
 
 ```text
+transfer/
+  models/
+    qwen-vl/             # Qwen2.5-VL-32B-Instruct-AWQ
+    qwen3/               # Qwen3-14B-AWQ
 data/
   input/                 # PDF для обработки
-  models/
-    qwen-vl/             # локальные веса Qwen-VL
-    qwen3/               # локальные веса Qwen3
   tools/
     mineru/run           # исполняемая локальная команда MinerU
     ocr/                  # detector, route и три recognizer-команды
@@ -126,29 +127,35 @@ manifest.json
 
 ## Подготовка на Windows 11
 
-Скрипт собирает application image, запускает unit-тесты внутри него, поднимает PostgreSQL и MinIO для smoke-проверки, затем сохраняет все Docker-образы в один tar-архив. Docker Desktop должен работать в режиме **Linux containers**. Перед запуском в Docker Desktop должны присутствовать образы Qwen-VL и Qwen3.
+Скрипт собирает application image, запускает тесты, проверяет модели, поднимает PostgreSQL и MinIO для smoke-проверки и сохраняет Docker images в tar. На Windows интернет используется для `docker pull`, Python wheels и первой загрузки `Qwen/Qwen2.5-VL-32B-Instruct-AWQ` и `Qwen/Qwen3-14B-AWQ`. Если repository marker, config и все shards уже присутствуют, повторной загрузки нет; незавершённая загрузка возобновляется. Для model files создаётся `transfer/models/SHA256SUMS`.
 
 ```powershell
-.\scripts\export-images-windows.ps1 -OutputPath E:\transfer\idp-images.tar `
-  -QwenVlImage local/qwen-vl:latest -Qwen3Image local/qwen3:latest
+.\scripts\export-images-windows.ps1
 ```
 
-Получатся три файла: `idp-images.tar`, `idp-images.tar.sha256` и `idp-images.tar.json`. Скопируйте на Linux все три файла, а также репозиторий с кодом, каталоги `data/models` и `data/tools`. Модели и tools не находятся в Docker archive: они намеренно монтируются как обычные директории на сервере.
+Успех обозначается только строкой `=== IDP EXPORT COMPLETE ===` и файлом `transfer/EXPORT-COMPLETE.txt`. Они появляются после тестов, подтверждённого удаления smoke containers, `docker save`, checksum и metadata. Если marker отсутствует, экспорт не завершён. На Linux копируется весь репозиторий вместе с `transfer/` и `data/tools/`.
 
 ## Запуск на Linux
 
-Сделайте Linux-скрипт исполняемым. Первый аргумент - путь к архиву, второй, необязательный, - путь к корню репозитория:
+Сделайте Linux-скрипт исполняемым и просто запустите его из репозитория:
 
 ```bash
 chmod +x scripts/import-images-linux.sh
-./scripts/import-images-linux.sh /media/transfer/idp-images.tar /opt/idp/repo
+./scripts/import-images-linux.sh
 ```
 
-Скрипт проверяет SHA-256 и metadata, выполняет `docker load`, проверяет mounted модели и исполняемые MinerU/OCR wrappers, создаёт `.env` с абсолютными путями и запускает полный стек: PostgreSQL, MinIO, controller, Qwen-VL, Qwen3 и worker. В конце выполняется healthcheck. На Linux нужен `jq` для чтения metadata.
+Скрипт проверяет archive SHA-256, metadata, completion marker и SHA-256 всех model files, затем выполняет `docker load`. `transfer/models` монтируется в Qwen containers как `/models:ro`. После запуска выполняются healthcheck и проверка блокировки внешнего HTTPS. Compose использует `pull_policy: never` и внутреннюю Docker network.
 
 ## Как подать PDF на обработку
 
-Скопируйте один или несколько PDF в каталог `data/input`. Если репозиторий лежит в `/opt/idp/repo`, а Linux-скрипт запускался со значениями по умолчанию:
+Скопируйте один или несколько PDF в каталог `data/input` **до запуска Linux-скрипта**. Тогда скрипт после старта автоматически отправит все найденные PDF в batch:
+
+```bash
+cp ~/Downloads/document.pdf data/input/
+./scripts/import-images-linux.sh
+```
+
+Если PDF были добавлены уже после запуска, отправьте их вручную:
 
 ```bash
 cp ~/Downloads/document.pdf /opt/idp/repo/data/input/
@@ -165,6 +172,8 @@ docker compose -f infra/compose/local.yml run --rm operator \
 docker compose -f infra/compose/local.yml run --rm operator \
   idp batch report <batch_id> --format json
 ```
+
+Финальные файлы лежат в MinIO bucket `idp-artifacts` по пути `results/<item_id>/<source_sha256>/`: `final.md`, `entities.json`, `manifest.json` и `reconstruction_manifest.json`. MinIO Console доступна по адресу `http://localhost:9001`; стандартный логин и пароль: `minioadmin` / `minioadmin`. Физические данные MinIO сохраняются в `data/runtime/minio`, но читать этот каталог вручную не нужно.
 
 ## Проверка и обновление
 

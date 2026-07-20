@@ -2,7 +2,9 @@ name: idp
 
 x-app: &app
   image: ${IDP_APP_IMAGE:-local/idp-app:latest}
+  pull_policy: never
   working_dir: /workspace
+  networks: [idp_internal]
   environment: &app-environment
     PYTHONPATH: /workspace/src
     IDP_DATABASE_URL: postgresql+psycopg://idp:${IDP_POSTGRES_PASSWORD:-idp}@postgres:5432/idp
@@ -35,7 +37,9 @@ x-worker-environment: &worker-environment
 services:
   postgres:
     image: ${IDP_POSTGRES_IMAGE:-postgres:16.9-alpine}
+    pull_policy: never
     restart: unless-stopped
+    networks: [idp_internal]
     environment:
       POSTGRES_DB: idp
       POSTGRES_USER: idp
@@ -50,8 +54,10 @@ services:
 
   minio:
     image: ${IDP_MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
+    pull_policy: never
     command: server /data --console-address :9001
     restart: unless-stopped
+    networks: [idp_internal]
     environment:
       MINIO_ROOT_USER: ${IDP_MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${IDP_MINIO_SECRET_KEY:-minioadmin}
@@ -63,6 +69,8 @@ services:
 
   minio-init:
     image: ${IDP_MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-05-21T01-59-54Z}
+    pull_policy: never
+    networks: [idp_internal]
     entrypoint:
       - /bin/sh
       - -ec
@@ -135,8 +143,10 @@ services:
 
   qwen-vl:
     image: ${IDP_QWEN_VL_IMAGE:-local/qwen-vl:latest}
-    command: ${IDP_QWEN_VL_COMMAND:-serve /models/qwen-vl --host 0.0.0.0 --port 8000}
+    pull_policy: never
+    command: ["--model", "/models/qwen-vl", "--served-model-name", "Qwen2.5-VL-32B-Instruct", "--quantization", "awq", "--dtype", "half", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
+    networks: [idp_internal]
     environment:
       CUDA_VISIBLE_DEVICES: ${IDP_QWEN_VL_GPU:-0}
       HF_HOME: /models/qwen-vl/hf-cache
@@ -144,7 +154,7 @@ services:
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
     volumes:
-      - ${IDP_MODELS_ROOT:-../../data/models}:/models:ro
+      - ${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro
     gpus: all
     profiles: [models]
     healthcheck:
@@ -156,8 +166,10 @@ services:
 
   qwen3:
     image: ${IDP_QWEN3_IMAGE:-local/qwen3:latest}
-    command: ${IDP_QWEN3_COMMAND:-serve /models/qwen3 --host 0.0.0.0 --port 8000}
+    pull_policy: never
+    command: ["--model", "/models/qwen3", "--served-model-name", "Qwen3-14B", "--quantization", "awq", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
+    networks: [idp_internal]
     environment:
       CUDA_VISIBLE_DEVICES: ${IDP_QWEN3_GPU:-1}
       HF_HOME: /models/qwen3/hf-cache
@@ -165,7 +177,7 @@ services:
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
     volumes:
-      - ${IDP_MODELS_ROOT:-../../data/models}:/models:ro
+      - ${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro
     gpus: all
     profiles: [models]
     healthcheck:
@@ -186,3 +198,7 @@ services:
         condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
+
+networks:
+  idp_internal:
+    internal: true
