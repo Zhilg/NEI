@@ -19,6 +19,7 @@ $transferDirectory = Join-Path $projectRoot "transfer"
 $absoluteOutput = Join-Path $transferDirectory "idp-images.tar"
 $metadataPath = "$absoluteOutput.json"
 $appImage = "local/idp-app:latest"
+$pythonImage = "python:3.12-slim"
 $qwenVlImage = "local/qwen-vl:latest"
 $qwen3Image = "local/qwen3:latest"
 $postgresImage = "postgres:16.9-alpine"
@@ -32,6 +33,7 @@ $smokeTools = Join-Path $smokeData "tools"
 $wheelsDirectory = Join-Path $projectRoot "wheels"
 $smokeProject = "idp-smoke-$PID"
 $savedEnvironment = @{}
+$smokeStarted = $false
 
 function Invoke-Docker {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
@@ -47,8 +49,12 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 
 try {
     Invoke-Docker version
+    Invoke-Docker pull $pythonImage
+    Invoke-Docker pull $postgresImage
+    Invoke-Docker pull $minioImage
+    Invoke-Docker pull $minioMcImage
     New-Item -ItemType Directory -Force -Path $wheelsDirectory | Out-Null
-    Invoke-Docker run --rm --volume "${projectRoot}:/workspace" --workdir /workspace python:3.12-slim /bin/sh -ec "python -m pip download --dest /workspace/wheels --only-binary=:all: '.[dev]' hatchling"
+    Invoke-Docker run --rm --volume "${projectRoot}:/workspace" --workdir /workspace $pythonImage /bin/sh -ec "python -m pip download --dest /workspace/wheels --only-binary=:all: '.[dev]' hatchling"
     Invoke-Docker build --pull=false --tag $appImage $projectRoot
     Invoke-Docker run --rm --entrypoint pytest $appImage tests/unit
 
@@ -71,8 +77,11 @@ try {
     }
 
     Invoke-Docker compose --project-name $smokeProject -f $composeFile up -d postgres minio minio-init migrate profiles controller
+    $smokeStarted = $true
     Invoke-Docker compose --project-name $smokeProject -f $composeFile run --rm operator
     Invoke-Docker compose --project-name $smokeProject -f $composeFile run --rm -e "IDP_TEST_POSTGRES_URL=postgresql+psycopg://idp:idp@postgres:5432/idp" operator pytest
+    Invoke-Docker compose --project-name $smokeProject -f $composeFile down --remove-orphans
+    $smokeStarted = $false
 
     $images = @($appImage, $postgresImage, $minioImage, $minioMcImage, $qwenVlImage, $qwen3Image)
     foreach ($image in $images) {
@@ -100,7 +109,7 @@ try {
     Write-Host "Metadata: $metadataPath"
 }
 finally {
-    if (Test-Path $composeFile) {
+    if ($smokeStarted -and (Test-Path $composeFile)) {
         docker compose --project-name $smokeProject -f $composeFile down --remove-orphans 2>$null | Out-Null
     }
     foreach ($key in $savedEnvironment.Keys) {

@@ -126,7 +126,7 @@ manifest.json
 
 ## Подготовка на Windows 11
 
-Скрипт собирает application image, запускает unit-тесты внутри него, поднимает PostgreSQL и MinIO для smoke-проверки, затем сохраняет все Docker-образы в один tar-архив. Docker Desktop должен работать в режиме **Linux containers**. Перед запуском в Docker Desktop должны присутствовать образы Qwen-VL и Qwen3.
+Скрипт собирает application image, запускает unit-тесты внутри него, поднимает PostgreSQL и MinIO для smoke-проверки, затем сохраняет все Docker-образы в один tar-архив. Docker Desktop должен работать в режиме **Linux containers**. Перед запуском в Docker Desktop должны присутствовать образы Qwen-VL и Qwen3. На Windows интернет используется для `docker pull` базовых образов и скачивания Python wheels. После успешного экспорта скрипт останавливает временный smoke stack, печатает пути к трём файлам и завершается.
 
 ```powershell
 .\scripts\export-images-windows.ps1
@@ -143,11 +143,18 @@ chmod +x scripts/import-images-linux.sh
 ./scripts/import-images-linux.sh
 ```
 
-Скрипт проверяет SHA-256 и metadata, выполняет `docker load`, проверяет mounted модели и исполняемые MinerU/OCR wrappers, создаёт `.env` с абсолютными путями и запускает полный стек: PostgreSQL, MinIO, controller, Qwen-VL, Qwen3 и worker. В конце выполняется healthcheck. На Linux нужен `jq` для чтения metadata.
+Скрипт проверяет SHA-256 и metadata, выполняет `docker load`, проверяет mounted модели и исполняемые MinerU/OCR wrappers, создаёт `.env` с абсолютными путями и запускает полный стек: PostgreSQL, MinIO, controller, Qwen-VL, Qwen3 и worker. В конце выполняются healthcheck и автоматическая проверка отсутствия внешнего HTTPS. На Linux нужен `jq` для чтения metadata. Compose использует `pull_policy: never` и внутреннюю Docker network, поэтому runtime не может скачать отсутствующий образ и не имеет интернет-egress.
 
 ## Как подать PDF на обработку
 
-Скопируйте один или несколько PDF в каталог `data/input`. Если репозиторий лежит в `/opt/idp/repo`, а Linux-скрипт запускался со значениями по умолчанию:
+Скопируйте один или несколько PDF в каталог `data/input` **до запуска Linux-скрипта**. Тогда скрипт после старта автоматически отправит все найденные PDF в batch:
+
+```bash
+cp ~/Downloads/document.pdf data/input/
+./scripts/import-images-linux.sh
+```
+
+Если PDF были добавлены уже после запуска, отправьте их вручную:
 
 ```bash
 cp ~/Downloads/document.pdf /opt/idp/repo/data/input/
@@ -164,6 +171,8 @@ docker compose -f infra/compose/local.yml run --rm operator \
 docker compose -f infra/compose/local.yml run --rm operator \
   idp batch report <batch_id> --format json
 ```
+
+Финальные файлы лежат в MinIO bucket `idp-artifacts` по пути `results/<item_id>/<source_sha256>/`: `final.md`, `entities.json`, `manifest.json` и `reconstruction_manifest.json`. MinIO Console доступна по адресу `http://localhost:9001`; стандартный логин и пароль: `minioadmin` / `minioadmin`. Физические данные MinIO сохраняются в `data/runtime/minio`, но читать этот каталог вручную не нужно.
 
 ## Проверка и обновление
 
