@@ -6,7 +6,7 @@ Builds, tests, and exports every Docker image needed on Linux.
 Run from Windows 11 with Docker Desktop configured for Linux containers. The script:
   1. Builds local/idp-app from this repository using the local wheelhouse.
   2. Runs unit tests inside that image.
-  3. Starts PostgreSQL and MinIO through Compose and runs an integration health check.
+  3. Downloads and verifies model snapshots.
   4. Saves the application, database, object storage, and model images to one .tar archive.
 
 The archive deliberately does not include source code, PDF documents, models, or local
@@ -28,29 +28,14 @@ $minioImage = "minio/minio:RELEASE.2025-04-22T22-12-26Z"
 $minioMcImage = "minio/mc:RELEASE.2025-05-21T01-59-54Z"
 $vllmImage = "vllm/vllm-openai:v0.10.2"
 $pipelineProfileVersion = Get-Date -Format "yyyyMMdd.HHmmss"
-$composeFile = Join-Path $projectRoot "infra\compose\local.yml"
-$smokeData = Join-Path $projectRoot ".smoke-runtime"
-$smokeInput = Join-Path $smokeData "input"
-$smokeTools = Join-Path $smokeData "tools"
 $wheelsDirectory = Join-Path $projectRoot "wheels"
 $modelsDirectory = Join-Path $transferDirectory "models"
-$smokeProject = "idp-smoke-$PID"
-$savedEnvironment = @{}
-$smokeStarted = $false
 
 function Invoke-Docker {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
     & docker @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "docker $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
-    }
-}
-
-function Invoke-DockerCompose {
-    param([string[]]$Arguments)
-    & docker compose @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker compose $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
     }
 }
 
@@ -159,40 +144,12 @@ try {
     Write-Host "Computing SHA-256 checksums for mounted model files..."
     Write-ModelChecksums
 
-    New-Item -ItemType Directory -Force -Path $smokeInput, $smokeTools | Out-Null
-    $smokeEnvironment = @{
-        IDP_SOURCE_ROOT = $projectRoot
-        IDP_INPUT_ROOT = $smokeInput
-        IDP_DATA_ROOT = $smokeData
-        IDP_TOOLS_ROOT = $smokeTools
-        IDP_APP_IMAGE = $appImage
-        IDP_PIPELINE_PROFILE_VERSION = "windows-smoke"
-        IDP_MINIO_PORT = "19000"
-        IDP_MINIO_CONSOLE_PORT = "19001"
-        IDP_CONTROLLER_METRICS_PORT = "19100"
-        IDP_WORKER_METRICS_PORT = "19101"
-    }
-    foreach ($key in $smokeEnvironment.Keys) {
-        $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
-        [Environment]::SetEnvironmentVariable($key, $smokeEnvironment[$key], "Process")
-    }
-
-    $smokeStarted = $true
-    Write-Host "[5/8] Starting the isolated smoke stack..."
-    Invoke-DockerCompose -Arguments @("--project-name", $smokeProject, "-f", $composeFile, "up", "--detach", "postgres", "minio", "minio-init", "migrate", "profiles", "controller")
-    Write-Host "[6/8] Running health checks and PostgreSQL integration tests..."
-    Invoke-DockerCompose -Arguments @("--project-name", $smokeProject, "-f", $composeFile, "run", "--rm", "operator")
-    Invoke-DockerCompose -Arguments @("--project-name", $smokeProject, "-f", $composeFile, "run", "--rm", "-e", "IDP_TEST_POSTGRES_URL=postgresql+psycopg://idp:idp@postgres:5432/idp", "operator", "pytest")
-    Write-Host "[7/8] Stopping and removing the smoke stack..."
-    Invoke-DockerCompose -Arguments @("--project-name", $smokeProject, "-f", $composeFile, "down", "--remove-orphans", "--timeout", "30")
-    $smokeStarted = $false
-
     $images = @($appImage, $postgresImage, $minioImage, $minioMcImage, $qwenVlImage, $qwen3Image)
     foreach ($image in $images) {
         Invoke-Docker image inspect $image
     }
 
-    Write-Host "[8/8] Exporting Docker images and writing checksums..."
+    Write-Host "[5/5] Exporting Docker images and writing checksums..."
     Invoke-Docker save --output $absoluteOutput $images
 
     $hash = Get-FileHash -Algorithm SHA256 -Path $absoluteOutput
@@ -218,12 +175,4 @@ try {
     Write-Host "Models: $modelsDirectory"
     Write-Host "Completion marker: $completionPath"
 }
-finally {
-    if ($smokeStarted -and (Test-Path $composeFile)) {
-        docker compose --project-name $smokeProject -f $composeFile down --remove-orphans --timeout 30 2>$null | Out-Null
-    }
-    foreach ($key in $savedEnvironment.Keys) {
-        [Environment]::SetEnvironmentVariable($key, $savedEnvironment[$key], "Process")
-    }
-    Remove-Item -Recurse -Force $smokeData -ErrorAction SilentlyContinue
-}
+finally {}

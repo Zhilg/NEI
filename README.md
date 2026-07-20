@@ -127,7 +127,7 @@ manifest.json
 
 ## Подготовка на Windows 11
 
-Скрипт собирает application image, запускает тесты, проверяет модели, поднимает PostgreSQL и MinIO для smoke-проверки и сохраняет Docker images в tar. На Windows интернет используется для `docker pull`, Python wheels и первой загрузки `Qwen/Qwen2.5-VL-32B-Instruct-AWQ` и `Qwen/Qwen3-14B-AWQ`. Если repository marker, config и все shards уже присутствуют, повторной загрузки нет; незавершённая загрузка возобновляется. Для model files создаётся `transfer/models/SHA256SUMS`.
+Скрипт собирает application image, запускает unit-тесты, проверяет/скачивает модели и сохраняет Docker images в tar. PostgreSQL, MinIO и Compose на Windows он не запускает. На Windows интернет используется для `docker pull`, Python wheels и первой загрузки `Qwen/Qwen2.5-VL-32B-Instruct-AWQ` и `Qwen/Qwen3-14B-AWQ`. Если repository marker, config и все shards уже присутствуют, повторной загрузки нет; незавершённая загрузка возобновляется. Для model files создаётся `transfer/models/SHA256SUMS`.
 
 ```powershell
 $env:HF_TOKEN = (New-Object System.Net.NetworkCredential("", (Read-Host "HF token" -AsSecureString))).Password
@@ -137,7 +137,7 @@ Remove-Item Env:HF_TOKEN
 
 `HF_TOKEN` необязателен для публичных snapshots, но полезен при ограничениях Hugging Face и rate limits. Используйте token с правом `read`. Значение существует только в текущей PowerShell-сессии, не записывается в `.env`, metadata, Docker image или git и очищается последней командой.
 
-Успех обозначается только строкой `=== IDP EXPORT COMPLETE ===` и файлом `transfer/EXPORT-COMPLETE.txt`. Они появляются после тестов, подтверждённого удаления smoke containers, `docker save`, checksum и metadata. Если marker отсутствует, экспорт не завершён. На Linux копируется весь репозиторий вместе с `transfer/` и `data/tools/`.
+Успех обозначается только строкой `=== IDP EXPORT COMPLETE ===` и файлом `transfer/EXPORT-COMPLETE.txt`. Они появляются после unit-тестов, загрузки моделей, `docker save`, checksum и metadata. Если marker отсутствует, экспорт не завершён. На Linux копируется весь репозиторий вместе с `transfer/` и `data/tools/`.
 
 ## Запуск на Linux
 
