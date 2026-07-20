@@ -22,7 +22,7 @@ The approved detailed plan is maintained at `.kilo/plans/1783855590272-resilient
 ## Phase 3: Compose deployment
 
 1. Run the pipeline through one Docker Compose stack with mounted source code, models, local OCR/MinerU tools, input folders and persistent data.
-2. Use a one-shot bootstrap container to install Python dependencies in a mounted virtualenv; use Compose health checks and smoke tests instead of release activation or signatures.
+2. Build a portable application image on Windows, then use Compose health checks and smoke tests instead of release activation or signatures.
 3. Enforce disabled egress, telemetry and runtime downloads on the target server.
 
 **Done when:** target installation, validation, activation and rollback work without internet access.

@@ -110,7 +110,7 @@ stateDiagram-v2
 
 - Целевая машина не имеет доступа к интернету. Runtime использует только локальные services и запрещает downloads/telemetry/egress.
 - Один Docker Compose stack монтирует исходный код, локальные модели, OCR/MinerU-инструменты, входящие PDF и persistent data с хоста; rebuild приложения не нужен.
-- One-shot `bootstrap` создаёт persistent virtualenv, а `operator` запускает healthcheck, batch-команды и тесты без установки Python на хосте.
+- Windows build script собирает переносимый application image, а `operator` запускает healthcheck, batch-команды и тесты без установки Python на хосте.
 - Local CI запускает unit/schema/queue/storage tests без GPU и весов.
 - Target server запускает resumable model smoke и canary/soak tests только для profile/runtime promotion.
 - Пока нет ground truth, система не заявляет accuracy metrics; audit sampling формирует будущий размеченный corpus.

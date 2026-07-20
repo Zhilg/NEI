@@ -16,7 +16,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="IDP_",
-        env_file=".env",
         extra="forbid",
     )
 

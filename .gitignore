@@ -4,5 +4,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 data/
+.smoke-runtime/
+wheels/*.whl
 *.tar
 *.tar.sha256

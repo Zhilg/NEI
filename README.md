@@ -40,7 +40,7 @@ OCR применяется только к текстовым блокам. Вс
 
 Для локальной машины и сервера используется один Compose-файл: `infra/compose/local.yml`. Отдельной target-конфигурации, systemd-юнитов, release bundle, подписей и ключей нет.
 
-Код, модели, команды MinerU/PaddleOCR, входящие PDF и постоянные данные не копируются в образ. Они монтируются с хоста. Базовый Python-образ нужен только как среда выполнения; при первом запуске сервис `bootstrap` создаёт виртуальное окружение в каталоге данных и ставит зависимости. При изменении Python-кода достаточно повторно запустить нужный контейнер: образ пересобирать не нужно.
+Код, модели, команды MinerU/PaddleOCR, входящие PDF и постоянные данные не копируются в Compose-контейнеры. Они монтируются с хоста. Windows-скрипт собирает один переносимый образ `local/idp-app` с Python-зависимостями и тестами; на Linux он только импортируется. При изменении Python-кода достаточно перезапустить нужный контейнер: образ пересобирать не нужно.
 
 Подготовьте на хосте следующие каталоги:
 
@@ -53,11 +53,8 @@ data/
   tools/
     mineru/run           # исполняемая локальная команда MinerU
     ocr/                  # detector, route и три recognizer-команды
-  wheels/                # Linux wheels для Python 3.12: зависимости и hatchling
-  runtime/               # PostgreSQL, MinIO, staging и virtualenv
+  runtime/               # PostgreSQL, MinIO и staging
 ```
-
-`bootstrap` устанавливает зависимости только из mounted `data/wheels`; сеть, registry и `docker build` для этого не нужны. В каталоге должны быть Linux-совместимые wheels для всех зависимостей из `pyproject.toml`, включая `hatchling`.
 
 Команды MinerU и OCR получают только пути к временным файлам внутри worker. Они должны поддерживать placeholders, уже передаваемые Compose: `{images}`, `{output}` для MinerU и `{input}`, `{output}` для OCR.
 
@@ -127,26 +124,46 @@ manifest.json
 Документы, которые невозможно обработать по техническим причинам, получают статус `QUARANTINED` и не блокируют обработку остальных файлов в пакете.
 
 
-## Передача образов
+## Подготовка на Windows 11
 
-Код, модели и tools передаются как обычные каталоги и монтируются на Linux. Docker-образы передаются отдельно, без build и registry.
-
-На Windows 11 после загрузки нужных model images в Docker Desktop:
+Скрипт собирает application image, запускает unit-тесты внутри него, поднимает PostgreSQL и MinIO для smoke-проверки, затем сохраняет все Docker-образы в один tar-архив. Docker Desktop должен работать в режиме **Linux containers**. Перед запуском в Docker Desktop должны присутствовать образы Qwen-VL и Qwen3.
 
 ```powershell
 .\scripts\export-images-windows.ps1 -OutputPath E:\transfer\idp-images.tar `
   -QwenVlImage local/qwen-vl:latest -Qwen3Image local/qwen3:latest
 ```
 
-Скопируйте `idp-images.tar` и `idp-images.tar.sha256` на Linux. Затем на Linux:
+Получатся три файла: `idp-images.tar`, `idp-images.tar.sha256` и `idp-images.tar.json`. Скопируйте на Linux все три файла, а также репозиторий с кодом, каталоги `data/models` и `data/tools`. Модели и tools не находятся в Docker archive: они намеренно монтируются как обычные директории на сервере.
+
+## Запуск на Linux
+
+Сделайте Linux-скрипт исполняемым. Первый аргумент - путь к архиву, второй, необязательный, - путь к корню репозитория:
 
 ```bash
 chmod +x scripts/import-images-linux.sh
-./scripts/import-images-linux.sh /media/transfer/idp-images.tar
-export IDP_QWEN_VL_IMAGE=local/qwen-vl:latest
-export IDP_QWEN3_IMAGE=local/qwen3:latest
-export IDP_PIPELINE_PROFILE_VERSION=2026-07-20.1
-docker compose -f infra/compose/local.yml --profile models up -d
+./scripts/import-images-linux.sh /media/transfer/idp-images.tar /opt/idp/repo
+```
+
+Скрипт проверяет SHA-256 и metadata, выполняет `docker load`, проверяет mounted модели и исполняемые MinerU/OCR wrappers, создаёт `.env` с абсолютными путями и запускает полный стек: PostgreSQL, MinIO, controller, Qwen-VL, Qwen3 и worker. В конце выполняется healthcheck. На Linux нужен `jq` для чтения metadata.
+
+## Как подать PDF на обработку
+
+Скопируйте один или несколько PDF в каталог `data/input`. Если репозиторий лежит в `/opt/idp/repo`, а Linux-скрипт запускался со значениями по умолчанию:
+
+```bash
+cp ~/Downloads/document.pdf /opt/idp/repo/data/input/
+cd /opt/idp/repo
+docker compose -f infra/compose/local.yml run --rm operator \
+  idp batch submit /input --profile default
+```
+
+Команда напечатает `batch_id`. По нему смотрят прогресс и итоговый отчёт:
+
+```bash
+docker compose -f infra/compose/local.yml run --rm operator \
+  idp batch status <batch_id>
+docker compose -f infra/compose/local.yml run --rm operator \
+  idp batch report <batch_id> --format json
 ```
 
 ## Проверка и обновление
@@ -163,20 +180,19 @@ docker compose -f infra/compose/local.yml run --rm operator
 docker compose -f infra/compose/local.yml run --rm operator idp healthcheck
 ```
 
-Для тестов без GPU и моделей используется тот же mounted код и уже созданный virtualenv:
+Для тестов без GPU и моделей используется тот же application image:
 
 ```bash
 docker compose -f infra/compose/local.yml run --rm operator pytest
 ```
 
-Чтобы применить изменение Python-кода, измените `IDP_PIPELINE_PROFILE_VERSION` и перезапустите нужный сервис. Если изменились зависимости в `pyproject.toml`, bootstrap автоматически сравнит его fingerprint и обновит mounted virtualenv:
+Чтобы применить изменение Python-кода, измените `IDP_PIPELINE_PROFILE_VERSION` и перезапустите нужный сервис. Если изменились зависимости в `pyproject.toml`, снова запустите Windows-скрипт: он пересоберёт application image, проверит тесты и создаст новый archive.
 
 ```bash
-docker compose -f infra/compose/local.yml rm -sf bootstrap
-docker compose -f infra/compose/local.yml --profile models up --force-recreate bootstrap controller worker
+docker compose -f infra/compose/local.yml --profile models up -d --force-recreate controller worker
 ```
 
-Для остановки с сохранением PostgreSQL, MinIO и виртуального окружения достаточно `docker compose -f infra/compose/local.yml down`. Удаление каталога `data/runtime` удаляет всё постоянное состояние.
+Для остановки с сохранением PostgreSQL, MinIO и staging достаточно `docker compose -f infra/compose/local.yml down`. Удаление каталога `data/runtime` удаляет всё постоянное состояние.
 
 ## Тестирование
 

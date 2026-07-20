@@ -12,7 +12,10 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY alembic.ini ./
 COPY alembic ./alembic
+COPY tests ./tests
 COPY wheels ./wheels
-RUN pip install --no-index --find-links=/app/wheels . && rm -rf /app/wheels
+RUN pip install --no-index --find-links=/app/wheels hatchling \
+    && pip install --no-index --find-links=/app/wheels --no-build-isolation ".[dev]" \
+    && rm -rf /app/wheels
 
 CMD ["idp"]

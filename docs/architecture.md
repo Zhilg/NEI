@@ -126,4 +126,4 @@ Quality is `pass`, `warning` or `failed`. A technically successful result is pub
 
 One Docker Compose stack runs the system in development and production. The application source directory, local model directories, MinerU/PaddleOCR tool directory, input directory and persistent data directory are bind-mounted into containers. The application image is only a Python runtime; it is not rebuilt when code changes.
 
-On first start, the one-shot `bootstrap` service creates a virtual environment in the mounted data directory and installs project dependencies. PostgreSQL, MinIO, staging data and that virtual environment persist outside containers. The worker invokes only mounted local model tools and reaches only local Compose model services; telemetry and model downloads remain disabled.
+The Windows build script creates a portable application image with pinned Python dependencies and test tools. PostgreSQL, MinIO and staging data persist outside containers. The worker invokes only mounted local model tools and reaches only local Compose model services; telemetry and model downloads remain disabled.
