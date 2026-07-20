@@ -46,6 +46,14 @@ function Invoke-Docker {
     }
 }
 
+function Invoke-DockerCompose {
+    param([string[]]$Arguments)
+    & docker compose @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker compose $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
+    }
+}
+
 function Test-ModelSnapshot {
     param([string]$Target)
     if (-not (Test-Path (Join-Path $Target "config.json"))) { return $false }
@@ -171,12 +179,12 @@ try {
 
     $smokeStarted = $true
     Write-Host "[5/8] Starting the isolated smoke stack..."
-    Invoke-Docker compose --project-name $smokeProject -f $composeFile up -d postgres minio minio-init migrate profiles controller
+    Invoke-DockerCompose -Arguments @("--project-name", $smokeProject, "-f", $composeFile, "up", "--detach", "postgres", "minio", "minio-init", "migrate", "profiles", "controller")
     Write-Host "[6/8] Running health checks and PostgreSQL integration tests..."
-    Invoke-Docker compose --project-name $smokeProject -f $composeFile run --rm operator
-    Invoke-Docker compose --project-name $smokeProject -f $composeFile run --rm -e "IDP_TEST_POSTGRES_URL=postgresql+psycopg://idp:idp@postgres:5432/idp" operator pytest
+    Invoke-DockerCompose -Arguments @("--project-name", $smokeProject, "-f", $composeFile, "run", "--rm", "operator")
+    Invoke-DockerCompose -Arguments @("--project-name", $smokeProject, "-f", $composeFile, "run", "--rm", "-e", "IDP_TEST_POSTGRES_URL=postgresql+psycopg://idp:idp@postgres:5432/idp", "operator", "pytest")
     Write-Host "[7/8] Stopping and removing the smoke stack..."
-    Invoke-Docker compose --project-name $smokeProject -f $composeFile down --remove-orphans --timeout 30
+    Invoke-DockerCompose -Arguments @("--project-name", $smokeProject, "-f", $composeFile, "down", "--remove-orphans", "--timeout", "30")
     $smokeStarted = $false
 
     $images = @($appImage, $postgresImage, $minioImage, $minioMcImage, $qwenVlImage, $qwen3Image)
