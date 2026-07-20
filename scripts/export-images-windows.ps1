@@ -85,7 +85,12 @@ function Install-ModelSnapshot {
     if (Test-Path $lockDirectory) {
         Get-ChildItem -Path $lockDirectory -Filter "*.lock" -File -Recurse | Remove-Item -Force
     }
-    Invoke-Docker run --rm --env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0 --env HF_HUB_DISABLE_XET=1 --env HF_HUB_DOWNLOAD_TIMEOUT=120 --env HF_HUB_ETAG_TIMEOUT=30 --mount "type=bind,source=$modelsDirectory,target=/models" --entrypoint hf $appImage download $Repository --local-dir "/models/$DirectoryName" --max-workers 1
+    if ($env:HF_TOKEN) {
+        Write-Host "Using HF_TOKEN for authenticated model download."
+        Invoke-Docker run --rm --env HF_TOKEN --env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0 --env HF_HUB_DISABLE_XET=1 --env HF_HUB_DOWNLOAD_TIMEOUT=120 --env HF_HUB_ETAG_TIMEOUT=30 --mount "type=bind,source=$modelsDirectory,target=/models" --entrypoint hf $appImage download $Repository --local-dir "/models/$DirectoryName" --max-workers 1
+    } else {
+        Invoke-Docker run --rm --env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0 --env HF_HUB_DISABLE_XET=1 --env HF_HUB_DOWNLOAD_TIMEOUT=120 --env HF_HUB_ETAG_TIMEOUT=30 --mount "type=bind,source=$modelsDirectory,target=/models" --entrypoint hf $appImage download $Repository --local-dir "/models/$DirectoryName" --max-workers 1
+    }
     if (-not (Test-ModelSnapshot $target)) { throw "Downloaded model is incomplete: $Repository" }
     New-Item -ItemType File -Force -Path $marker | Out-Null
 }
