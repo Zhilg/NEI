@@ -81,7 +81,7 @@ function Install-ModelSnapshot {
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $Repository | Set-Content -NoNewline -Encoding ascii -Path $repositoryMarker
     Remove-Item -Force $marker -ErrorAction SilentlyContinue
-    Invoke-Docker run --rm --env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0 --volume "${modelsDirectory}:/models" --entrypoint hf $appImage download $Repository --local-dir "/models/$DirectoryName"
+    Invoke-Docker run --rm --env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0 --mount "type=bind,source=$modelsDirectory,target=/models" --entrypoint hf $appImage download $Repository --local-dir "/models/$DirectoryName"
     if (-not (Test-ModelSnapshot $target)) { throw "Downloaded model is incomplete: $Repository" }
     New-Item -ItemType File -Force -Path $marker | Out-Null
 }
@@ -89,7 +89,7 @@ function Install-ModelSnapshot {
 function Test-ModelChecksums {
     $checksumPath = Join-Path $modelsDirectory "SHA256SUMS"
     if (-not (Test-Path $checksumPath)) { return $false }
-    docker run --rm --volume "${modelsDirectory}:/models:ro" $pythonImage /bin/sh -ec "cd /models && sha256sum --check SHA256SUMS" *> $null
+    docker run --rm --mount "type=bind,source=$modelsDirectory,target=/models,readonly" --workdir /models --entrypoint sha256sum $pythonImage --check SHA256SUMS *> $null
     return $LASTEXITCODE -eq 0
 }
 
@@ -124,7 +124,7 @@ try {
     Invoke-Docker tag $vllmImage $qwen3Image
     Write-Host "[2/8] Preparing Python wheels and building the application image..."
     New-Item -ItemType Directory -Force -Path $wheelsDirectory | Out-Null
-    Invoke-Docker run --rm --volume "${projectRoot}:/workspace" --workdir /workspace $pythonImage /bin/sh -ec "python -m pip download --dest /workspace/wheels --only-binary=:all: '.[dev]' hatchling"
+    Invoke-Docker run --rm --mount "type=bind,source=$projectRoot,target=/workspace" --workdir /workspace --entrypoint python $pythonImage -m pip download --dest /workspace/wheels --only-binary=:all: ".[dev]" hatchling
     Invoke-Docker build --pull=false --tag $appImage $projectRoot
     Write-Host "[3/8] Running unit tests..."
     Invoke-Docker run --rm --entrypoint pytest $appImage tests/unit
