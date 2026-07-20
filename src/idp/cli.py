@@ -12,27 +12,15 @@ from uuid import UUID
 import typer
 
 from idp.config import Settings
-from idp.releases.build import ReleaseBuildSpec, build_bundle
-from idp.releases.lifecycle import ReleaseManager
-from idp.releases.manifest import (
-    load_manifest,
-    load_private_signing_key,
-    load_public_verification_key,
-    verify_bundle,
-)
-from idp.releases.validation import ProfileValidationError, validate_profile
-from idp.runtime import create_batch_service, run_controller, run_worker
+from idp.health import RuntimeHealthError, check_runtime_health
+from idp.runtime import create_batch_service, register_default_profile, run_controller, run_worker
 
 app = typer.Typer(no_args_is_help=True, help="Offline PDF batch pipeline operations.")
-profile_app = typer.Typer(no_args_is_help=True, help="Pipeline profile operations.")
 controller_app = typer.Typer(no_args_is_help=True, help="Controller operations.")
 worker_app = typer.Typer(no_args_is_help=True, help="Worker operations.")
-release_app = typer.Typer(no_args_is_help=True, help="Offline release bundle operations.")
 batch_app = typer.Typer(no_args_is_help=True, help="One-shot PDF batch operations.")
-app.add_typer(profile_app, name="profile")
 app.add_typer(controller_app, name="controller")
 app.add_typer(worker_app, name="worker")
-app.add_typer(release_app, name="release")
 app.add_typer(batch_app, name="batch")
 
 
@@ -51,81 +39,24 @@ def show_config() -> None:
     typer.echo(json.dumps(payload, sort_keys=True))
 
 
-@profile_app.command("validate")
-def validate_profile_command(profile: str | None = None) -> None:
-    """Verify an active/imported release and local target service prerequisites."""
+@app.command("healthcheck")
+def healthcheck(include_models: bool = typer.Option(True, "--models/--no-models")) -> None:
+    """Check the local Compose services used by this mounted deployment."""
     try:
-        report = validate_profile(Settings(), profile)
-    except ProfileValidationError as error:
+        report = check_runtime_health(Settings(), include_models=include_models)
+    except RuntimeHealthError as error:
         raise typer.Exit(code=_print_error(str(error))) from error
     typer.echo(json.dumps(report.__dict__, sort_keys=True))
 
 
-@release_app.command("build")
-def build_release(
-    spec_path: Path = typer.Argument(..., exists=True, readable=True),
-    output_directory: Path = typer.Argument(...),
-    private_key_path: Path = typer.Option(..., "--private-key", exists=True, readable=True),
-) -> None:
-    """Build a signed bundle on the connected build host from an explicit JSON spec."""
+@app.command("bootstrap")
+def bootstrap() -> None:
+    """Register the mounted runtime configuration as the default batch profile."""
     try:
-        spec = ReleaseBuildSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))
-        manifest = build_bundle(spec, output_directory, load_private_signing_key(private_key_path))
-    except (OSError, ValueError) as error:
-        raise typer.Exit(code=_print_error(str(error))) from error
-    typer.echo(json.dumps(manifest.model_dump(mode="json"), sort_keys=True))
-
-
-@release_app.command("verify")
-def verify_release(
-    bundle_directory: Path = typer.Argument(..., exists=True, file_okay=False),
-    public_key_path: Path = typer.Option(..., "--public-key", exists=True, readable=True),
-) -> None:
-    """Verify a transferred bundle without importing or activating it."""
-    try:
-        manifest = load_manifest(bundle_directory / "manifest.json")
-        report = verify_bundle(bundle_directory, manifest, load_public_verification_key(public_key_path))
+        profile_hash = register_default_profile(Settings())
     except Exception as error:
         raise typer.Exit(code=_print_error(str(error))) from error
-    typer.echo(json.dumps(report.__dict__, sort_keys=True))
-
-
-@release_app.command("import")
-def import_release(bundle_directory: Path = typer.Argument(..., exists=True, file_okay=False)) -> None:
-    """Verify and copy a release into the managed target release directory."""
-    settings = Settings()
-    try:
-        manager = ReleaseManager(
-            settings.release_root,
-            load_public_verification_key(settings.release_public_key_path),
-            container_runtime=settings.container_runtime,
-        )
-        report = manager.import_bundle(bundle_directory)
-    except Exception as error:
-        raise typer.Exit(code=_print_error(str(error))) from error
-    typer.echo(json.dumps(report.__dict__, sort_keys=True))
-
-
-@release_app.command("activate")
-def activate_release(release_id: str = typer.Argument(...)) -> None:
-    """Verify an imported release again and atomically switch the active pointer."""
-    settings = Settings()
-    try:
-        manager = ReleaseManager(
-            settings.release_root,
-            load_public_verification_key(settings.release_public_key_path),
-            container_runtime=settings.container_runtime,
-        )
-        report = manager.activate(release_id)
-    except Exception as error:
-        raise typer.Exit(code=_print_error(str(error))) from error
-    typer.echo(json.dumps(report.__dict__, sort_keys=True))
-
-
-@release_app.command("rollback")
-def rollback_release(release_id: str = typer.Argument(...)) -> None:
-    """Atomically point runtime deployment back to a verified imported release."""
-    activate_release(release_id)
+    typer.echo(json.dumps({"profile": "default", "profile_hash": profile_hash}, sort_keys=True))
 
 
 def _print_error(message: str) -> int:

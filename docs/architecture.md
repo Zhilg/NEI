@@ -122,8 +122,8 @@ Publication is atomic into an immutable MinIO prefix. It contains `final.md`, `e
 
 Quality is `pass`, `warning` or `failed`. A technically successful result is published even when quality is failed, with `COMPLETED_WITH_WARNINGS`. A terminal technical failure is `QUARANTINED` and does not block other items.
 
-## Air-Gapped Releases
+## Compose Deployment
 
-The connected release environment creates immutable bundles containing pinned OCI images, wheelhouse, OS package set, all model/tokenizer/config/dictionary files, checksums, SBOM, licence inventory and import/verification tools. It rehearses installation without network access.
+One Docker Compose stack runs the system in development and production. The application source directory, local model directories, MinerU/PaddleOCR tool directory, input directory and persistent data directory are bind-mounted into containers. The application image is only a Python runtime; it is not rebuilt when code changes.
 
-The target importer verifies every asset before activation. Runtime enforces offline flags, disables telemetry and denies network egress. Activation and rollback switch immutable profile/release pointers; neither requires internet access.
+On first start, the one-shot `bootstrap` service creates a virtual environment in the mounted data directory and installs project dependencies. PostgreSQL, MinIO, staging data and that virtual environment persist outside containers. The worker invokes only mounted local model tools and reaches only local Compose model services; telemetry and model downloads remain disabled.

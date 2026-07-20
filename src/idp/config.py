@@ -56,19 +56,17 @@ class Settings(BaseSettings):
     qwen3_timeout_seconds: float = Field(default=300, gt=0, le=900)
     qwen3_gpu0_slot_unit: str = "role"
     gpu1_slot_unit: str = "role"
+    pipeline_profile_version: str = Field(min_length=1)
     mineru_command: tuple[str, ...] = ()
     ocr_detector_command: tuple[str, ...] = ()
     ocr_router_command: tuple[str, ...] = ()
     ocr_east_slavic_command: tuple[str, ...] = ()
     ocr_cyrillic_command: tuple[str, ...] = ()
     ocr_latin_cjk_command: tuple[str, ...] = ()
-    batch_staging_root: Path = Path("/var/lib/idp/staging")
+    data_root: Path = Path("/data")
+    batch_staging_root: Path = Path("/data/staging")
     offline_mode: bool = True
     telemetry_enabled: bool = False
-    release_manifest_path: Path | None = None
-    release_root: Path = Path("/var/lib/idp")
-    release_public_key_path: Path = Path("/etc/idp/release-public.pem")
-    container_runtime: str = "docker"
 
     @field_validator("allowed_roots")
     @classmethod
@@ -82,21 +80,12 @@ class Settings(BaseSettings):
             normalized.append(root.resolve(strict=False))
         return tuple(normalized)
 
-    @field_validator("release_manifest_path")
+    @field_validator("data_root", "batch_staging_root")
     @classmethod
-    def require_local_release_manifest(cls, value: Path | None) -> Path | None:
-        """Release manifests are local files; remote URLs violate air-gapped runtime."""
-        if value is not None and not value.is_absolute():
-            msg = "release manifest path must be absolute"
-            raise ValueError(msg)
-        return value
-
-    @field_validator("release_root", "release_public_key_path", "batch_staging_root")
-    @classmethod
-    def require_absolute_release_path(cls, value: Path) -> Path:
-        """Target release state and trust material must never resolve relatively."""
+    def require_absolute_data_path(cls, value: Path) -> Path:
+        """Persistent state paths must be explicit host-mounted container paths."""
         if not value.is_absolute():
-            msg = f"release path must be absolute: {value}"
+            msg = f"data path must be absolute: {value}"
             raise ValueError(msg)
         return value
 
