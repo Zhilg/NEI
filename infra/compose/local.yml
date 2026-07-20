@@ -1,114 +1,213 @@
+name: idp
+
+x-app: &app
+  image: ${IDP_APP_IMAGE:-python:3.12-slim}
+  working_dir: /workspace
+  environment: &app-environment
+    PYTHONPATH: /workspace/src
+    PATH: /data/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    IDP_DATABASE_URL: postgresql+psycopg://idp:${IDP_POSTGRES_PASSWORD:-idp}@postgres:5432/idp
+    IDP_MINIO_ENDPOINT: minio:9000
+    IDP_MINIO_ACCESS_KEY: ${IDP_MINIO_ACCESS_KEY:-minioadmin}
+    IDP_MINIO_SECRET_KEY: ${IDP_MINIO_SECRET_KEY:-minioadmin}
+    IDP_ALLOWED_ROOTS: '["/input"]'
+    IDP_DATA_ROOT: /data
+    IDP_BATCH_STAGING_ROOT: /data/staging
+    IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
+    IDP_OFFLINE_MODE: "true"
+    IDP_TELEMETRY_ENABLED: "false"
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+  volumes:
+    - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+    - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
+    - ${IDP_DATA_ROOT:-../../data/runtime}:/data
+    - ${IDP_TOOLS_ROOT:-../../data/tools}:/tools:ro
+    - ${IDP_WHEELS_ROOT:-../../data/wheels}:/wheels:ro
+
+x-worker-environment: &worker-environment
+  <<: *app-environment
+  IDP_MINERU_COMMAND: '["/tools/mineru/run", "--images", "{images}", "--output", "{output}"]'
+  IDP_OCR_DETECTOR_COMMAND: '["/tools/ocr/detect", "--input", "{input}", "--output", "{output}"]'
+  IDP_OCR_ROUTER_COMMAND: '["/tools/ocr/route", "--input", "{input}", "--output", "{output}"]'
+  IDP_OCR_EAST_SLAVIC_COMMAND: '["/tools/ocr/recognize-east-slavic", "--input", "{input}", "--output", "{output}"]'
+  IDP_OCR_CYRILLIC_COMMAND: '["/tools/ocr/recognize-cyrillic", "--input", "{input}", "--output", "{output}"]'
+  IDP_OCR_LATIN_CJK_COMMAND: '["/tools/ocr/recognize-latin-cjk", "--input", "{input}", "--output", "{output}"]'
+
 services:
   postgres:
     image: postgres:16.9-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: idp
       POSTGRES_USER: idp
-      POSTGRES_PASSWORD: idp
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${IDP_POSTGRES_PASSWORD:-idp}
+    volumes:
+      - ${IDP_DATA_ROOT:-../../data/runtime}/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U idp -d idp"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
 
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address :9001
+    restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${IDP_MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${IDP_MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - ${IDP_DATA_ROOT:-../../data/runtime}/minio:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${IDP_MINIO_PORT:-9000}:9000"
+      - "${IDP_MINIO_CONSOLE_PORT:-9001}:9001"
 
   minio-init:
     image: minio/mc:RELEASE.2025-05-21T01-59-54Z
-    entrypoint: ["/bin/sh", "-ec"]
-    command: >-
-      until mc alias set local http://minio:9000 minioadmin minioadmin;
-      do sleep 1; done;
-      mc mb --ignore-existing local/idp-artifacts
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        until mc alias set local http://minio:9000 ${IDP_MINIO_ACCESS_KEY:-minioadmin} ${IDP_MINIO_SECRET_KEY:-minioadmin};
+        do sleep 2; done;
+        mc mb --ignore-existing local/idp-artifacts
     depends_on:
       minio:
         condition: service_started
+    restart: "no"
+
+  bootstrap:
+    <<: *app
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        fingerprint=$$(sha256sum /workspace/pyproject.toml | cut -d ' ' -f 1);
+        test -x /data/venv/bin/python || python -m venv /data/venv;
+        test -f /data/.dependencies-fingerprint && test "$$(cat /data/.dependencies-fingerprint)" = "$$fingerprint" || {
+        /data/venv/bin/pip install --disable-pip-version-check --no-cache-dir --no-index --find-links=/wheels -e '.[dev]';
+        printf '%s' "$$fingerprint" > /data/.dependencies-fingerprint;
+        };
+        touch /data/.dependencies-ready
+    restart: "no"
+    volumes:
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace
+      - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
+      - ${IDP_DATA_ROOT:-../../data/runtime}:/data
+      - ${IDP_TOOLS_ROOT:-../../data/tools}:/tools:ro
+      - ${IDP_WHEELS_ROOT:-../../data/wheels}:/wheels:ro
 
   migrate:
-    build:
-      context: ../..
-    command: ["alembic", "upgrade", "head"]
-    environment:
-      IDP_DATABASE_URL: postgresql+psycopg://idp:idp@postgres:5432/idp
+    <<: *app
+    command: ["/bin/sh", "-ec", "test -f /data/.dependencies-ready; alembic upgrade head"]
     depends_on:
       postgres:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
 
-  controller:
-    build:
-      context: ../..
-    command: ["idp", "controller", "run"]
-    environment:
-      IDP_DATABASE_URL: postgresql+psycopg://idp:idp@postgres:5432/idp
-      IDP_MINIO_ENDPOINT: minio:9000
-      IDP_MINIO_ACCESS_KEY: minioadmin
-      IDP_MINIO_SECRET_KEY: minioadmin
-      IDP_OFFLINE_MODE: "true"
-      IDP_TELEMETRY_ENABLED: "false"
-      IDP_METRICS_PORT: "9100"
+  profiles:
+    <<: *app
+    command: ["/bin/sh", "-ec", "test -f /data/.dependencies-ready; idp bootstrap"]
+    environment: *worker-environment
     depends_on:
       migrate:
         condition: service_completed_successfully
-      minio:
-        condition: service_started
+    restart: "no"
+
+  controller:
+    <<: *app
+    command: ["/bin/sh", "-ec", "test -f /data/.dependencies-ready; idp controller run"]
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      IDP_METRICS_PORT: "9100"
+      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      profiles:
+        condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
     ports:
-      - "9100:9100"
+      - "${IDP_CONTROLLER_METRICS_PORT:-9100}:9100"
 
   worker:
-    build:
-      context: ../..
-    command: ["idp", "worker", "run"]
+    <<: *app
+    command: ["/bin/sh", "-ec", "test -f /data/.dependencies-ready; idp worker run"]
+    restart: unless-stopped
+    profiles: [models]
     environment:
-      IDP_DATABASE_URL: postgresql+psycopg://idp:idp@postgres:5432/idp
-      IDP_MINIO_ENDPOINT: minio:9000
-      IDP_MINIO_ACCESS_KEY: minioadmin
-      IDP_MINIO_SECRET_KEY: minioadmin
-      IDP_OFFLINE_MODE: "true"
-      IDP_TELEMETRY_ENABLED: "false"
+      <<: *worker-environment
       IDP_METRICS_PORT: "9101"
-      IDP_MINERU_COMMAND: ${IDP_MINERU_COMMAND:?Set pinned MinerU command JSON}
-      IDP_OCR_DETECTOR_COMMAND: ${IDP_OCR_DETECTOR_COMMAND:?Set pinned detector command JSON}
-      IDP_OCR_ROUTER_COMMAND: ${IDP_OCR_ROUTER_COMMAND:?Set pinned router command JSON}
-      IDP_OCR_EAST_SLAVIC_COMMAND: ${IDP_OCR_EAST_SLAVIC_COMMAND:?Set pinned East-Slavic recognizer command JSON}
-      IDP_OCR_CYRILLIC_COMMAND: ${IDP_OCR_CYRILLIC_COMMAND:?Set pinned Cyrillic recognizer command JSON}
-      IDP_OCR_LATIN_CJK_COMMAND: ${IDP_OCR_LATIN_CJK_COMMAND:?Set pinned Latin/CJK recognizer command JSON}
+      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
     depends_on:
       migrate:
         condition: service_completed_successfully
-      minio:
-        condition: service_started
+      profiles:
+        condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
       qwen-vl:
-        condition: service_started
+        condition: service_healthy
       qwen3:
-        condition: service_started
+        condition: service_healthy
     ports:
-      - "9101:9101"
+      - "${IDP_WORKER_METRICS_PORT:-9101}:9101"
 
-  # Optional local OpenAI-compatible endpoints. Target images are always pinned by digest.
   qwen-vl:
-    image: ${IDP_QWEN_VL_IMAGE:?Set a pinned local vLLM image digest}
-    command: ${IDP_QWEN_VL_COMMAND:-serve Qwen/Qwen2.5-VL-32B-Instruct}
+    image: ${IDP_QWEN_VL_IMAGE:-local/qwen-vl:latest}
+    command: ${IDP_QWEN_VL_COMMAND:-serve /models/qwen-vl --host 0.0.0.0 --port 8000}
+    restart: unless-stopped
     environment:
-      CUDA_VISIBLE_DEVICES: "0"
+      CUDA_VISIBLE_DEVICES: ${IDP_QWEN_VL_GPU:-0}
+      HF_HOME: /models/qwen-vl/hf-cache
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_NO_USAGE_STATS: "1"
+    volumes:
+      - ${IDP_MODELS_ROOT:-../../data/models}:/models:ro
     gpus: all
+    profiles: [models]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
 
   qwen3:
-    image: ${IDP_QWEN3_IMAGE:?Set a pinned local vLLM image digest}
-    command: ${IDP_QWEN3_COMMAND:-serve Qwen/Qwen3-14B}
+    image: ${IDP_QWEN3_IMAGE:-local/qwen3:latest}
+    command: ${IDP_QWEN3_COMMAND:-serve /models/qwen3 --host 0.0.0.0 --port 8000}
+    restart: unless-stopped
     environment:
-      CUDA_VISIBLE_DEVICES: "0"
+      CUDA_VISIBLE_DEVICES: ${IDP_QWEN3_GPU:-1}
+      HF_HOME: /models/qwen3/hf-cache
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_NO_USAGE_STATS: "1"
+    volumes:
+      - ${IDP_MODELS_ROOT:-../../data/models}:/models:ro
     gpus: all
+    profiles: [models]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+
+  operator:
+    <<: *app
+    command: ["idp", "healthcheck", "--no-models"]
+    profiles: [operator]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      profiles:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully

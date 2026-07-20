@@ -109,7 +109,8 @@ stateDiagram-v2
 ## Offline и тестирование
 
 - Целевая машина не имеет доступа к интернету. Runtime использует только локальные services и запрещает downloads/telemetry/egress.
-- Connected build host формирует immutable release bundle: OCI images, wheelhouse, OS packages, модели, tokenizers, OCR dictionaries, checksums, SBOM и import scripts.
+- Один Docker Compose stack монтирует исходный код, локальные модели, OCR/MinerU-инструменты, входящие PDF и persistent data с хоста; rebuild приложения не нужен.
+- One-shot `bootstrap` создаёт persistent virtualenv, а `operator` запускает healthcheck, batch-команды и тесты без установки Python на хосте.
 - Local CI запускает unit/schema/queue/storage tests без GPU и весов.
 - Target server запускает resumable model smoke и canary/soak tests только для profile/runtime promotion.
 - Пока нет ground truth, система не заявляет accuracy metrics; audit sampling формирует будущий размеченный corpus.

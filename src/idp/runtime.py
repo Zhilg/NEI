@@ -7,6 +7,7 @@ import json
 import shutil
 import threading
 import time
+import hashlib
 from datetime import timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -88,8 +89,39 @@ def create_batch_service(settings: Settings) -> BatchService:
         )
         artifacts = MinioArtifactStore(client, settings.minio_bucket)
     else:
-        artifacts = LocalArtifactStore(settings.release_root / "local-artifacts")
+        artifacts = LocalArtifactStore(settings.data_root / "local-artifacts")
     return BatchService(settings, repository, artifacts, settings.batch_staging_root)
+
+
+def register_default_profile(settings: Settings, *, name: str = "default") -> str:
+    """Register a stable profile derived from mounted runtime settings for first-run Compose use."""
+    payload = {
+        "pipeline_profile_version": settings.pipeline_profile_version,
+        "render_dpi": settings.render_dpi,
+        "render_max_pages": settings.render_max_pages,
+        "render_max_pixels_per_page": settings.render_max_pixels_per_page,
+        "render_max_total_pixels": settings.render_max_total_pixels,
+        "mineru_command": settings.mineru_command,
+        "ocr_detector_command": settings.ocr_detector_command,
+        "ocr_router_command": settings.ocr_router_command,
+        "ocr_east_slavic_command": settings.ocr_east_slavic_command,
+        "ocr_cyrillic_command": settings.ocr_cyrillic_command,
+        "ocr_latin_cjk_command": settings.ocr_latin_cjk_command,
+        "ocr_max_lines_per_block": settings.ocr_max_lines_per_block,
+        "ocr_min_token_confidence": settings.ocr_min_token_confidence,
+        "qwen_vl_model_id": settings.qwen_vl_model_id,
+        "qwen_vl_model_revision": settings.qwen_vl_model_revision,
+        "qwen_vl_prompt_version": settings.qwen_vl_prompt_version,
+        "qwen3_model_id": settings.qwen3_model_id,
+        "qwen3_model_revision": settings.qwen3_model_revision,
+    }
+    profile_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    SqlAlchemyBatchRepository(create_session_factory(settings)).register_profile(
+        name=name, profile_hash=profile_hash
+    )
+    return profile_hash
 
 
 def create_artifact_store(settings: Settings) -> LocalArtifactStore | MinioArtifactStore:
@@ -102,7 +134,7 @@ def create_artifact_store(settings: Settings) -> LocalArtifactStore | MinioArtif
             secure=settings.minio_secure,
         )
         return MinioArtifactStore(client, settings.minio_bucket)
-    return LocalArtifactStore(settings.release_root / "local-artifacts")
+    return LocalArtifactStore(settings.data_root / "local-artifacts")
 
 
 def run_controller(settings: Settings) -> None:
@@ -121,7 +153,7 @@ def run_controller(settings: Settings) -> None:
         if repository.resume_capacity_paused_batches():
             metrics.clear_capacity_paused()
         _collect_repository_metrics(repository, metrics)
-        metrics.set_storage_free_bytes(shutil.disk_usage(settings.release_root).free)
+        metrics.set_storage_free_bytes(shutil.disk_usage(settings.data_root).free)
         time.sleep(settings.controller_poll_seconds)
 
 

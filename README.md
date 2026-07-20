@@ -38,26 +38,62 @@ OCR применяется только к текстовым блокам. Вс
 
 ## Запуск
 
-В репозитории предусмотрены два профиля развёртывания.
+Для локальной машины и сервера используется один Compose-файл: `infra/compose/local.yml`. Отдельной target-конфигурации, systemd-юнитов, release bundle, подписей и ключей нет.
 
-- `infra/compose/local.yml` запускает PostgreSQL, MinIO, миграции Alembic, контроллер и простаивающий исполнитель для проверки контура управления на локальной машине.
-- `infra/compose/target.yml` предназначен для рабочей среды. Он требует использования неизменяемых образов по их дайджестам и наличия всех необходимых секретов, полностью отключает исходящие сетевые подключения через внутреннюю сеть Docker и выполняет миграции базы данных до запуска контроллера и исполнителей.
+Код, модели, команды MinerU/PaddleOCR, входящие PDF и постоянные данные не копируются в образ. Они монтируются с хоста. Базовый Python-образ нужен только как среда выполнения; при первом запуске сервис `bootstrap` создаёт виртуальное окружение в каталоге данных и ставит зависимости. При изменении Python-кода достаточно повторно запустить нужный контейнер: образ пересобирать не нужно.
+
+Подготовьте на хосте следующие каталоги:
+
+```text
+data/
+  input/                 # PDF для обработки
+  models/
+    qwen-vl/             # локальные веса Qwen-VL
+    qwen3/               # локальные веса Qwen3
+  tools/
+    mineru/run           # исполняемая локальная команда MinerU
+    ocr/                  # detector, route и три recognizer-команды
+  wheels/                # Linux wheels для Python 3.12: зависимости и hatchling
+  runtime/               # PostgreSQL, MinIO, staging и virtualenv
+```
+
+`bootstrap` устанавливает зависимости только из mounted `data/wheels`; сеть, registry и `docker build` для этого не нужны. В каталоге должны быть Linux-совместимые wheels для всех зависимостей из `pyproject.toml`, включая `hatchling`.
+
+Команды MinerU и OCR получают только пути к временным файлам внутри worker. Они должны поддерживать placeholders, уже передаваемые Compose: `{images}`, `{output}` для MinerU и `{input}`, `{output}` для OCR.
+
+Укажите доступные локальные образы моделей и поднимите стек:
+
+```bash
+# Лёгкий режим: PostgreSQL, MinIO, миграции, controller и operator.
+export IDP_PIPELINE_PROFILE_VERSION=2026-07-20.1
+docker compose -f infra/compose/local.yml up -d
+
+# Полный режим: дополнительно Qwen-VL, Qwen3 и worker с GPU.
+docker compose -f infra/compose/local.yml --profile models up -d
+```
+
+Для сервера используйте ту же команду; пути к mounts при необходимости задаются переменными `IDP_SOURCE_ROOT`, `IDP_INPUT_ROOT`, `IDP_DATA_ROOT`, `IDP_MODELS_ROOT` и `IDP_TOOLS_ROOT`.
+
+`IDP_PIPELINE_PROFILE_VERSION` нужно менять при любом изменении кода, моделей, инструментов или параметров, влияющих на результат. Так совпадающий PDF не получит результат, созданный прежней конфигурацией.
 
 Контур управления на базе PostgreSQL использует механизм `FOR UPDATE SKIP LOCKED`, поддерживает аренду заданий с восстановлением по heartbeat, повторные попытки выполнения, помещение заданий в карантин, распределение ресурсов, контракт хранения артефактов в MinIO и атомарную публикацию указателя на итоговый результат.
 
 Batch API принимает только абсолютные пути, расположенные внутри каталогов, перечисленных в `IDP_ALLOWED_ROOTS`. Символические ссылки игнорируются. Для каждого файла сохраняется информация о принятом решении, а перед постановкой задания в очередь PDF копируется из проверенного файлового дескриптора во временное хранилище артефактов. Это гарантирует, что дальнейшая обработка всегда выполняется по неизменяемой копии исходного документа.
 
-Команда отправки создаёт неизменяемый снимок входных данных и сразу возвращает идентификатор пакета:
+Команда отправки создаёт неизменяемый снимок входных данных и сразу возвращает идентификатор пакета. Все operator-команды запускаются в одноразовом Compose-контейнере, поэтому Python не требуется устанавливать на хосте:
 
 ```bash
-idp batch submit /data/incoming/contracts /data/incoming/reports
+docker compose -f infra/compose/local.yml run --rm operator \
+  idp batch submit /input --profile default
 ```
 
 Проверить текущее состояние обработки и получить полный отчёт можно следующими командами:
 
 ```bash
-idp batch status <batch-id>
-idp batch report <batch-id> --format json
+docker compose -f infra/compose/local.yml run --rm operator \
+  idp batch status <batch-id>
+docker compose -f infra/compose/local.yml run --rm operator \
+  idp batch report <batch-id> --format json
 ```
 
 Контроллер продолжает обработку независимо от состояния пользовательского терминала. Если контроллер или исполнитель завершается аварийно, задание автоматически возвращается в очередь после истечения срока аренды (`lease`).
@@ -67,9 +103,9 @@ idp batch report <batch-id> --format json
 Повторная обработка возможна только для элементов со статусом `quarantined`. При этом используется уже сохранённая неизменяемая копия исходного PDF, а не файл, который мог измениться после постановки задания в очередь.
 
 ```bash
-idp batch report <batch-id> --format csv
-idp batch cancel <batch-id>
-idp batch retry <item-id>
+docker compose -f infra/compose/local.yml run --rm operator idp batch report <batch-id> --format csv
+docker compose -f infra/compose/local.yml run --rm operator idp batch cancel <batch-id>
+docker compose -f infra/compose/local.yml run --rm operator idp batch retry <item-id>
 ```
 
 Если содержимое PDF полностью совпадает (по SHA-256), а значение `pipeline_profile_hash` остаётся неизменным, система повторно использует уже опубликованный итоговый пакет результатов. Промежуточные, отменённые и незавершённые результаты никогда не переиспользуются.
@@ -91,40 +127,56 @@ manifest.json
 Документы, которые невозможно обработать по техническим причинам, получают статус `QUARANTINED` и не блокируют обработку остальных файлов в пакете.
 
 
-## Автономное развёртывание (Air-Gapped)
+## Передача образов
 
-Среда выполнения полностью изолирована от сети и не загружает модели, пакеты или какие-либо другие компоненты во время работы. Все необходимые зависимости заранее подготавливаются на сборочном сервере, имеющем доступ к сети. Он формирует неизменяемый пакет выпуска, в который входят OCI-образы с фиксированными версиями, локальный репозиторий Python-пакетов (`wheelhouse`), системные пакеты, модели, токенизаторы, словари OCR, контрольные суммы, SBOM и сценарии импорта.
+Код, модели и tools передаются как обычные каталоги и монтируются на Linux. Docker-образы передаются отдельно, без build и registry.
 
-В состав пакета входит подписанный файл `manifest.json`. Для каждого артефакта в нём зафиксированы путь, тип, размер и контрольная сумма SHA-256. Закрытый ключ Ed25519 используется только на сборочном сервере и никогда не передаётся в рабочую среду. На целевой системе хранится исключительно открытый ключ, предназначенный для проверки подписи. Благодаря этому рабочая среда не может самостоятельно сформировать доверенный выпуск.
+На Windows 11 после загрузки нужных model images в Docker Desktop:
 
-```bash
-# Сборочный сервер.
-# Создать пакет выпуска на основе JSON-спецификации и подписать его закрытым ключом.
-idp release build release-spec.json ./out/release-2026.07.13 --private-key ./release-private.pem
-
-# Целевая система.
-# Проверить пакет, импортировать его и сделать активным.
-idp release verify /media/release-2026.07.13 --public-key /etc/idp/release-public.pem
-idp release import /media/release-2026.07.13
-idp release activate release-2026.07.13
-idp profile validate
+```powershell
+.\scripts\export-images-windows.ps1 -OutputPath E:\transfer\idp-images.tar `
+  -QwenVlImage local/qwen-vl:latest -Qwen3Image local/qwen3:latest
 ```
 
-Импорт выполняется в несколько этапов.
-
-Сначала система проверяет цифровую подпись и контрольные суммы SHA-256 всех артефактов. Затем пакет полностью копируется во временную область (`staging`), где проверка повторяется. Только после успешного завершения обеих проверок выпуск атомарно публикуется в каталоге неизменяемых релизов.
-
-OCI-архивы загружаются исключительно из локальных файлов, успешно прошедших проверку целостности. Доступ к внешним источникам при этом не требуется.
-
-Откат к предыдущей версии выполняется мгновенно: система переключает активную символическую ссылку на один из ранее импортированных и проверенных выпусков. Подключение к интернету для этого также не требуется.
+Скопируйте `idp-images.tar` и `idp-images.tar.sha256` на Linux. Затем на Linux:
 
 ```bash
-idp release rollback release-2026.07.12
+chmod +x scripts/import-images-linux.sh
+./scripts/import-images-linux.sh /media/transfer/idp-images.tar
+export IDP_QWEN_VL_IMAGE=local/qwen-vl:latest
+export IDP_QWEN3_IMAGE=local/qwen3:latest
+export IDP_PIPELINE_PROFILE_VERSION=2026-07-20.1
+docker compose -f infra/compose/local.yml --profile models up -d
 ```
 
-Команда `profile validate` проверяет корректность активного выпуска, параметры автономной работы, доступность PostgreSQL и MinIO ещё до запуска контроллера и исполнителей.
+## Проверка и обновление
 
-Файлы конфигурации systemd, расположенные в каталоге `infra/systemd/`, делают эту проверку обязательной зависимостью при запуске сервисов. Если проверка завершается с ошибкой, контроллер и исполнители не будут запущены.
+Быстрая проверка базы и MinIO после запуска:
+
+```bash
+docker compose -f infra/compose/local.yml run --rm operator
+```
+
+Проверка вместе с локальными model services:
+
+```bash
+docker compose -f infra/compose/local.yml run --rm operator idp healthcheck
+```
+
+Для тестов без GPU и моделей используется тот же mounted код и уже созданный virtualenv:
+
+```bash
+docker compose -f infra/compose/local.yml run --rm operator pytest
+```
+
+Чтобы применить изменение Python-кода, измените `IDP_PIPELINE_PROFILE_VERSION` и перезапустите нужный сервис. Если изменились зависимости в `pyproject.toml`, bootstrap автоматически сравнит его fingerprint и обновит mounted virtualenv:
+
+```bash
+docker compose -f infra/compose/local.yml rm -sf bootstrap
+docker compose -f infra/compose/local.yml --profile models up --force-recreate bootstrap controller worker
+```
+
+Для остановки с сохранением PostgreSQL, MinIO и виртуального окружения достаточно `docker compose -f infra/compose/local.yml down`. Удаление каталога `data/runtime` удаляет всё постоянное состояние.
 
 ## Тестирование
 
