@@ -150,7 +150,10 @@ try {
     }
 
     Write-Host "[5/5] Exporting Docker images and writing checksums..."
-    Invoke-Docker save --output $absoluteOutput $images
+    & docker save "--output=$absoluteOutput" @images
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker save failed with exit code $LASTEXITCODE."
+    }
 
     $hash = Get-FileHash -Algorithm SHA256 -Path $absoluteOutput
     $hashLine = "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), [System.IO.Path]::GetFileName($absoluteOutput)
