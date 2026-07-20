@@ -2,8 +2,8 @@
 # Imports the Windows archive, prepares mounted paths, and starts the full Compose stack.
 set -euo pipefail
 
-archive_path="${1:-./idp-images.tar}"
-project_root="${2:-$(pwd)}"
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+archive_path="${project_root}/transfer/idp-images.tar"
 checksum_path="${archive_path}.sha256"
 metadata_path="${archive_path}.json"
 
@@ -22,7 +22,6 @@ if [[ ! -f "${project_root}/infra/compose/local.yml" ]]; then
   exit 1
 fi
 
-project_root="$(cd "$project_root" && pwd)"
 data_root="${IDP_DATA_ROOT:-${project_root}/data/runtime}"
 input_root="${IDP_INPUT_ROOT:-${project_root}/data/input}"
 models_root="${IDP_MODELS_ROOT:-${project_root}/data/models}"

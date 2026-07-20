@@ -129,19 +129,18 @@ manifest.json
 Скрипт собирает application image, запускает unit-тесты внутри него, поднимает PostgreSQL и MinIO для smoke-проверки, затем сохраняет все Docker-образы в один tar-архив. Docker Desktop должен работать в режиме **Linux containers**. Перед запуском в Docker Desktop должны присутствовать образы Qwen-VL и Qwen3.
 
 ```powershell
-.\scripts\export-images-windows.ps1 -OutputPath E:\transfer\idp-images.tar `
-  -QwenVlImage local/qwen-vl:latest -Qwen3Image local/qwen3:latest
+.\scripts\export-images-windows.ps1
 ```
 
-Получатся три файла: `idp-images.tar`, `idp-images.tar.sha256` и `idp-images.tar.json`. Скопируйте на Linux все три файла, а также репозиторий с кодом, каталоги `data/models` и `data/tools`. Модели и tools не находятся в Docker archive: они намеренно монтируются как обычные директории на сервере.
+Получатся три файла в `transfer/`: `idp-images.tar`, `idp-images.tar.sha256` и `idp-images.tar.json`. Скопируйте на Linux весь репозиторий вместе с каталогами `transfer/`, `data/models/` и `data/tools/`. Модели и tools не находятся в Docker archive: они намеренно монтируются как обычные директории на сервере.
 
 ## Запуск на Linux
 
-Сделайте Linux-скрипт исполняемым. Первый аргумент - путь к архиву, второй, необязательный, - путь к корню репозитория:
+Сделайте Linux-скрипт исполняемым и просто запустите его из репозитория:
 
 ```bash
 chmod +x scripts/import-images-linux.sh
-./scripts/import-images-linux.sh /media/transfer/idp-images.tar /opt/idp/repo
+./scripts/import-images-linux.sh
 ```
 
 Скрипт проверяет SHA-256 и metadata, выполняет `docker load`, проверяет mounted модели и исполняемые MinerU/OCR wrappers, создаёт `.env` с абсолютными путями и запускает полный стек: PostgreSQL, MinIO, controller, Qwen-VL, Qwen3 и worker. В конце выполняется healthcheck. На Linux нужен `jq` для чтения metadata.
