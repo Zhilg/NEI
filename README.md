@@ -53,20 +53,28 @@ data/
   tools/
     mineru/run           # исполняемая локальная команда MinerU
     ocr/                  # detector, route и три recognizer-команды
+  wheels/                # Linux wheels для Python 3.12: зависимости и hatchling
   runtime/               # PostgreSQL, MinIO, staging и virtualenv
 ```
+
+`bootstrap` устанавливает зависимости только из mounted `data/wheels`; сеть, registry и `docker build` для этого не нужны. В каталоге должны быть Linux-совместимые wheels для всех зависимостей из `pyproject.toml`, включая `hatchling`.
 
 Команды MinerU и OCR получают только пути к временным файлам внутри worker. Они должны поддерживать placeholders, уже передаваемые Compose: `{images}`, `{output}` для MinerU и `{input}`, `{output}` для OCR.
 
 Укажите доступные локальные образы моделей и поднимите стек:
 
 ```bash
-export IDP_QWEN_VL_IMAGE=local/qwen-vl:latest
-export IDP_QWEN3_IMAGE=local/qwen3:latest
+# Лёгкий режим: PostgreSQL, MinIO, миграции, controller и operator.
+export IDP_PIPELINE_PROFILE_VERSION=2026-07-20.1
 docker compose -f infra/compose/local.yml up -d
+
+# Полный режим: дополнительно Qwen-VL, Qwen3 и worker с GPU.
+docker compose -f infra/compose/local.yml --profile models up -d
 ```
 
 Для сервера используйте ту же команду; пути к mounts при необходимости задаются переменными `IDP_SOURCE_ROOT`, `IDP_INPUT_ROOT`, `IDP_DATA_ROOT`, `IDP_MODELS_ROOT` и `IDP_TOOLS_ROOT`.
+
+`IDP_PIPELINE_PROFILE_VERSION` нужно менять при любом изменении кода, моделей, инструментов или параметров, влияющих на результат. Так совпадающий PDF не получит результат, созданный прежней конфигурацией.
 
 Контур управления на базе PostgreSQL использует механизм `FOR UPDATE SKIP LOCKED`, поддерживает аренду заданий с восстановлением по heartbeat, повторные попытки выполнения, помещение заданий в карантин, распределение ресурсов, контракт хранения артефактов в MinIO и атомарную публикацию указателя на итоговый результат.
 
@@ -119,6 +127,28 @@ manifest.json
 Документы, которые невозможно обработать по техническим причинам, получают статус `QUARANTINED` и не блокируют обработку остальных файлов в пакете.
 
 
+## Передача образов
+
+Код, модели и tools передаются как обычные каталоги и монтируются на Linux. Docker-образы передаются отдельно, без build и registry.
+
+На Windows 11 после загрузки нужных model images в Docker Desktop:
+
+```powershell
+.\scripts\export-images-windows.ps1 -OutputPath E:\transfer\idp-images.tar `
+  -QwenVlImage local/qwen-vl:latest -Qwen3Image local/qwen3:latest
+```
+
+Скопируйте `idp-images.tar` и `idp-images.tar.sha256` на Linux. Затем на Linux:
+
+```bash
+chmod +x scripts/import-images-linux.sh
+./scripts/import-images-linux.sh /media/transfer/idp-images.tar
+export IDP_QWEN_VL_IMAGE=local/qwen-vl:latest
+export IDP_QWEN3_IMAGE=local/qwen3:latest
+export IDP_PIPELINE_PROFILE_VERSION=2026-07-20.1
+docker compose -f infra/compose/local.yml --profile models up -d
+```
+
 ## Проверка и обновление
 
 Быстрая проверка базы и MinIO после запуска:
@@ -139,11 +169,11 @@ docker compose -f infra/compose/local.yml run --rm operator idp healthcheck
 docker compose -f infra/compose/local.yml run --rm operator pytest
 ```
 
-Чтобы применить изменение Python-кода, перезапустите нужный сервис. Если изменились зависимости в `pyproject.toml`, сначала заново выполните bootstrap, затем перезапустите сервисы:
+Чтобы применить изменение Python-кода, измените `IDP_PIPELINE_PROFILE_VERSION` и перезапустите нужный сервис. Если изменились зависимости в `pyproject.toml`, bootstrap автоматически сравнит его fingerprint и обновит mounted virtualenv:
 
 ```bash
 docker compose -f infra/compose/local.yml rm -sf bootstrap
-docker compose -f infra/compose/local.yml up --force-recreate bootstrap controller worker
+docker compose -f infra/compose/local.yml --profile models up --force-recreate bootstrap controller worker
 ```
 
 Для остановки с сохранением PostgreSQL, MinIO и виртуального окружения достаточно `docker compose -f infra/compose/local.yml down`. Удаление каталога `data/runtime` удаляет всё постоянное состояние.

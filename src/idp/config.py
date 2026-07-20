@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     qwen3_timeout_seconds: float = Field(default=300, gt=0, le=900)
     qwen3_gpu0_slot_unit: str = "role"
     gpu1_slot_unit: str = "role"
-    pipeline_profile_version: str = Field(min_length=1)
+    pipeline_profile_version: str = Field(default="v1", min_length=1)
     mineru_command: tuple[str, ...] = ()
     ocr_detector_command: tuple[str, ...] = ()
     ocr_router_command: tuple[str, ...] = ()

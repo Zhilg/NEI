@@ -13,7 +13,7 @@ x-app: &app
     IDP_ALLOWED_ROOTS: '["/input"]'
     IDP_DATA_ROOT: /data
     IDP_BATCH_STAGING_ROOT: /data/staging
-    IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:?Set a new value whenever code, model, or tool behavior changes}
+    IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
     IDP_OFFLINE_MODE: "true"
     IDP_TELEMETRY_ENABLED: "false"
     HF_HUB_OFFLINE: "1"
@@ -24,6 +24,15 @@ x-app: &app
     - ${IDP_DATA_ROOT:-../../data/runtime}:/data
     - ${IDP_TOOLS_ROOT:-../../data/tools}:/tools:ro
     - ${IDP_WHEELS_ROOT:-../../data/wheels}:/wheels:ro
+
+x-worker-environment: &worker-environment
+  <<: *app-environment
+  IDP_MINERU_COMMAND: '["/tools/mineru/run", "--images", "{images}", "--output", "{output}"]'
+  IDP_OCR_DETECTOR_COMMAND: '["/tools/ocr/detect", "--input", "{input}", "--output", "{output}"]'
+  IDP_OCR_ROUTER_COMMAND: '["/tools/ocr/route", "--input", "{input}", "--output", "{output}"]'
+  IDP_OCR_EAST_SLAVIC_COMMAND: '["/tools/ocr/recognize-east-slavic", "--input", "{input}", "--output", "{output}"]'
+  IDP_OCR_CYRILLIC_COMMAND: '["/tools/ocr/recognize-cyrillic", "--input", "{input}", "--output", "{output}"]'
+  IDP_OCR_LATIN_CJK_COMMAND: '["/tools/ocr/recognize-latin-cjk", "--input", "{input}", "--output", "{output}"]'
 
 services:
   postgres:
@@ -100,6 +109,7 @@ services:
   profiles:
     <<: *app
     command: ["/bin/sh", "-ec", "test -f /data/.dependencies-ready; idp bootstrap"]
+    environment: *worker-environment
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -112,7 +122,7 @@ services:
     environment:
       <<: *app-environment
       IDP_METRICS_PORT: "9100"
-      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:?Set a new value whenever code, model, or tool behavior changes}
+      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -129,15 +139,9 @@ services:
     restart: unless-stopped
     profiles: [models]
     environment:
-      <<: *app-environment
+      <<: *worker-environment
       IDP_METRICS_PORT: "9101"
-      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:?Set a new value whenever code, model, or tool behavior changes}
-      IDP_MINERU_COMMAND: '["/tools/mineru/run", "--images", "{images}", "--output", "{output}"]'
-      IDP_OCR_DETECTOR_COMMAND: '["/tools/ocr/detect", "--input", "{input}", "--output", "{output}"]'
-      IDP_OCR_ROUTER_COMMAND: '["/tools/ocr/route", "--input", "{input}", "--output", "{output}"]'
-      IDP_OCR_EAST_SLAVIC_COMMAND: '["/tools/ocr/recognize-east-slavic", "--input", "{input}", "--output", "{output}"]'
-      IDP_OCR_CYRILLIC_COMMAND: '["/tools/ocr/recognize-cyrillic", "--input", "{input}", "--output", "{output}"]'
-      IDP_OCR_LATIN_CJK_COMMAND: '["/tools/ocr/recognize-latin-cjk", "--input", "{input}", "--output", "{output}"]'
+      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -146,14 +150,14 @@ services:
       minio-init:
         condition: service_completed_successfully
       qwen-vl:
-        condition: service_started
+        condition: service_healthy
       qwen3:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "${IDP_WORKER_METRICS_PORT:-9101}:9101"
 
   qwen-vl:
-    image: ${IDP_QWEN_VL_IMAGE:?Set an existing local Qwen-VL image}
+    image: ${IDP_QWEN_VL_IMAGE:-local/qwen-vl:latest}
     command: ${IDP_QWEN_VL_COMMAND:-serve /models/qwen-vl --host 0.0.0.0 --port 8000}
     restart: unless-stopped
     environment:
@@ -166,9 +170,15 @@ services:
       - ${IDP_MODELS_ROOT:-../../data/models}:/models:ro
     gpus: all
     profiles: [models]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
 
   qwen3:
-    image: ${IDP_QWEN3_IMAGE:?Set an existing local Qwen3 image}
+    image: ${IDP_QWEN3_IMAGE:-local/qwen3:latest}
     command: ${IDP_QWEN3_COMMAND:-serve /models/qwen3 --host 0.0.0.0 --port 8000}
     restart: unless-stopped
     environment:
@@ -181,10 +191,16 @@ services:
       - ${IDP_MODELS_ROOT:-../../data/models}:/models:ro
     gpus: all
     profiles: [models]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
 
   operator:
     <<: *app
-    command: idp healthcheck --no-models
+    command: ["idp", "healthcheck", "--no-models"]
     profiles: [operator]
     depends_on:
       migrate:
