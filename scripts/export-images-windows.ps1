@@ -81,8 +81,7 @@ function Install-ModelSnapshot {
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $Repository | Set-Content -NoNewline -Encoding ascii -Path $repositoryMarker
     Remove-Item -Force $marker -ErrorAction SilentlyContinue
-    $download = "python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub && python -c `"from huggingface_hub import snapshot_download; snapshot_download(repo_id='$Repository', local_dir='/models/$DirectoryName')`""
-    Invoke-Docker run --rm --volume "${modelsDirectory}:/models" $pythonImage /bin/sh -ec $download
+    Invoke-Docker run --rm --volume "${modelsDirectory}:/models" --entrypoint hf $appImage download $Repository --local-dir "/models/$DirectoryName"
     if (-not (Test-ModelSnapshot $target)) { throw "Downloaded model is incomplete: $Repository" }
     New-Item -ItemType File -Force -Path $marker | Out-Null
 }
