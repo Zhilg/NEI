@@ -26,12 +26,20 @@ class RecordingClient:
 
 
 def _reconstruction() -> ReconstructionManifest:
-    reference = ArtifactReference("intermediate/layout.json", "a" * 64, "application/json")
+    reference = ArtifactReference(
+        object_key="intermediate/layout.json",
+        sha256="a" * 64,
+        media_type="application/json",
+    )
     return ReconstructionManifest(
         schema_version="reconstruction-manifest-v1",
         source_sha256="b" * 64,
         layout_manifest=reference,
-        ocr_manifest=ArtifactReference("intermediate/ocr.json", "c" * 64, "application/json"),
+        ocr_manifest=ArtifactReference(
+            object_key="intermediate/ocr.json",
+            sha256="c" * 64,
+            media_type="application/json",
+        ),
         model_id="Qwen2.5-VL-32B-Instruct",
         model_revision="pinned",
         prompt_version="reconstruction-v1",
