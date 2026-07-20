@@ -56,12 +56,18 @@ def _documents(store: LocalArtifactStore, block_count: int = 2):
                 attributes={},
             )
         )
-    layout_reference = ArtifactReference("layout.json", "a" * 64, "application/json")
-    ocr_reference = ArtifactReference("ocr.json", "b" * 64, "application/json")
+    layout_reference = ArtifactReference(
+        object_key="layout.json", sha256="a" * 64, media_type="application/json"
+    )
+    ocr_reference = ArtifactReference(
+        object_key="ocr.json", sha256="b" * 64, media_type="application/json"
+    )
     layout = LayoutManifest(
         schema_version="layout-manifest-v1",
         source_sha256="c" * 64,
-        raw_mineru=ArtifactReference("raw.json", "d" * 64, "application/json"),
+        raw_mineru=ArtifactReference(
+            object_key="raw.json", sha256="d" * 64, media_type="application/json"
+        ),
         pages=(LayoutPage(1, page.reference, PageTransform(1, 100, 100, 100, 100, 72, 1, 1)),),
         blocks=tuple(blocks),
     )
