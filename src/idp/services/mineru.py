@@ -200,10 +200,9 @@ class LayoutAdapter:
                 reading_order += 1
         if not pending_blocks:
             raise MinerUError("MinerU middle.json contains no bbox layout blocks")
-        vendor_paths = [block[5] for block in pending_blocks]
         path_to_id = {
             block_path: block_id
-            for block_path, (_, block_id, _, _, _, _, _, _, _, _) in zip(vendor_paths, pending_blocks)
+            for _, block_id, _, _, _, block_path, _, _, _, _ in pending_blocks
         }
         blocks = tuple(
             LayoutBlock(
@@ -215,16 +214,16 @@ class LayoutAdapter:
                 parent_block_id=path_to_id.get(parent_path),
                 relations=relations,
                 crop=crop.reference,
-                vendor_path=vendor_path,
+                vendor_path=block_path,
                 attributes=attributes,
             )
-            for vendor_path, (
+            for (
                 page_number,
                 block_id,
                 kind,
                 bbox,
                 order,
-                _block_path,
+                block_path,
                 parent_path,
                 relations,
                 crop,
