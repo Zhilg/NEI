@@ -144,7 +144,7 @@ services:
   qwen-vl:
     image: ${IDP_QWEN_VL_IMAGE:-local/qwen-vl:latest}
     pull_policy: never
-    command: ${IDP_QWEN_VL_COMMAND:-serve /models/qwen-vl --host 0.0.0.0 --port 8000}
+    command: ["--model", "/models/qwen-vl", "--served-model-name", "Qwen2.5-VL-32B-Instruct", "--quantization", "awq", "--dtype", "half", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
     networks: [idp_internal]
     environment:
@@ -154,7 +154,7 @@ services:
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
     volumes:
-      - ${IDP_MODELS_ROOT:-../../data/models}:/models:ro
+      - ${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro
     gpus: all
     profiles: [models]
     healthcheck:
@@ -167,7 +167,7 @@ services:
   qwen3:
     image: ${IDP_QWEN3_IMAGE:-local/qwen3:latest}
     pull_policy: never
-    command: ${IDP_QWEN3_COMMAND:-serve /models/qwen3 --host 0.0.0.0 --port 8000}
+    command: ["--model", "/models/qwen3", "--served-model-name", "Qwen3-14B", "--quantization", "awq", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
     networks: [idp_internal]
     environment:
@@ -177,7 +177,7 @@ services:
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
     volumes:
-      - ${IDP_MODELS_ROOT:-../../data/models}:/models:ro
+      - ${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro
     gpus: all
     profiles: [models]
     healthcheck:

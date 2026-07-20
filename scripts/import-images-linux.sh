@@ -6,6 +6,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 archive_path="${project_root}/transfer/idp-images.tar"
 checksum_path="${archive_path}.sha256"
 metadata_path="${archive_path}.json"
+completion_path="${project_root}/transfer/EXPORT-COMPLETE.txt"
 
 if ! command -v docker >/dev/null 2>&1; then
   printf '%s\n' 'Docker CLI was not found in PATH.' >&2
@@ -24,7 +25,7 @@ fi
 
 data_root="${IDP_DATA_ROOT:-${project_root}/data/runtime}"
 input_root="${IDP_INPUT_ROOT:-${project_root}/data/input}"
-models_root="${IDP_MODELS_ROOT:-${project_root}/data/models}"
+models_root="${IDP_MODELS_ROOT:-${project_root}/transfer/models}"
 tools_root="${IDP_TOOLS_ROOT:-${project_root}/data/tools}"
 
 existing_env_value() {
@@ -44,15 +45,18 @@ if [[ ! -f "$metadata_path" ]]; then
   printf 'Metadata file does not exist: %s\n' "$metadata_path" >&2
   exit 1
 fi
-if ! command -v jq >/dev/null 2>&1; then
-  printf '%s\n' 'jq is required to read image metadata.' >&2
+if [[ ! -f "$completion_path" ]]; then
+  printf 'Windows export completion marker does not exist: %s\n' "$completion_path" >&2
   exit 1
 fi
 (cd "$(dirname "$archive_path")" && sha256sum --check "$(basename "$checksum_path")")
 
 docker load --input "$archive_path"
+docker run --rm --entrypoint python \
+  --volume "$metadata_path:/metadata.json:ro" local/idp-app:latest \
+  -c "import json; data=json.load(open('/metadata.json')); required={'app_image','postgres_image','minio_image','minio_mc_image','qwen_vl_image','qwen3_image','pipeline_profile_version'}; assert required <= data.keys()"
 
-mkdir -p "$data_root" "$input_root" "$models_root/qwen-vl" "$models_root/qwen3" "$tools_root/mineru" "$tools_root/ocr"
+mkdir -p "$data_root" "$input_root" "$tools_root/mineru" "$tools_root/ocr"
 
 if [[ ! -x "$tools_root/mineru/run" ]]; then
   printf 'Missing executable MinerU wrapper: %s\n' "$tools_root/mineru/run" >&2
@@ -66,27 +70,35 @@ for tool in detect route recognize-east-slavic recognize-cyrillic recognize-lati
   fi
 done
 
-if [[ -z "$(find "$models_root/qwen-vl" -mindepth 1 -print -quit)" ]]; then
-  printf 'Qwen-VL model directory is empty: %s\n' "$models_root/qwen-vl" >&2
+for model in qwen-vl qwen3; do
+  if [[ ! -f "$models_root/$model/.download-complete" ]] \
+    || [[ ! -f "$models_root/$model/config.json" ]] \
+    || [[ -z "$(find "$models_root/$model" -type f -name '*.safetensors' -print -quit)" ]]; then
+    printf 'Mounted model is missing or incomplete: %s\n' "$models_root/$model" >&2
+    exit 1
+  fi
+done
+if [[ ! -f "$models_root/SHA256SUMS" ]]; then
+  printf 'Model checksum manifest is missing: %s\n' "$models_root/SHA256SUMS" >&2
   exit 1
 fi
-if [[ -z "$(find "$models_root/qwen3" -mindepth 1 -print -quit)" ]]; then
-  printf 'Qwen3 model directory is empty: %s\n' "$models_root/qwen3" >&2
-  exit 1
-fi
+printf '%s\n' 'Verifying mounted model files...'
+(cd "$models_root" && sha256sum --check SHA256SUMS)
 
 export IDP_SOURCE_ROOT="$project_root"
 export IDP_INPUT_ROOT="$input_root"
 export IDP_DATA_ROOT="$data_root"
 export IDP_MODELS_ROOT="$models_root"
 export IDP_TOOLS_ROOT="$tools_root"
-export IDP_APP_IMAGE="$(jq -er '.app_image' "$metadata_path")"
-export IDP_POSTGRES_IMAGE="$(jq -er '.postgres_image' "$metadata_path")"
-export IDP_MINIO_IMAGE="$(jq -er '.minio_image' "$metadata_path")"
-export IDP_MINIO_MC_IMAGE="$(jq -er '.minio_mc_image' "$metadata_path")"
-export IDP_QWEN_VL_IMAGE="$(jq -er '.qwen_vl_image' "$metadata_path")"
-export IDP_QWEN3_IMAGE="$(jq -er '.qwen3_image' "$metadata_path")"
-export IDP_PIPELINE_PROFILE_VERSION="$(jq -er '.pipeline_profile_version' "$metadata_path")"
+export IDP_APP_IMAGE="local/idp-app:latest"
+export IDP_POSTGRES_IMAGE="postgres:16.9-alpine"
+export IDP_MINIO_IMAGE="minio/minio:RELEASE.2025-04-22T22-12-26Z"
+export IDP_MINIO_MC_IMAGE="minio/mc:RELEASE.2025-05-21T01-59-54Z"
+export IDP_QWEN_VL_IMAGE="local/qwen-vl:latest"
+export IDP_QWEN3_IMAGE="local/qwen3:latest"
+archive_hash="$(cut -d ' ' -f 1 "$checksum_path")"
+models_hash="$(sha256sum "$models_root/SHA256SUMS" | cut -d ' ' -f 1)"
+export IDP_PIPELINE_PROFILE_VERSION="$(printf '%s\n%s\n' "$archive_hash" "$models_hash" | sha256sum | cut -c 1-16)"
 export IDP_POSTGRES_PASSWORD="${IDP_POSTGRES_PASSWORD:-$(existing_env_value IDP_POSTGRES_PASSWORD)}"
 export IDP_MINIO_ACCESS_KEY="${IDP_MINIO_ACCESS_KEY:-$(existing_env_value IDP_MINIO_ACCESS_KEY)}"
 export IDP_MINIO_SECRET_KEY="${IDP_MINIO_SECRET_KEY:-$(existing_env_value IDP_MINIO_SECRET_KEY)}"
