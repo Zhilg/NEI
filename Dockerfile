@@ -18,4 +18,11 @@ RUN pip install --no-index --find-links=/app/wheels hatchling \
     && pip install --no-index --find-links=/app/wheels --no-build-isolation ".[dev]" \
     && rm -rf /app/wheels
 
+COPY tools_wheels ./tools_wheels
+RUN pip install --no-index --find-links=/app/tools_wheels \
+    paddlepaddle paddleocr magic-pdf \
+    && rm -rf /app/tools_wheels
+
+RUN mkdir -p /tools/mineru /tools/ocr
+
 CMD ["idp"]

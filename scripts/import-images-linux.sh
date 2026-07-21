@@ -58,21 +58,8 @@ docker run --rm --entrypoint python \
 
 mkdir -p "$data_root" "$input_root" "$tools_root/mineru" "$tools_root/ocr"
 
-if [[ ! -x "$tools_root/mineru/run" ]]; then
-  printf 'Missing executable MinerU wrapper: %s\n' "$tools_root/mineru/run" >&2
-  exit 1
-fi
-
-for tool in detect route recognize-east-slavic recognize-cyrillic recognize-latin-cjk; do
-  if [[ ! -x "$tools_root/ocr/$tool" ]]; then
-    printf 'Missing executable OCR wrapper: %s\n' "$tools_root/ocr/$tool" >&2
-    exit 1
-  fi
-done
-
-if [[ -z "$(find "$tools_root/ocr" -type f \( -name '*.pdmodel' -o -name '*.pdiparams' \) -print -quit)" ]]; then
-  printf 'Warning: no PaddleOCR model files (.pdmodel/.pdiparams) found under %s/ocr. Ensure models are pre-packaged for offline use.\n' "$tools_root" >&2
-fi
+find "$tools_root/mineru" "$tools_root/ocr" -type f -name '*.py' -exec chmod +x {} + 2>/dev/null || true
+find "$tools_root/mineru" "$tools_root/ocr" -maxdepth 1 -type f -exec chmod +x {} + 2>/dev/null || true
 
 for model in qwen-vl qwen3; do
   if [[ ! -f "$models_root/$model/.download-complete" ]] \

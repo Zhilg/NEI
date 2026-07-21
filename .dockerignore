@@ -9,3 +9,5 @@ docs
 infra
 !wheels/
 !wheels/**
+!tools_wheels/
+!tools_wheels/**
