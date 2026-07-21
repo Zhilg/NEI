@@ -204,7 +204,7 @@ class BatchDiscovery:
                 observed_at=observed_at,
                 source_stat=first,
             ), None
-        if candidate.suffix.lower() != ".pdf":
+        if candidate.suffix.lower() not in {".pdf", ".docx"}:
             return self._item(
                 root,
                 candidate,
@@ -269,7 +269,7 @@ class BatchDiscovery:
                 source_stat=expected,
             ), None
         item_id = uuid4()
-        staged_source = None if staging_directory is None else staging_directory / f"{item_id}.pdf"
+        staged_source = None if staging_directory is None else staging_directory / f"{item_id}{candidate.suffix.lower()}"
         try:
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode) or not self._same_snapshot(expected, before):

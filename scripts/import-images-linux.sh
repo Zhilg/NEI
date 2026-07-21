@@ -70,6 +70,10 @@ for tool in detect route recognize-east-slavic recognize-cyrillic recognize-lati
   fi
 done
 
+if [[ -z "$(find "$tools_root/ocr" -type f \( -name '*.pdmodel' -o -name '*.pdiparams' \) -print -quit)" ]]; then
+  printf 'Warning: no PaddleOCR model files (.pdmodel/.pdiparams) found under %s/ocr. Ensure models are pre-packaged for offline use.\n' "$tools_root" >&2
+fi
+
 for model in qwen-vl qwen3; do
   if [[ ! -f "$models_root/$model/.download-complete" ]] \
     || [[ ! -f "$models_root/$model/config.json" ]] \
@@ -145,12 +149,12 @@ if docker compose -f infra/compose/local.yml run --rm --no-deps operator \
 fi
 printf '%s\n' 'Offline check passed: runtime network is internal and external HTTPS is blocked.'
 
-if find "$input_root" -type f -iname '*.pdf' -print -quit | grep -q .; then
-  printf '%s\n' 'Submitting PDFs from data/input...'
+if find "$input_root" -type f \( -iname '*.pdf' -o -iname '*.docx' \) -print -quit | grep -q .; then
+  printf '%s\n' 'Submitting PDFs and DOCX from data/input...'
   docker compose -f infra/compose/local.yml run --rm operator \
     idp batch submit /input --profile default
 else
-  printf 'No PDF files found in %s; stack is running without a batch.\n' "$input_root"
+  printf 'No PDF or DOCX files found in %s; stack is running without a batch.\n' "$input_root"
 fi
 
 printf '%s\n' 'Images imported and full IDP stack started.'

@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     ocr_east_slavic_command: tuple[str, ...] = ()
     ocr_cyrillic_command: tuple[str, ...] = ()
     ocr_latin_cjk_command: tuple[str, ...] = ()
+    docx_converter_command: tuple[str, ...] = ()
     data_root: Path = Path("/data")
     batch_staging_root: Path = Path("/data/staging")
     offline_mode: bool = True
@@ -138,6 +139,7 @@ class Settings(BaseSettings):
         "ocr_east_slavic_command",
         "ocr_cyrillic_command",
         "ocr_latin_cjk_command",
+        "docx_converter_command",
         mode="before",
     )
     @classmethod
