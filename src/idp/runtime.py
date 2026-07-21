@@ -58,6 +58,7 @@ from idp.services.qwen_vl import (
 from idp.services.controller import Controller
 from idp.services.batches import BatchService
 from idp.services.vision import (
+    CommandDocxConverter,
     ImageQualityGate,
     PyMuPdfRenderer,
     RenderLimits,
@@ -107,6 +108,7 @@ def register_default_profile(settings: Settings, *, name: str = "default") -> st
         "ocr_east_slavic_command": settings.ocr_east_slavic_command,
         "ocr_cyrillic_command": settings.ocr_cyrillic_command,
         "ocr_latin_cjk_command": settings.ocr_latin_cjk_command,
+        "docx_converter_command": settings.docx_converter_command,
         "ocr_max_lines_per_block": settings.ocr_max_lines_per_block,
         "ocr_min_token_confidence": settings.ocr_min_token_confidence,
         "qwen_vl_model_id": settings.qwen_vl_model_id,
@@ -208,6 +210,9 @@ def run_worker(settings: Settings) -> None:
             quality_gate=ImageQualityGate(
                 settings.upscale_entropy_tolerance, settings.upscale_clipping_tolerance
             ),
+            docx_converter=CommandDocxConverter(settings.docx_converter_command)
+            if settings.docx_converter_command
+            else None,
         ),
         repository,
         RenderLimits(

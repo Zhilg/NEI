@@ -33,6 +33,7 @@ x-worker-environment: &worker-environment
   IDP_OCR_EAST_SLAVIC_COMMAND: '["/tools/ocr/recognize-east-slavic", "--input", "{input}", "--output", "{output}"]'
   IDP_OCR_CYRILLIC_COMMAND: '["/tools/ocr/recognize-cyrillic", "--input", "{input}", "--output", "{output}"]'
   IDP_OCR_LATIN_CJK_COMMAND: '["/tools/ocr/recognize-latin-cjk", "--input", "{input}", "--output", "{output}"]'
+  IDP_DOCX_CONVERTER_COMMAND: '["soffice", "--headless", "--convert-to", "pdf", "--outdir", "{output}", "{input}"]'
 
 services:
   postgres:
@@ -125,8 +126,16 @@ services:
     profiles: [models]
     environment:
       <<: *worker-environment
+      CUDA_VISIBLE_DEVICES: ${IDP_QWEN3_GPU:-1}
       IDP_METRICS_PORT: "9101"
       IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${IDP_QWEN3_GPU:-1}"]
+              capabilities: [gpu]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -144,7 +153,7 @@ services:
   qwen-vl:
     image: ${IDP_QWEN_VL_IMAGE:-local/qwen-vl:latest}
     pull_policy: never
-    command: ["--model", "/models/qwen-vl", "--served-model-name", "Qwen2.5-VL-32B-Instruct", "--quantization", "awq", "--dtype", "half", "--host", "0.0.0.0", "--port", "8000", "--max-model-len", "54720"]
+    command: ["--model", "/models/qwen-vl", "--served-model-name", "Qwen2.5-VL-32B-Instruct", "--quantization", "awq", "--dtype", "half", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
     networks: [idp_internal]
     environment:
@@ -155,7 +164,13 @@ services:
       VLLM_NO_USAGE_STATS: "1"
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${IDP_QWEN_VL_GPU:-0}"]
+              capabilities: [gpu]
     profiles: [models]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
@@ -178,7 +193,13 @@ services:
       VLLM_NO_USAGE_STATS: "1"
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${IDP_QWEN3_GPU:-1}"]
+              capabilities: [gpu]
     profiles: [models]
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]

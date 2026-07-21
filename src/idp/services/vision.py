@@ -150,6 +150,41 @@ class CommandSwinIRUpscaler:
             return target.read_bytes()
 
 
+class CommandDocxConverter:
+    """Pinned local DOCX-to-PDF converter wrapper using files."""
+
+    def __init__(self, command: tuple[str, ...], working_directory: Path | None = None) -> None:
+        if not command:
+            raise ValueError("DOCX converter command must not be empty")
+        self._command = command
+        self._working_directory = working_directory
+
+    def convert(self, docx_path: Path) -> Path:
+        """Run the configured local command to convert a DOCX file to PDF."""
+        with tempfile.TemporaryDirectory(prefix="idp-docx-") as temporary:
+            root = Path(temporary)
+            command = [
+                argument.format(input=str(docx_path), output=str(root))
+                for argument in self._command
+            ]
+            try:
+                subprocess.run(
+                    command,
+                    cwd=self._working_directory,
+                    check=True,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=600,
+                )
+            except (OSError, subprocess.SubprocessError) as error:
+                raise VisionPreparationError(f"local DOCX converter failed: {error}") from error
+            pdf_files = sorted(root.glob("*.pdf"))
+            if not pdf_files:
+                raise VisionPreparationError("local DOCX converter did not create PDF output")
+            return pdf_files[0]
+
+
 class PyMuPdfRenderer:
     """Deterministic RGB renderer that intentionally never asks MuPDF for text content."""
 
@@ -231,7 +266,7 @@ class ImageQualityGate:
 
 
 class VisionPreparation:
-    """Render source PDF, optionally upscale each page, and write provenance artifacts."""
+    """Render source PDF or convert DOCX, optionally upscale each page, and write provenance artifacts."""
 
     def __init__(
         self,
@@ -239,11 +274,13 @@ class VisionPreparation:
         artifacts: ArtifactStore,
         quality_gate: ImageQualityGate,
         upscaler: Upscaler | None = None,
+        docx_converter: CommandDocxConverter | None = None,
     ) -> None:
         self._renderer = renderer
         self._artifacts = artifacts
         self._quality_gate = quality_gate
         self._upscaler = upscaler
+        self._docx_converter = docx_converter
 
     def prepare(
         self,
@@ -334,10 +371,15 @@ class VisionPreparation:
         if source.sha256 != source_sha256:
             raise VisionPreparationError("source artifact hash does not match submitted source SHA-256")
         with tempfile.TemporaryDirectory(prefix="idp-render-") as temporary:
-            local_pdf = Path(temporary) / "source.pdf"
-            self._artifacts.get_file(source, local_pdf)
+            local_source = Path(temporary) / ("source.docx" if source.media_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" else "source.pdf")
+            self._artifacts.get_file(source, local_source)
+            pdf_path = local_source
+            if local_source.suffix.lower() == ".docx":
+                if self._docx_converter is None:
+                    raise VisionPreparationError("DOCX source requires a configured docx_converter_command")
+                pdf_path = self._docx_converter.convert(local_source)
             return self.prepare(
-                pdf_path=local_pdf,
+                pdf_path=pdf_path,
                 source_sha256=source_sha256,
                 artifact_prefix=artifact_prefix,
                 limits=limits,

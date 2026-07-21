@@ -72,10 +72,16 @@ class BatchService:
                 item = next(item for item in result.snapshot.items if item.item_id == item_id)
                 if item.source_sha256 is None:
                     raise RuntimeError(f"stable staged source has no SHA-256: {item_id}")
+                extension = staged_file.suffix.lower()
+                media_type = (
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    if extension == ".docx"
+                    else "application/pdf"
+                )
                 artifact = self._artifact_store.put_file(
-                    object_key=f"sources/{result.snapshot.batch_id}/{item_id}.pdf",
+                    object_key=f"sources/{result.snapshot.batch_id}/{item_id}{extension}",
                     source=staged_file,
-                    media_type="application/pdf",
+                    media_type=media_type,
                     retention=ArtifactRetention.TEMPORARY,
                 )
                 if artifact.reference.sha256 != item.source_sha256:
