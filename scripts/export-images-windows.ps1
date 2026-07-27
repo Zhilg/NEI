@@ -4,12 +4,19 @@ Builds, tests, and exports every Docker image needed on Linux.
 
 .DESCRIPTION
 Run from Windows 11 with Docker Desktop configured for Linux containers. The script:
-  1. Builds local/idp-app from this repository using the local wheelhouse.
-  2. Runs unit tests inside that image.
-  3. Downloads and verifies model snapshots.
-  4. Downloads MinerU, PaddleOCR and SwinIR tool models and creates wrapper scripts.
-  5. Saves the application, database, object storage, and model images to one .tar archive.
+  1. Validates every runtime asset already available in this working tree.
+  2. Builds local/idp-app using the local Linux wheelhouses and runs its unit tests.
+  3. Exports only locally available Linux Docker images, models, tools, source, and configuration.
+  4. Produces an integrity-checked, self-contained Ubuntu deployment bundle with a single bash entry point.
+
+ No download, pull, package installation, or other network operation is performed by this script.
+ Prepare all images, model snapshots, wheels, and tool assets locally before running it.
 #>
+
+param(
+    [switch]$SkipProvisioning,
+    [switch]$ProvisionSwinirOnly
+)
 
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot ".."))
@@ -33,6 +40,9 @@ $toolsDirectory = Join-Path -Path $projectRoot -ChildPath "data\tools"
 $ocrModelsDirectory = Join-Path $toolsDirectory "ocr"
 $mineruModelsDirectory = Join-Path $toolsDirectory "mineru"
 $swinirDirectory = Join-Path $toolsDirectory "swinir"
+$mineruLayoutCheckpointRelative = "models\Layout\YOLO\doclayout_yolo_docstructbench_imgsz1280_2501.pt"
+$mineruLayoutCheckpoint = Join-Path $mineruModelsDirectory $mineruLayoutCheckpointRelative
+$mineruConfig = Join-Path $mineruModelsDirectory "magic-pdf.json"
 
 function Invoke-Docker {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
@@ -71,6 +81,10 @@ function Install-ModelSnapshot {
     if ($storedRepository -and $storedRepository -ne $Repository) { Remove-Item -Recurse -Force $target }
     if ((Test-Path $marker) -and $storedRepository -eq $Repository -and (Test-ModelSnapshot $target)) {
         Write-Host "Model already downloaded: $Repository"
+        return
+    }
+    if ((Test-ModelSnapshot $target) -and (Test-ModelChecksums)) {
+        Write-Host "Model already verified by SHA-256 checksums: $Repository"
         return
     }
     if (-not $storedRepository -and (Test-Path $target)) { Remove-Item -Recurse -Force $target }
@@ -118,14 +132,26 @@ function Write-ToolWrapper {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
 
-New-Item -ItemType Directory -Force -Path $transferDirectory | Out-Null
-Remove-Item -Force $completionPath -ErrorAction SilentlyContinue
-
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker Desktop CLI was not found in PATH."
+function Install-SwinirModel {
+    New-Item -ItemType Directory -Force -Path $swinirDirectory | Out-Null
+    Invoke-Docker run --rm --env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0 --mount "type=bind,source=$swinirDirectory,target=/models" --workdir /models --entrypoint bash $appImage -c @"
+set -e
+if [ ! -f /models/RealESRGAN_x4plus.pth ]; then
+  echo 'Downloading SwinIR model...'
+  python -c "
+from urllib.request import urlretrieve
+urlretrieve('https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth', '/models/RealESRGAN_x4plus.pth')
+"
+fi
+if [ ! -s /models/RealESRGAN_x4plus.pth ]; then
+  echo 'SwinIR model download did not produce RealESRGAN_x4plus.pth.' >&2
+  exit 1
+fi
+echo 'SwinIR model ready.'
+"@
 }
 
-try {
+function Invoke-LegacyAssetProvisioning {
     Write-Host "[1/10] Checking Docker Desktop and downloading runtime images..."
     Invoke-Docker version
     Invoke-Docker pull $pythonImage
@@ -139,21 +165,18 @@ try {
     Write-Host "[2/10] Preparing Python wheels and building the application image..."
     New-Item -ItemType Directory -Force -Path $wheelsDirectory | Out-Null
     Invoke-Docker run --rm --mount "type=bind,source=$projectRoot,target=/workspace" --workdir /workspace --entrypoint python $pythonImage -m pip download --dest /workspace/wheels --only-binary=:all: ".[dev]" hatchling
-
     Write-Host "[3/10] Downloading tool wheels (PaddleOCR, MinerU)..."
     New-Item -ItemType Directory -Force -Path $toolsWheelsDirectory | Out-Null
-    Invoke-Docker run --rm --mount "type=bind,source=$projectRoot,target=/workspace" --workdir /workspace --entrypoint python $pythonImage -m pip download --dest /workspace/tools_wheels --only-binary=:all: paddlepaddle paddleocr magic-pdf 2>$null
+    Invoke-Docker run --rm --mount "type=bind,source=$projectRoot,target=/workspace" --workdir /workspace --entrypoint python $pythonImage -m pip download --dest /workspace/tools_wheels --only-binary=:all: paddlepaddle paddleocr magic-pdf doclayout-yolo==0.0.4 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Binary-only download had issues, trying with source allowed..."
-        Invoke-Docker run --rm --mount "type=bind,source=$projectRoot,target=/workspace" --workdir /workspace --entrypoint python $pythonImage -m pip download --dest /workspace/tools_wheels paddlepaddle paddleocr magic-pdf 2>$null
+        Invoke-Docker run --rm --mount "type=bind,source=$projectRoot,target=/workspace" --workdir /workspace --entrypoint python $pythonImage -m pip download --dest /workspace/tools_wheels paddlepaddle paddleocr magic-pdf doclayout-yolo==0.0.4 2>$null
     }
 
     Write-Host "[4/10] Building the application image with tool dependencies..."
     Invoke-Docker build --pull=false --tag $appImage $projectRoot
-
     Write-Host "[5/10] Running unit tests..."
     Invoke-Docker run --rm --entrypoint pytest $appImage tests/unit
-
     Write-Host "[6/10] Checking and downloading mounted AWQ model snapshots..."
     New-Item -ItemType Directory -Force -Path $modelsDirectory | Out-Null
     if ((Test-Path (Join-Path $modelsDirectory "SHA256SUMS")) -and -not (Test-ModelChecksums)) {
@@ -174,11 +197,9 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $ocrModelsDirectory "rec" "cyrillic") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $ocrModelsDirectory "rec" "latin-cjk") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $ocrModelsDirectory "cls") | Out-Null
-
     $paddleDetUrl = "https://paddleocr.bj.bcebos.com/PP-OCRv5/chinese/ch_PP-OCRv5_det_infer.tar"
     $paddleRecUrl = "https://paddleocr.bj.bcebos.com/PP-OCRv5/chinese/ch_PP-OCRv5_rec_mobile_infer.tar"
     $paddleClsUrl = "https://paddleocr.bj.bcebos.com/PP-OCRv5/chinese/ch_PP-OCRv5_cls_infer.tar"
-
     Invoke-Docker run --rm --mount "type=bind,source=$ocrModelsDirectory,target=/models" --workdir /models --entrypoint bash $appImage -c @"
 set -e
 if [ ! -f /models/det/inference.pdmodel ]; then
@@ -206,25 +227,35 @@ if [ ! -f /models/cls/inference.pdmodel ]; then
 fi
 echo 'PaddleOCR models ready.'
 "@
-
-    Write-Host "[8/10] Downloading MinerU layout models..."
+    Write-Host "[8/10] Downloading MinerU layout model and configuration..."
     New-Item -ItemType Directory -Force -Path $mineruModelsDirectory | Out-Null
     Invoke-Docker run --rm --env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0 --mount "type=bind,source=$mineruModelsDirectory,target=/models" --workdir /models --entrypoint bash $appImage -c @"
 set -e
-if [ ! -f /models/doclayout_yolo/config.json ]; then
-  echo 'Downloading MinerU doclayout_yolo model...'
-  mkdir -p /models/doclayout_yolo
+checkpoint='/models/models/Layout/YOLO/doclayout_yolo_docstructbench_imgsz1280_2501.pt'
+if [ ! -s "`$checkpoint" ]; then
+  echo 'Downloading MinerU doclayout_yolo checkpoint...'
   python -c "
 from huggingface_hub import snapshot_download
-snapshot_download('opendatalab/PDF-Extract-Kit-1.0', allow_patterns=['models/doclayout_yolo/*'], local_dir='/models/pdf-extract-kit', local_dir_use_symlinks=False)
+snapshot_download('opendatalab/PDF-Extract-Kit-1.0', allow_patterns=['models/Layout/YOLO/doclayout_yolo_docstructbench_imgsz1280_2501.pt'], local_dir='/models/pdf-extract-kit', local_dir_use_symlinks=False)
 " 2>/dev/null || true
-  if [ -d /models/pdf-extract-kit/models/doclayout_yolo ]; then
-    cp -r /models/pdf-extract-kit/models/doclayout_yolo/* /models/doclayout_yolo/
+  if [ -s /models/pdf-extract-kit/models/Layout/YOLO/doclayout_yolo_docstructbench_imgsz1280_2501.pt ]; then
+    mkdir -p "`$(dirname "`$checkpoint")"
+    cp /models/pdf-extract-kit/models/Layout/YOLO/doclayout_yolo_docstructbench_imgsz1280_2501.pt "`$checkpoint"
   fi
 fi
-echo 'MinerU models ready.'
+if [ ! -s /models/magic-pdf.json ]; then
+  cat > /models/magic-pdf.json <<'EOF'
+{
+  "models-dir": "/tools/mineru/models",
+  "device-mode": "cuda",
+  "layout-config": {
+    "model": "doclayout_yolo"
+  }
+}
+EOF
+fi
+echo 'MinerU assets ready.'
 "@
-
     Write-Host "[9/10] Creating tool wrapper scripts..."
     $mineruRun = @'
 #!/usr/bin/env python3
@@ -558,7 +589,6 @@ def main():
 if __name__ == '__main__':
     main()
 '@
-
     Write-ToolWrapper -Path (Join-Path $mineruModelsDirectory "run") -Content $mineruRun
     Write-ToolWrapper -Path (Join-Path $ocrModelsDirectory "detect") -Content $ocrDetect
     Write-ToolWrapper -Path (Join-Path $ocrModelsDirectory "route") -Content $ocrRoute
@@ -566,26 +596,166 @@ if __name__ == '__main__':
     Write-ToolWrapper -Path (Join-Path $ocrModelsDirectory "recognize-cyrillic") -Content $ocrRecognizeCyrillic
     Write-ToolWrapper -Path (Join-Path $ocrModelsDirectory "recognize-latin-cjk") -Content $ocrRecognizeLatinCjk
 
-    New-Item -ItemType Directory -Force -Path $swinirDirectory | Out-Null
-    Invoke-Docker run --rm --env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0 --mount "type=bind,source=$swinirDirectory,target=/models" --workdir /models --entrypoint bash $appImage -c @"
-set -e
-if [ ! -f /models/RealESRGAN_x4plus.pth ]; then
-  echo 'Downloading SwinIR model...'
-  python -c "
-from huggingface_hub import hf_hub_download
-hf_hub_download(repo_id='xinntao/Real-ESRGAN', filename='weights/RealESRGAN_x4plus.pth', local_dir='/models', local_dir_use_symlinks=False)
-" 2>/dev/null || true
-  if [ -f /models/weights/RealESRGAN_x4plus.pth ]; then
-    mv /models/weights/RealESRGAN_x4plus.pth /models/
-  fi
-fi
-echo 'SwinIR model ready.'
-"@
+    Install-SwinirModel
+}
 
-    Write-Host "[10/10] Exporting Docker images and writing checksums..."
+function Test-LinuxAmd64Image {
+    param([string]$Image)
+
+    $platform = (& docker image inspect --format '{{.Os}}/{{.Architecture}}' $Image).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to determine platform for Docker image $Image."
+    }
+    if ($platform -ne "linux/amd64") {
+        throw "Docker image $Image has platform $platform; the offline Ubuntu bundle requires linux/amd64 images."
+    }
+}
+
+function Assert-NonEmptyFile {
+    param([string]$Path, [string]$Description)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or (Get-Item -LiteralPath $Path).Length -eq 0) {
+        throw "Required local asset is missing or empty ($Description): $Path"
+    }
+}
+
+function Assert-Directory {
+    param([string]$Path, [string]$Description)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "Required local directory is missing ($Description): $Path"
+    }
+}
+
+function Assert-LocalDeploymentAssets {
+    $requiredDirectories = @(
+        @{ Path = $wheelsDirectory; Description = "application Linux wheelhouse" },
+        @{ Path = $toolsWheelsDirectory; Description = "MinerU Linux wheelhouse" },
+        @{ Path = $modelsDirectory; Description = "Qwen model snapshots" },
+        @{ Path = $mineruModelsDirectory; Description = "MinerU offline models" },
+        @{ Path = $swinirDirectory; Description = "SwinIR offline model" },
+        @{ Path = (Join-Path $toolsDirectory "ocr"); Description = "OCR tools and models" }
+    )
+    foreach ($entry in $requiredDirectories) { Assert-Directory @entry }
+
+    foreach ($file in @(
+        "Dockerfile", "pyproject.toml", "alembic.ini", "README.md",
+        "scripts\import-images-linux.sh", "infra\compose\local.yml",
+        "wheels\hatchling-1.31.0-py3-none-any.whl",
+        "tools_wheels\magic_pdf-1.3.12-py3-none-any.whl",
+        "tools_wheels\doclayout_yolo-0.0.4-py3-none-any.whl"
+    )) {
+        Assert-NonEmptyFile -Path (Join-Path $projectRoot $file) -Description "application deployment file"
+    }
+
+    foreach ($modelName in @("qwen-vl", "qwen3")) {
+        $modelPath = Join-Path $modelsDirectory $modelName
+        if (-not (Test-ModelSnapshot $modelPath)) { throw "Local model snapshot is incomplete: $modelPath" }
+    }
+
+    foreach ($file in @(
+        $mineruLayoutCheckpointRelative, "magic-pdf.json", "run"
+    )) {
+        Assert-NonEmptyFile -Path (Join-Path $mineruModelsDirectory $file) -Description "MinerU offline asset"
+    }
+    try {
+        $mineruConfiguration = Get-Content -Raw -Path $mineruConfig | ConvertFrom-Json
+    } catch {
+        throw "MinerU configuration is not valid JSON: $mineruConfig"
+    }
+    if ($mineruConfiguration.'models-dir' -ne "/tools/mineru/models" -or $mineruConfiguration.'layout-config'.model -ne "doclayout_yolo") {
+        throw "MinerU configuration does not match the Linux tools mount: $mineruConfig"
+    }
+    Assert-NonEmptyFile -Path (Join-Path $swinirDirectory "RealESRGAN_x4plus.pth") -Description "SwinIR offline model"
+
+    foreach ($file in @("detect", "route", "recognize-east-slavic", "recognize-cyrillic", "recognize-latin-cjk")) {
+        Assert-NonEmptyFile -Path (Join-Path $toolsDirectory "ocr\$file") -Description "OCR command"
+    }
+}
+
+function Copy-OfflineDeploymentBundle {
+    # `transfer` itself is the portable deployment root. Keep the already
+    # provisioned Qwen snapshots in place and replace only generated assets.
+    foreach ($path in @("src", "alembic", "infra", "wheels", "tools_wheels", "tests", "data", "Dockerfile", "alembic.ini", "pyproject.toml", "README.md", "import-images-linux.sh", "SHA256SUMS")) {
+        Remove-Item -Recurse -Force (Join-Path $transferDirectory $path) -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path (Join-Path $transferDirectory "data") | Out-Null
+
+    foreach ($directory in @("src", "alembic", "infra", "wheels", "tools_wheels", "tests")) {
+        Copy-Item -Recurse -Force -Path (Join-Path $projectRoot $directory) -Destination $transferDirectory
+    }
+    foreach ($file in @("Dockerfile", "alembic.ini", "pyproject.toml", "README.md")) {
+        Copy-Item -Force -Path (Join-Path $projectRoot $file) -Destination $transferDirectory
+    }
+    Copy-Item -Force -Path (Join-Path $projectRoot "scripts\import-images-linux.sh") -Destination (Join-Path $transferDirectory "import-images-linux.sh")
+    Copy-Item -Recurse -Force -Path $toolsDirectory -Destination (Join-Path $transferDirectory "data\tools")
+    $inputDirectory = Join-Path $projectRoot "data\input"
+    if (Test-Path $inputDirectory) {
+        Copy-Item -Recurse -Force -Path $inputDirectory -Destination (Join-Path $transferDirectory "data\input")
+    } else {
+        New-Item -ItemType Directory -Force -Path (Join-Path $transferDirectory "data\input") | Out-Null
+    }
+
+    $linuxImportScript = Join-Path $transferDirectory "import-images-linux.sh"
+    $linuxImportContent = [System.IO.File]::ReadAllText($linuxImportScript).Replace("`r`n", "`n")
+    [System.IO.File]::WriteAllText($linuxImportScript, $linuxImportContent, (New-Object System.Text.UTF8Encoding($false)))
+
+    # Keep portable text files byte-stable across Windows and Linux. The
+    # manifest is generated after this step, so line-ending conversion cannot
+    # produce a false checksum failure during import.
+    $textExtensions = @(".yml", ".yaml", ".ini", ".json", ".md", ".py", ".toml", ".sh", ".txt")
+    Get-ChildItem -Force -Path $transferDirectory -File -Recurse |
+        Where-Object { $textExtensions -contains $_.Extension.ToLowerInvariant() } |
+        ForEach-Object {
+            $content = [System.IO.File]::ReadAllText($_.FullName).Replace("`r`n", "`n").Replace("`r", "`n")
+            [System.IO.File]::WriteAllText($_.FullName, $content, (New-Object System.Text.UTF8Encoding($false)))
+        }
+
+    $manifestPath = Join-Path $transferDirectory "SHA256SUMS"
+    $files = Get-ChildItem -Force -Path $transferDirectory -File -Recurse | Where-Object { $_.FullName -ne $manifestPath }
+    $basePath = $transferDirectory.TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
+    $lines = foreach ($file in $files) {
+        $relative = $file.FullName.Substring($basePath.Length).Replace("\", "/")
+        $hash = (Get-FileHash -Algorithm SHA256 -Path $file.FullName).Hash.ToLowerInvariant()
+        "$hash  $relative"
+    }
+    [System.IO.File]::WriteAllText($manifestPath, (($lines -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
+}
+
+New-Item -ItemType Directory -Force -Path $transferDirectory | Out-Null
+Remove-Item -Force $completionPath -ErrorAction SilentlyContinue
+
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    throw "Docker Desktop CLI was not found in PATH."
+}
+
+if ($ProvisionSwinirOnly) {
+    Install-SwinirModel
+    return
+}
+
+try {
+    if ($SkipProvisioning) {
+        Write-Host "Skipping completed asset provisioning."
+    } else {
+        Invoke-LegacyAssetProvisioning
+    }
+
+    Write-Host "Validating local deployment assets (network access is not used)..."
+    Assert-LocalDeploymentAssets
+
+    Write-Host "Building the Linux application image from local wheelhouses..."
+    Invoke-Docker build --pull=false --tag $appImage $projectRoot
+    Write-Host "Running application unit tests with networking disabled..."
+    Invoke-Docker run --rm --network none --entrypoint pytest $appImage
+
+    Write-Host "Writing and verifying local model checksums..."
+    Write-ModelChecksums
+    if (-not (Test-ModelChecksums)) { throw "Local model checksum verification failed." }
+
+    Write-Host "Exporting locally available Docker images..."
     $images = @($appImage, $postgresImage, $minioImage, $minioMcImage, $qwenVlImage, $qwen3Image)
     foreach ($image in $images) {
         Invoke-Docker image inspect $image
+        Test-LinuxAmd64Image -Image $image
     }
 
     & docker save "--output=$absoluteOutput" @images
@@ -608,6 +778,7 @@ echo 'SwinIR model ready.'
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($metadataPath, $metadata, $utf8NoBom)
     "Completed: $(Get-Date -Format o)" | Set-Content -Encoding ascii -Path $completionPath
+    Copy-OfflineDeploymentBundle
     Write-Host ""
     Write-Host "=== IDP EXPORT COMPLETE ===" -ForegroundColor Green
     Write-Host "Archive: $absoluteOutput"
@@ -615,6 +786,8 @@ echo 'SwinIR model ready.'
     Write-Host "Metadata: $metadataPath"
     Write-Host "Models: $modelsDirectory"
     Write-Host "Tools: $toolsDirectory"
+    Write-Host "Portable Linux bundle: $transferDirectory"
+    Write-Host "Linux entry point: bash import-images-linux.sh (from transfer)"
     Write-Host "Completion marker: $completionPath"
 }
 finally {}

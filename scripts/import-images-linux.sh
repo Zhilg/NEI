@@ -2,11 +2,12 @@
 # Imports the Windows archive, prepares mounted paths, and starts the full Compose stack.
 set -euo pipefail
 
-project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-archive_path="${project_root}/transfer/idp-images.tar"
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+archive_path="${project_root}/idp-images.tar"
 checksum_path="${archive_path}.sha256"
 metadata_path="${archive_path}.json"
-completion_path="${project_root}/transfer/EXPORT-COMPLETE.txt"
+completion_path="${project_root}/EXPORT-COMPLETE.txt"
+bundle_checksum_path="${project_root}/SHA256SUMS"
 
 if ! command -v docker >/dev/null 2>&1; then
   printf '%s\n' 'Docker CLI was not found in PATH.' >&2
@@ -25,7 +26,7 @@ fi
 
 data_root="${IDP_DATA_ROOT:-${project_root}/data/runtime}"
 input_root="${IDP_INPUT_ROOT:-${project_root}/data/input}"
-models_root="${IDP_MODELS_ROOT:-${project_root}/transfer/models}"
+models_root="${IDP_MODELS_ROOT:-${project_root}/models}"
 tools_root="${IDP_TOOLS_ROOT:-${project_root}/data/tools}"
 
 existing_env_value() {
@@ -49,6 +50,12 @@ if [[ ! -f "$completion_path" ]]; then
   printf 'Windows export completion marker does not exist: %s\n' "$completion_path" >&2
   exit 1
 fi
+if [[ ! -f "$bundle_checksum_path" ]]; then
+  printf 'Bundle checksum manifest does not exist: %s\n' "$bundle_checksum_path" >&2
+  exit 1
+fi
+printf '%s\n' 'Verifying portable bundle files...'
+(cd "$project_root" && sha256sum --check "$(basename "$bundle_checksum_path")")
 (cd "$(dirname "$archive_path")" && sha256sum --check "$(basename "$checksum_path")")
 
 docker load --input "$archive_path"
@@ -56,14 +63,31 @@ docker run --rm --entrypoint python \
   --volume "$metadata_path:/metadata.json:ro" local/idp-app:latest \
   -c "import json; data=json.load(open('/metadata.json')); required={'app_image','postgres_image','minio_image','minio_mc_image','qwen_vl_image','qwen3_image','pipeline_profile_version'}; assert required <= data.keys()"
 
-mkdir -p "$data_root" "$input_root" "$tools_root/mineru" "$tools_root/ocr"
+mkdir -p "$data_root" "$input_root" "$tools_root/mineru"
 
-find "$tools_root/mineru" "$tools_root/ocr" -type f -name '*.py' -exec chmod +x {} + 2>/dev/null || true
-find "$tools_root/mineru" "$tools_root/ocr" -maxdepth 1 -type f -exec chmod +x {} + 2>/dev/null || true
+find "$tools_root/mineru" -type f -name '*.py' -exec chmod +x {} + 2>/dev/null || true
+find "$tools_root/mineru" -maxdepth 1 -type f -exec chmod +x {} + 2>/dev/null || true
+
+mineru_checkpoint="$tools_root/mineru/models/Layout/YOLO/doclayout_yolo_docstructbench_imgsz1280_2501.pt"
+mineru_config="$tools_root/mineru/magic-pdf.json"
+mineru_runner="$tools_root/mineru/run"
+for required_file in "$mineru_checkpoint" "$mineru_config" "$mineru_runner"; do
+  if [[ ! -s "$required_file" ]]; then
+    printf 'Required offline MinerU asset is missing or empty: %s\n' "$required_file" >&2
+    exit 1
+  fi
+done
+docker run --rm --network none \
+  --env HF_HUB_OFFLINE=1 \
+  --env TRANSFORMERS_OFFLINE=1 \
+  --env HF_DATASETS_OFFLINE=1 \
+  --env MODELSCOPE_OFFLINE=1 \
+  --volume "$tools_root/mineru:/tools/mineru:ro" \
+  --entrypoint python local/idp-app:latest \
+  -c "from pathlib import Path; import magic_pdf; checkpoint=Path('/tools/mineru/models/Layout/YOLO/doclayout_yolo_docstructbench_imgsz1280_2501.pt'); assert checkpoint.is_file() and checkpoint.stat().st_size > 0"
 
 for model in qwen-vl qwen3; do
-  if [[ ! -f "$models_root/$model/.download-complete" ]] \
-    || [[ ! -f "$models_root/$model/config.json" ]] \
+  if [[ ! -f "$models_root/$model/config.json" ]] \
     || [[ -z "$(find "$models_root/$model" -type f -name '*.safetensors' -print -quit)" ]]; then
     printf 'Mounted model is missing or incomplete: %s\n' "$models_root/$model" >&2
     exit 1
@@ -87,6 +111,11 @@ export IDP_MINIO_IMAGE="minio/minio:RELEASE.2025-04-22T22-12-26Z"
 export IDP_MINIO_MC_IMAGE="minio/mc:RELEASE.2025-05-21T01-59-54Z"
 export IDP_QWEN_VL_IMAGE="local/qwen-vl:latest"
 export IDP_QWEN3_IMAGE="local/qwen3:latest"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export MODELSCOPE_OFFLINE=1
+export MINERU_TOOLS_CONFIG_JSON="$mineru_config"
 archive_hash="$(cut -d ' ' -f 1 "$checksum_path")"
 models_hash="$(sha256sum "$models_root/SHA256SUMS" | cut -d ' ' -f 1)"
 export IDP_PIPELINE_PROFILE_VERSION="$(printf '%s\n%s\n' "$archive_hash" "$models_hash" | sha256sum | cut -c 1-16)"
@@ -112,6 +141,11 @@ IDP_MINIO_IMAGE=${IDP_MINIO_IMAGE}
 IDP_MINIO_MC_IMAGE=${IDP_MINIO_MC_IMAGE}
 IDP_QWEN_VL_IMAGE=${IDP_QWEN_VL_IMAGE}
 IDP_QWEN3_IMAGE=${IDP_QWEN3_IMAGE}
+HF_HUB_OFFLINE=${HF_HUB_OFFLINE}
+TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE}
+HF_DATASETS_OFFLINE=${HF_DATASETS_OFFLINE}
+MODELSCOPE_OFFLINE=${MODELSCOPE_OFFLINE}
+MINERU_TOOLS_CONFIG_JSON=${MINERU_TOOLS_CONFIG_JSON}
 IDP_PIPELINE_PROFILE_VERSION=${IDP_PIPELINE_PROFILE_VERSION}
 IDP_POSTGRES_PASSWORD=${IDP_POSTGRES_PASSWORD}
 IDP_MINIO_ACCESS_KEY=${IDP_MINIO_ACCESS_KEY}

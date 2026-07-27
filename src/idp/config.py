@@ -57,11 +57,6 @@ class Settings(BaseSettings):
     gpu1_slot_unit: str = "role"
     pipeline_profile_version: str = Field(default="v1", min_length=1)
     mineru_command: tuple[str, ...] = ()
-    ocr_detector_command: tuple[str, ...] = ()
-    ocr_router_command: tuple[str, ...] = ()
-    ocr_east_slavic_command: tuple[str, ...] = ()
-    ocr_cyrillic_command: tuple[str, ...] = ()
-    ocr_latin_cjk_command: tuple[str, ...] = ()
     docx_converter_command: tuple[str, ...] = ()
     data_root: Path = Path("/data")
     batch_staging_root: Path = Path("/data/staging")
@@ -134,11 +129,6 @@ class Settings(BaseSettings):
 
     @field_validator(
         "mineru_command",
-        "ocr_detector_command",
-        "ocr_router_command",
-        "ocr_east_slavic_command",
-        "ocr_cyrillic_command",
-        "ocr_latin_cjk_command",
         "docx_converter_command",
         mode="before",
     )

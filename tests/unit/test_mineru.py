@@ -1,11 +1,12 @@
 import io
 from pathlib import Path
+from unittest.mock import Mock
 
 from PIL import Image
 
 from idp.domain.models import ArtifactReference
 from idp.domain.states import ArtifactRetention
-from idp.services.mineru import LayoutAdapter
+from idp.services.mineru import CommandMinerURunner, LayoutAdapter
 from idp.services.vision import (
     ImageQualityGate,
     PageTransform,
@@ -146,3 +147,41 @@ def test_nested_blocks_preserve_parent_internal_block_id(tmp_path: Path) -> None
     assert len(layout.blocks) == 2
     assert layout.blocks[1].parent_block_id == layout.blocks[0].block_id
     assert layout.blocks[1].vendor_path.endswith("children[0]")
+
+
+def test_command_runner_creates_pdf_and_normalizes_mineru_middle_json(
+    tmp_path: Path, monkeypatch
+) -> None:
+    pages = tmp_path / "pages"
+    pages.mkdir()
+    first = pages / "first.png"
+    second = pages / "second.png"
+    first.write_bytes(_png())
+    second.write_bytes(_png())
+    output = tmp_path / "output"
+    completed = Mock()
+
+    def fake_run(command, **kwargs) -> None:
+        assert command == [
+            "magic-pdf",
+            "--path",
+            str(output / "source.pdf"),
+            "--output-dir",
+            str(output),
+            "--method",
+            "ocr",
+        ]
+        assert (output / "source.pdf").is_file()
+        generated = output / "source"
+        generated.mkdir()
+        (generated / "source_middle.json").write_text('{"pdf_info": []}', encoding="utf-8")
+        return completed
+
+    monkeypatch.setattr("idp.services.mineru.subprocess.run", fake_run)
+
+    result = CommandMinerURunner(
+        ("magic-pdf", "--path", "{input}", "--output-dir", "{output}", "--method", "ocr")
+    ).run({2: second, 1: first}, output)
+
+    assert result == output / "middle.json"
+    assert result.read_text(encoding="utf-8") == '{"pdf_info": []}'

@@ -8,6 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRANSFORMERS_OFFLINE=1
 
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y libgl1 libglib2.0-0 libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY alembic.ini ./
@@ -20,9 +24,9 @@ RUN pip install --no-index --find-links=/app/wheels hatchling \
 
 COPY tools_wheels ./tools_wheels
 RUN pip install --no-index --find-links=/app/tools_wheels \
-    paddlepaddle paddleocr magic-pdf \
+    magic-pdf doclayout-yolo==0.0.4 openai ultralytics rapid-table onnxruntime omegaconf shapely pyclipper dill \
     && rm -rf /app/tools_wheels
 
-RUN mkdir -p /tools/mineru /tools/ocr
+RUN mkdir -p /tools/mineru
 
 CMD ["idp"]

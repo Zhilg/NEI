@@ -37,14 +37,8 @@ from idp.services.mineru import (
     layout_manifest_from_payload,
 )
 from idp.services.ocr import (
-    CommandPaddleLineDetector,
-    CommandPaddleRecognizer,
-    CommandScriptRouter,
     OcrError,
-    OcrProcessor,
-    OcrRoute,
     OcrStageHandler,
-    RecognizerProfile,
     ocr_manifest_from_payload,
 )
 from idp.services.publication import FinalBundlePublisher
@@ -103,14 +97,7 @@ def register_default_profile(settings: Settings, *, name: str = "default") -> st
         "render_max_pixels_per_page": settings.render_max_pixels_per_page,
         "render_max_total_pixels": settings.render_max_total_pixels,
         "mineru_command": settings.mineru_command,
-        "ocr_detector_command": settings.ocr_detector_command,
-        "ocr_router_command": settings.ocr_router_command,
-        "ocr_east_slavic_command": settings.ocr_east_slavic_command,
-        "ocr_cyrillic_command": settings.ocr_cyrillic_command,
-        "ocr_latin_cjk_command": settings.ocr_latin_cjk_command,
         "docx_converter_command": settings.docx_converter_command,
-        "ocr_max_lines_per_block": settings.ocr_max_lines_per_block,
-        "ocr_min_token_confidence": settings.ocr_min_token_confidence,
         "qwen_vl_model_id": settings.qwen_vl_model_id,
         "qwen_vl_model_revision": settings.qwen_vl_model_revision,
         "qwen_vl_prompt_version": settings.qwen_vl_prompt_version,
@@ -229,9 +216,9 @@ def run_worker(settings: Settings) -> None:
         if settings.mineru_command
         else None
     )
-    ocr_handler = _create_ocr_handler(settings, artifacts, repository)
-    if layout_handler is None or ocr_handler is None:
-        raise ValueError("active worker profile requires pinned MinerU and all five OCR command adapters")
+    ocr_handler = OcrStageHandler(artifacts, repository)
+    if layout_handler is None:
+        raise ValueError("active worker profile requires a pinned MinerU command")
     LOGGER.info("worker started; worker_id=%s", worker_id)
     while True:
         claim = repository.claim_next_job(
@@ -317,7 +304,6 @@ def _dispatch_worker_claim(
         if claim.stage == "ocr":
             if ocr_handler is None:
                 raise RuntimeError("OCR worker adapter is not configured in the active profile")
-            _reserve_gpu1(repository, claim, worker_id, gpu1_slot_unit)
             layout_reference = _reference_from_payload(claim.payload, "layout_manifest")
             ocr_handler.handle(
                 job_id=claim.job_id,
@@ -526,7 +512,7 @@ def _wait_for_model_endpoint(endpoint: str) -> None:
 
 
 def _reserve_gpu1(repository: SqlAlchemyBatchRepository, claim: JobClaim, worker_id: str, unit: str) -> None:
-    """Reserve the shared GPU1 model-worker slot before layout or OCR begins."""
+    """Reserve the shared GPU1 model-worker slot before MinerU layout begins."""
     from idp.domain.models import ResourceRequest
 
     try:
@@ -540,7 +526,7 @@ def _reserve_gpu1(repository: SqlAlchemyBatchRepository, claim: JobClaim, worker
         repository.defer_job_for_capacity(
             job_id=claim.job_id,
             worker_id=worker_id,
-            error_detail="GPU1 MinerU/OCR role slot is unavailable",
+            error_detail="GPU1 MinerU role slot is unavailable",
         )
         raise
 
@@ -582,50 +568,3 @@ def _cleanup_temporary_artifacts(
             artifacts.delete(artifact)
         except Exception:
             LOGGER.warning("temporary artifact cleanup failed; key=%s", artifact.reference.object_key)
-
-
-def _create_ocr_handler(
-    settings: Settings,
-    artifacts: LocalArtifactStore | MinioArtifactStore,
-    repository: SqlAlchemyBatchRepository,
-) -> OcrStageHandler | None:
-    """Build the Russian-first local OCR adapter only when every pinned command is supplied."""
-    commands = (
-        settings.ocr_detector_command,
-        settings.ocr_router_command,
-        settings.ocr_east_slavic_command,
-        settings.ocr_cyrillic_command,
-        settings.ocr_latin_cjk_command,
-    )
-    if not any(commands):
-        return None
-    if not all(commands):
-        raise ValueError("all pinned OCR commands must be configured together")
-    processor = OcrProcessor(
-        detector=CommandPaddleLineDetector(settings.ocr_detector_command),
-        router=CommandScriptRouter(settings.ocr_router_command),
-        recognizers={
-            OcrRoute.EAST_SLAVIC: (
-                CommandPaddleRecognizer(settings.ocr_east_slavic_command),
-                RecognizerProfile(
-                    OcrRoute.EAST_SLAVIC, "eslav_PP-OCRv5_mobile_rec", "pinned-in-profile"
-                ),
-            ),
-            OcrRoute.CYRILLIC: (
-                CommandPaddleRecognizer(settings.ocr_cyrillic_command),
-                RecognizerProfile(
-                    OcrRoute.CYRILLIC, "cyrillic_PP-OCRv5_mobile_rec", "pinned-in-profile"
-                ),
-            ),
-            OcrRoute.LATIN_CJK: (
-                CommandPaddleRecognizer(settings.ocr_latin_cjk_command),
-                RecognizerProfile(
-                    OcrRoute.LATIN_CJK, "PP-OCRv6_medium", "pinned-in-profile"
-                ),
-            ),
-        },
-        artifacts=artifacts,
-        max_lines_per_block=settings.ocr_max_lines_per_block,
-        min_token_confidence=settings.ocr_min_token_confidence,
-    )
-    return OcrStageHandler(processor, artifacts, repository)

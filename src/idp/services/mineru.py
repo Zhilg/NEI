@@ -77,14 +77,19 @@ class CommandMinerURunner:
         self._working_directory = working_directory
 
     def run(self, page_images: Mapping[int, Path], output_directory: Path) -> Path:
-        """Invoke only a local process and require it to create `middle.json`."""
-        images_directory = output_directory / "pages"
-        images_directory.mkdir(parents=True, exist_ok=True)
-        for page_number, image_path in page_images.items():
-            target = images_directory / f"{page_number:05d}.png"
-            target.write_bytes(image_path.read_bytes())
+        """Invoke local MinerU for a generated PDF and normalize its output filename."""
+        if not page_images:
+            raise MinerUError("MinerU requires at least one rendered page image")
+        output_directory.mkdir(parents=True, exist_ok=True)
+        input_pdf = output_directory / "source.pdf"
+        ordered_images = [Image.open(page_images[number]).convert("RGB") for number in sorted(page_images)]
+        try:
+            ordered_images[0].save(input_pdf, format="PDF", save_all=True, append_images=ordered_images[1:])
+        finally:
+            for image in ordered_images:
+                image.close()
         command = [
-            argument.format(images=str(images_directory), output=str(output_directory))
+            argument.format(input=str(input_pdf), output=str(output_directory))
             for argument in self._command
         ]
         try:
@@ -100,8 +105,12 @@ class CommandMinerURunner:
         except (OSError, subprocess.SubprocessError) as error:
             raise MinerUError(f"local MinerU command failed: {error}") from error
         output = output_directory / "middle.json"
-        if not output.is_file():
-            raise MinerUError("local MinerU command did not create middle.json")
+        if output.is_file():
+            return output
+        generated = tuple(output_directory.rglob("*_middle.json"))
+        if len(generated) != 1:
+            raise MinerUError("local MinerU command did not create exactly one *_middle.json output")
+        generated[0].replace(output)
         return output
 
 
