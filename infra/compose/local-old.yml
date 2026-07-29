@@ -1,49 +1,16 @@
 name: idp
 
 services:
-  # Do NOT change deploy.resources here — keep GPU reservation intact.
+  # Keep GPU reservation in compose but avoid passing device flags that confuse vllm.
 
   vllm-vl:
     environment:
-      # Make the service use CPU only while still leaving device reservation in compose
+      # Hide GPU from the container; use a CPU-friendly vllm image instead.
       CUDA_VISIBLE_DEVICES: ""
-    command:
-      - --model
-      - /models/vl
-      - --served-model-name
-      - ${IDP_VL_MODEL:-Qwen2.5-VL-32B-Instruct-AWQ}
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --gpu-memory-utilization
-      - "0.95"
-      - --max-model-len
-      - "32768"
-      - --trust-remote-code
-      - --device
-      - cpu
 
   vllm-llm:
     environment:
-      # Make the service use CPU only while still leaving device reservation in compose
       CUDA_VISIBLE_DEVICES: ""
-    command:
-      - --model
-      - /models/llm
-      - --served-model-name
-      - ${IDP_LLM_MODEL:-Qwen3-14B-AWQ}
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --gpu-memory-utilization
-      - "0.95"
-      - --max-model-len
-      - "32768"
-      - --trust-remote-code
-      - --device
-      - cpu
 
 networks:
   idp_internal:

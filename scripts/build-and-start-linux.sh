@@ -24,27 +24,46 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[1/5] Building worker image..."
-docker build -t local/idp-app:latest "$project_root"
+# Build or pull images depending on mode
+if [[ "$OLD_MODE" -eq 1 ]]; then
+  echo "[1/5] Old-driver mode: pulling compatible vllm image and tagging local images..."
+  OLD_BASE_IMAGE="${IDP_OLD_VLLM_BASE:-vllm/vllm-openai:v0.25.0}"
+  echo "  Pulling $OLD_BASE_IMAGE"
+  docker pull "$OLD_BASE_IMAGE"
+  docker tag "$OLD_BASE_IMAGE" local/vllm-vl:old
+  docker tag "$OLD_BASE_IMAGE" local/vllm-llm:old
 
-echo "[2/5] Building vLLM VL image..."
-docker build -t local/vllm-vl:latest "$project_root/infra/dockerfiles/vllm-vl"
+  echo "[2/5] Building worker image..."
+  docker build -t local/idp-app:latest "$project_root"
 
-echo "[3/5] Building vLLM LLM image..."
-docker build -t local/vllm-llm:latest "$project_root/infra/dockerfiles/vllm-llm"
+  echo "[3/5] Ensuring small models are in place for old mode..."
+  models_vl="$project_root/transfer/models/vl"
+  models_llm="$project_root/transfer/models/llm"
 
-echo "[4/5] Ensuring models are in place..."
-models_vl="$project_root/transfer/models/vl"
-models_llm="$project_root/transfer/models/llm"
+  mkdir -p "$models_vl" "$models_llm"
+else
+  echo "[1/5] Building worker image..."
+  docker build -t local/idp-app:latest "$project_root"
 
-mkdir -p "$models_vl" "$models_llm"
+  echo "[2/5] Building vLLM VL image..."
+  docker build -t local/vllm-vl:latest "$project_root/infra/dockerfiles/vllm-vl"
+
+  echo "[3/5] Building vLLM LLM image..."
+  docker build -t local/vllm-llm:latest "$project_root/infra/dockerfiles/vllm-llm"
+
+  echo "[4/5] Ensuring models are in place..."
+  models_vl="$project_root/transfer/models/vl"
+  models_llm="$project_root/transfer/models/llm"
+
+  mkdir -p "$models_vl" "$models_llm"
+fi
 
 ensure_model() {
   local target_dir="$1"
   local repo="$2"
   local token="${HF_TOKEN:-}"
 
-  if [[ -f "$target_dir/config.json" ]]; then
+  if [[ -f "$target_dir/config.json" ]] || [[ -f "$target_dir/pytorch_model.bin" ]] || [[ -f "$target_dir/tokenizer.json" ]]; then
     echo "  Model already present in $target_dir"
     return 0
   fi
@@ -65,8 +84,15 @@ ensure_model() {
   fi
 }
 
-ensure_model "$models_vl" "Qwen/Qwen2.5-VL-32B-Instruct-AWQ"
-ensure_model "$models_llm" "Qwen/Qwen3-14B-AWQ"
+# Choose which models to fetch
+if [[ "$OLD_MODE" -eq 1 ]]; then
+  # Small models to test startup under old-driver-compatible images
+  ensure_model "$models_llm" "distilgpt2"
+  ensure_model "$models_vl" "google/vit-base-patch16-224"
+else
+  ensure_model "$models_vl" "Qwen/Qwen2.5-VL-32B-Instruct-AWQ"
+  ensure_model "$models_llm" "Qwen/Qwen3-14B-AWQ"
+fi
 
 echo "[5/5] Starting stack..."
 input_root="${IDP_INPUT_ROOT:-${project_root}/data/input}"
@@ -80,8 +106,18 @@ export IDP_INPUT_ROOT="$input_root"
 export IDP_OUTPUT_ROOT="$output_root"
 export IDP_MODELS_ROOT="$models_root"
 export IDP_APP_IMAGE="local/idp-app:latest"
-export IDP_VLLM_VL_IMAGE="local/vllm-vl:latest"
-export IDP_VLLM_LLM_IMAGE="local/vllm-llm:latest"
+
+# If old mode is active, use the pulled/tagged old vllm images
+if [[ "$OLD_MODE" -eq 1 ]]; then
+  export IDP_VLLM_VL_IMAGE="local/vllm-vl:old"
+  export IDP_VLLM_LLM_IMAGE="local/vllm-llm:old"
+  # For clarity, set small model names as defaults
+  export IDP_VL_MODEL="${IDP_VL_MODEL:-google/vit-base-patch16-224}"
+  export IDP_LLM_MODEL="${IDP_LLM_MODEL:-distilgpt2}"
+else
+  export IDP_VLLM_VL_IMAGE="local/vllm-vl:latest"
+  export IDP_VLLM_LLM_IMAGE="local/vllm-llm:latest"
+fi
 
 cd "$project_root"
 if [[ "$OLD_MODE" -eq 1 ]]; then
