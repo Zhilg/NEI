@@ -25,13 +25,18 @@ DOCX конвертируется в Markdown через `mammoth`.
 
 ### Сценарий 1: Linux production (нормальные модели)
 
-**Никакой скрипт не качает модели для Linux.**  
-Скачай их сам с HuggingFace и положи в:
+**Скрипт `export-images-windows.ps1` качает модели для обоих сценариев:**
+- **Windows E2E** — tiny-модели запекаются в образы во время сборки
+- **Linux production** — модели скачиваются в `transfer/models/` и тоже запекаются в Linux-образы
 
 ```
-transfer/models/
-├── vl/     # VL-модель для реконструкции PDF → Markdown
-└── llm/    # LLM для извлечения сущностей
+transfer/
+├── idp-images.tar          # все образы в одном архиве
+├── idp-images.tar.json     # метаданные
+├── EXPORT-COMPLETE.txt     # маркер завершения
+└── models/
+    ├── vl/                 # Qwen2.5-VL-32B-Instruct (для Linux)
+    └── llm/                # Qwen3-14B-Instruct (для Linux)
 ```
 
 Если модели gated — используй `huggingface-cli login` или переменную `HF_TOKEN`.
@@ -42,9 +47,9 @@ transfer/models/
 
 | GPU VRAM | VL-модель (в `vl/`) | LLM-модель (в `llm/`) |
 |---|---|---|
-| 8 GB | `Qwen2.5-VL-2B-Instruct` | `Qwen2.5-1.5B-Instruct` |
-| 12 GB | `Qwen2.5-VL-7B-Instruct` | `Qwen2.5-7B-Instruct` |
-| 24 GB | `Qwen2.5-VL-32B-Instruct` | `Qwen3-14B-Instruct` |
+| 8 GB | `Qwen/Qwen3-VL-2B-Instruct` | `Qwen/Qwen3.5-0.8B` |
+| 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct` |
+| 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct` | `Qwen/Qwen3-14B-Instruct` |
 
 ### Сценарий 2: Windows E2E тестирование (крошечные модели запечены в образы)
 
@@ -55,13 +60,14 @@ transfer/models/
 ### Linux production
 
 ```bash
-# 1. Скачай модели и положи в transfer/models/vl/ и transfer/models/llm/
-# 2. Собери worker-образ
+# 1. Собери worker-образ
 docker build -t local/idp-app:latest .
 
-# 3. Подними контейнеры
+# 2. Подними контейнеры
 docker compose -f infra/compose/local.yml --profile linux up -d
 ```
+
+Модели уже должны быть в `transfer/models/` (если используешь архив с Windows) или скачай их сам.
 
 ### Windows E2E
 
@@ -130,6 +136,5 @@ docker compose -f infra/compose/local.yml --profile linux down
 
 - **Контейнеры никогда не имеют доступа к интернету** — сеть `internal: true`
 - **Никаких SHA-256, версионирования, whl-файлов** — всё максимально просто
-- **Модели для Linux качаешь сам** — никакие скрипты это не делают
-- **Модели для Windows tiny** — только чтобы проверить пайплайн
-- **RTX 5070 12GB** — win-test модели (2B VL + 1.5B LLM) влезают comfortably. На Linux с большими моделями следи за VRAM
+- **Скрипт качает модели для Linux и Windows** — просто запусти `export-images-windows.ps1`
+- **RTX 5070 12GB** — win-test модели (2B VL + 0.8B LLM) влезают comfortably. Linux модели (32B VL + 14B LLM) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов
