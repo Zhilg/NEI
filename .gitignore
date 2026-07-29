@@ -9,3 +9,4 @@ transfer/
 wheels/*.whl
 *.tar
 *.tar.sha256
+tools_wheels/

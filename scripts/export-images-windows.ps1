@@ -3,6 +3,11 @@
 Simplified export: builds worker image and saves Docker images for Linux.
 #>
 
+param(
+    [switch]$SkipProvisioning,
+    [switch]$ProvisionSwinirOnly
+)
+
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot ".."))
 $transferDirectory = Join-Path $projectRoot "transfer"
@@ -55,6 +60,7 @@ try {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($metadataPath, $metadata, $utf8NoBom)
     "Completed: $(Get-Date -Format o)" | Set-Content -Encoding ascii -Path $completionPath
+    Copy-OfflineDeploymentBundle
     Write-Host ""
     Write-Host "=== EXPORT COMPLETE ===" -ForegroundColor Green
     Write-Host "Archive: $absoluteOutput"

@@ -1,20 +1,49 @@
 name: idp
 
+x-app: &app
+  image: ${IDP_APP_IMAGE:-local/idp-app:latest}
+  pull_policy: never
+  working_dir: /workspace
+  networks: [idp_internal]
+  environment: &app-environment
+    PYTHONPATH: /workspace/src
+    IDP_DATABASE_URL: postgresql+psycopg://idp:${IDP_POSTGRES_PASSWORD:-idp}@postgres:5432/idp
+    IDP_MINIO_ENDPOINT: minio:9000
+    IDP_MINIO_ACCESS_KEY: ${IDP_MINIO_ACCESS_KEY:-minioadmin}
+    IDP_MINIO_SECRET_KEY: ${IDP_MINIO_SECRET_KEY:-minioadmin}
+    IDP_ALLOWED_ROOTS: '["/input"]'
+    IDP_DATA_ROOT: /data
+    IDP_BATCH_STAGING_ROOT: /data/staging
+    IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
+    IDP_OFFLINE_MODE: "true"
+    IDP_TELEMETRY_ENABLED: "false"
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    HF_DATASETS_OFFLINE: "1"
+    MODELSCOPE_OFFLINE: "1"
+    MINERU_TOOLS_CONFIG_JSON: "/tools/mineru/magic-pdf.json"
+  volumes:
+    - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+    - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
+    - ${IDP_DATA_ROOT:-../../data/runtime}:/data
+    - ${IDP_TOOLS_ROOT:-../../data/tools}:/tools:ro
+
+x-worker-environment: &worker-environment
+  <<: *app-environment
+  IDP_MINERU_COMMAND: '["magic-pdf", "--path", "{input}", "--output-dir", "{output}", "--method", "ocr"]'
+  IDP_DOCX_CONVERTER_COMMAND: '["soffice", "--headless", "--convert-to", "pdf", "--outdir", "{output}", "{input}"]'
+
 services:
   worker:
     image: ${IDP_APP_IMAGE:-local/idp-app:latest}
     pull_policy: never
     command: ["idp"]
     environment:
-      PYTHONPATH: /workspace/src
-      IDP_INPUT_ROOT: /input
-      IDP_OUTPUT_ROOT: /output
-      IDP_MODELS_ROOT: /models
-    volumes:
-      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
-      - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
-      - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
-      - ${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro
+      <<: *worker-environment
+      # Docker exposes the selected host GPU as device 0 inside this container.
+      CUDA_VISIBLE_DEVICES: "0"
+      IDP_METRICS_PORT: "9101"
+      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
     deploy:
       resources:
         reservations:
@@ -26,20 +55,12 @@ services:
   vllm-vl:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
-    command:
-      - --model
-      - /models/vl
-      - --served-model-name
-      - ${IDP_VL_MODEL:-Qwen2.5-VL-32B-Instruct}
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --gpu-memory-utilization
-      - "0.95"
+    command: ["--model", "/models/qwen-vl", "--served-model-name", "Qwen2.5-VL-32B-Instruct", "--quantization", "awq", "--dtype", "half", "--host", "0.0.0.0", "--port", "8000", "--enforce-eager", "--gpu-memory-utilization", "${IDP_QWEN_VL_MEMORY_UTILIZATION:-0.95}"]
+    restart: unless-stopped
+    networks: [idp_internal]
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_VL_GPU:-0}
-      HF_HOME: /models/vl/hf-cache
+      CUDA_VISIBLE_DEVICES: "0"
+      HF_HOME: /models/qwen-vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
@@ -52,6 +73,15 @@ services:
             - driver: nvidia
               device_ids: ["${IDP_VLLM_VL_GPU:-0}"]
               capabilities: [gpu]
+    profiles: [models]
+    ports:
+      - "${IDP_QWEN_VL_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/version"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
 
   vllm-llm:
     image: ${IDP_VLLM_LLM_IMAGE:-local/vllm-llm:latest}
@@ -68,8 +98,8 @@ services:
       - --gpu-memory-utilization
       - "0.95"
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-1}
-      HF_HOME: /models/llm/hf-cache
+      CUDA_VISIBLE_DEVICES: "0"
+      HF_HOME: /models/qwen3/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
@@ -82,3 +112,28 @@ services:
             - driver: nvidia
               device_ids: ["${IDP_VLLM_LLM_GPU:-1}"]
               capabilities: [gpu]
+    profiles: [models]
+    ports:
+      - "${IDP_QWEN3_PORT:-8001}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/version"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+
+  operator:
+    <<: *app
+    command: ["idp", "healthcheck", "--no-models"]
+    profiles: [operator]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      profiles:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+
+networks:
+  idp_internal:
+    internal: true
