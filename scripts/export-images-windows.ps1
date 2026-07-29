@@ -47,9 +47,12 @@ try {
     Write-Host "[4/6] Building Windows E2E images with baked-in small models..."
     $winVlDir = Join-Path $projectRoot "infra\dockerfiles\vllm-win-vl"
     $winLlmDir = Join-Path $projectRoot "infra\dockerfiles\vllm-win-llm"
-    $hfToken = if ($env:HF_TOKEN) { "--build-arg HF_TOKEN=$env:HF_TOKEN" } else { "" }
-    Invoke-Docker build --pull=false $hfToken --tag $vllmWinVlImage $winVlDir
-    Invoke-Docker build --pull=false $hfToken --tag $vllmWinLlmImage $winLlmDir
+    $hfTokenArgs = @()
+    if ($env:HF_TOKEN) {
+        $hfTokenArgs = @("--build-arg", "HF_TOKEN=$env:HF_TOKEN")
+    }
+    Invoke-Docker build --pull=false @hfTokenArgs --tag $vllmWinVlImage $winVlDir
+    Invoke-Docker build --pull=false @hfTokenArgs --tag $vllmWinLlmImage $winLlmDir
 
     Write-Host "[5/6] Saving images..."
     $images = @($appImage, $vllmVlImage, $vllmLlmImage, $vllmWinVlImage, $vllmWinLlmImage)
