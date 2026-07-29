@@ -47,7 +47,7 @@ transfer/
 
 | GPU VRAM | VL-модель (в `vl/`) | LLM-модель (в `llm/`) |
 |---|---|---|
-| 8 GB | `Qwen/Qwen3-VL-2B-Instruct` | `Qwen/Qwen3.5-0.8B` |
+| 8 GB | `Qwen/Qwen2.5-VL-2B-Instruct` | `Qwen/Qwen2.5-0.5B` |
 | 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct` |
 | 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct` | `Qwen/Qwen3-14B-Instruct` |
 
