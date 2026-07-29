@@ -6,6 +6,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 archive_path="${project_root}/transfer/idp-images.tar"
 metadata_path="${archive_path}.json"
 completion_path="${project_root}/transfer/EXPORT-COMPLETE.txt"
+profile="${1:-linux}"
 
 if ! command -v docker >/dev/null 2>&1; then
   printf '%s\n' 'Docker CLI was not found in PATH.' >&2
@@ -37,11 +38,14 @@ export IDP_MODELS_ROOT="$models_root"
 export IDP_APP_IMAGE="local/idp-app:latest"
 export IDP_VLLM_VL_IMAGE="local/vllm-vl:latest"
 export IDP_VLLM_LLM_IMAGE="local/vllm-llm:latest"
+export IDP_VLLM_WIN_VL_IMAGE="local/vllm-win-vl:latest"
+export IDP_VLLM_WIN_LLM_IMAGE="local/vllm-win-llm:latest"
 
 cd "$project_root"
-docker compose -f infra/compose/local.yml up -d
+docker compose -f infra/compose/local.yml --profile "$profile" up -d
 
 printf '%s\n' 'Images imported and stack started.'
+printf 'Profile: %s\n' "$profile"
 printf 'Input: %s\n' "$input_root"
 printf 'Output: %s\n' "$output_root"
 printf 'Models: %s\n' "$models_root"
