@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Simplified import: loads images and starts the Compose stack.
+# Import Linux Docker images and start the Compose stack.
+# Usage: ./scripts/import-images-linux.sh [archive-name]
+# Default archive: idp-images-linux.tar
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-archive_path="${project_root}/transfer/idp-images.tar"
+archive_name="${1:-idp-images-linux.tar}"
+archive_path="${project_root}/transfer/${archive_name}"
 
 if ! command -v docker >/dev/null 2>&1; then
   printf '%s\n' 'Docker CLI was not found in PATH.' >&2
@@ -40,6 +43,7 @@ cd "$project_root"
 docker compose -f infra/compose/local.yml up -d
 
 printf '%s\n' 'Images imported and stack started.'
+printf 'Archive: %s\n' "$archive_path"
 printf 'Input: %s\n' "$input_root"
 printf 'Output: %s\n' "$output_root"
 printf 'Models: %s\n' "$models_root"
