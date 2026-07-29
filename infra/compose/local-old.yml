@@ -1,12 +1,8 @@
 name: idp
 
 services:
-  # Keep GPU reservation in compose but avoid passing device flags that confuse vllm.
-
   vllm-vl:
     environment:
-      # Hide GPU from the container; keep GPU reservation but direct HF cache to writable mount
-      CUDA_VISIBLE_DEVICES: ""
       TRANSFORMERS_CACHE: /models/vl/hf-cache
       HF_HOME: /models/vl/hf-cache
     volumes:
@@ -14,8 +10,6 @@ services:
 
   vllm-llm:
     environment:
-      # Hide GPU from the container; keep GPU reservation but direct HF cache to writable mount
-      CUDA_VISIBLE_DEVICES: ""
       TRANSFORMERS_CACHE: /models/llm/hf-cache
       HF_HOME: /models/llm/hf-cache
     volumes:
