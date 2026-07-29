@@ -34,6 +34,8 @@ transfer/models/
 └── llm/    # LLM для извлечения сущностей
 ```
 
+Если модели gated — используй `huggingface-cli login` или переменную `HF_TOKEN`.
+
 **Каждая подпапка должна содержать полный набор файлов модели:** `config.json`, `model.safetensors`, `tokenizer.json` и т.д.
 
 **Рекомендации по моделям:**
@@ -66,6 +68,8 @@ docker compose -f infra/compose/local.yml --profile linux up -d
 На Windows собери и экспортируй образы:
 
 ```powershell
+# Если модели на HuggingFace gated — передай токен
+$env:HF_TOKEN = "hf_..."
 .\scripts\export-images-windows.ps1
 ```
 
