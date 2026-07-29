@@ -125,7 +125,7 @@ services:
       - --quantization
       - awq
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-1}
+      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-0}
       HF_HOME: /models/llm/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -137,7 +137,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_LLM_GPU:-1}"]
+              device_ids: ["${IDP_VLLM_LLM_GPU:-0}"]
               capabilities: [gpu]
     profiles: [linux]
     healthcheck:
@@ -200,14 +200,14 @@ services:
       - --max-model-len
       - "8192"
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-1}
+      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-0}
       VLLM_NO_USAGE_STATS: "1"
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_LLM_GPU:-1}"]
+              device_ids: ["${IDP_VLLM_LLM_GPU:-0}"]
               capabilities: [gpu]
     profiles: [win-test]
     healthcheck:

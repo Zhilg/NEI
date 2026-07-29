@@ -102,6 +102,14 @@ docker compose -f infra/compose/local.yml --profile win-test up -d
 
 По умолчанию (без профиля) ничего не запускается.
 
+### GPU устройства
+
+По умолчанию все сервисы используют GPU 0. Если у тебя несколько GPU, переопредели:
+
+```bash
+IDP_WORKER_GPU=0 IDP_VLLM_VL_GPU=0 IDP_VLLM_LLM_GPU=1 docker compose -f infra/compose/local.yml --profile linux up -d
+```
+
 ## Подача документов
 
 Скопируй PDF или DOCX в `data/input/` до или во время работы контейнера. Worker автоматически обработает новые файлы.
