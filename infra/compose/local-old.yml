@@ -18,6 +18,8 @@ services:
       - --gpu-memory-utilization
       - "0.95"
       - --trust-remote-code
+      - --image-input-type
+      - pixel_values
       - --tokenizer-mode
       - slow
     volumes:
