@@ -9,5 +9,4 @@ wheels/*.whl
 *.tar
 *.tar.sha256
 
-data/input/
 data/output/*.md
