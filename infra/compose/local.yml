@@ -161,9 +161,11 @@ services:
       - --port
       - "8000"
       - --gpu-memory-utilization
-      - "0.95"
+      - "0.75"
       - --max-model-len
-      - "8192"
+      - "2048"
+      - --dtype
+      - half
     environment:
       CUDA_VISIBLE_DEVICES: ${IDP_VLLM_VL_GPU:-0}
       VLLM_NO_USAGE_STATS: "1"
@@ -180,7 +182,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 40
-      start_period: 60s
+      start_period: 120s
 
   vllm-win-llm:
     image: ${IDP_VLLM_WIN_LLM_IMAGE:-local/vllm-win-llm:latest}
@@ -196,9 +198,11 @@ services:
       - --port
       - "8000"
       - --gpu-memory-utilization
-      - "0.95"
+      - "0.75"
       - --max-model-len
-      - "8192"
+      - "2048"
+      - --dtype
+      - half
     environment:
       CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-0}
       VLLM_NO_USAGE_STATS: "1"
@@ -215,7 +219,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 40
-      start_period: 60s
+      start_period: 120s
 
 networks:
   idp_internal:
