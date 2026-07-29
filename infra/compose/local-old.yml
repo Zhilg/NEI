@@ -3,15 +3,49 @@ name: idp
 services:
   vllm-vl:
     environment:
+      CUDA_VISIBLE_DEVICES: "0"
       TRANSFORMERS_CACHE: /models/vl/hf-cache
       HF_HOME: /models/vl/hf-cache
+    command:
+      - --model
+      - /models/vl
+      - --served-model-name
+      - ${IDP_VL_MODEL:-llava-hf/llava-1.5-7b-hf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - "0.95"
+      - --max-model-len
+      - "32768"
+      - --trust-remote-code
+      - --tokenizer-mode
+      - slow
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}/vl_hf_cache:/models/vl/hf-cache:rw
 
   vllm-llm:
     environment:
+      CUDA_VISIBLE_DEVICES: "0"
       TRANSFORMERS_CACHE: /models/llm/hf-cache
       HF_HOME: /models/llm/hf-cache
+    command:
+      - --model
+      - /models/llm
+      - --served-model-name
+      - ${IDP_LLM_MODEL:-HuggingFaceTB/SmolLM-135M-Instruct}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - "0.95"
+      - --max-model-len
+      - "32768"
+      - --trust-remote-code
+      - --tokenizer-mode
+      - slow
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}/llm_hf_cache:/models/llm/hf-cache:rw
 
