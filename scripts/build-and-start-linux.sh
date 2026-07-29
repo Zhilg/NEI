@@ -74,9 +74,15 @@ ensure_model() {
   docker run --rm \
     -e REPO="$repo" \
     -e HF_TOKEN="$token" \
-    -v "$target_dir":"/target" \
+    -v "$target_dir":/target \
     python:3.12-slim \
-    bash -lc "pip install -q huggingface-hub && python - <<'PY'\nimport os\nfrom huggingface_hub import snapshot_download\nrepo=os.environ['REPO']\ntarget='/target'\ntoken=os.environ.get('HF_TOKEN') or None\nsnapshot_download(repo_id=repo, local_dir=target, local_dir_use_symlinks=False, token=token)\nPY"
+    sh -lc 'pip install -q huggingface-hub && python - <<PY
+import os
+from huggingface_hub import snapshot_download
+repo = os.environ["REPO"]
+token = os.environ.get("HF_TOKEN") or None
+snapshot_download(repo_id=repo, local_dir="/target", local_dir_use_symlinks=False, token=token)
+PY'
 
   if [[ $? -ne 0 ]]; then
     echo "ERROR: Failed to download $repo" >&2
