@@ -18,34 +18,40 @@ docker build -t local/vllm-vl:latest "$project_root/infra/dockerfiles/vllm-vl"
 echo "[3/5] Building vLLM LLM image..."
 docker build -t local/vllm-llm:latest "$project_root/infra/dockerfiles/vllm-llm"
 
-echo "[4/5] Checking models..."
+echo "[4/5] Ensuring models are in place..."
 models_vl="$project_root/transfer/models/vl"
 models_llm="$project_root/transfer/models/llm"
 
-check_model_dir() {
-    local dir="$1"
-    local name="$2"
-    if [[ ! -d "$dir" ]]; then
-        echo "ERROR: Model directory missing: $dir" >&2
-        return 1
-    fi
-    if [[ ! -f "$dir/config.json" ]]; then
-        echo "ERROR: $name directory exists but config.json is missing." >&2
-        echo "Expected contents of $dir:" >&2
-        ls -la "$dir" >&2 || true
-        return 1
-    fi
+mkdir -p "$models_vl" "$models_llm"
+
+ensure_model() {
+  local target_dir="$1"
+  local repo="$2"
+  local token="${HF_TOKEN:-}"
+
+  if [[ -f "$target_dir/config.json" ]]; then
+    echo "  Model already present in $target_dir"
+    return 0
+  fi
+
+  echo "  Downloading $repo -> $target_dir"
+  if ! command -v huggingface-cli >/dev/null 2>&1; then
+    pip install -q huggingface-hub
+  fi
+
+  local args=("download" "$repo" "--local-dir" "$target_dir" "--local-dir-use-symlinks" "False")
+  if [[ -n "$token" ]]; then
+    args+=("--token" "$token")
+  fi
+
+  if ! huggingface-cli "${args[@]}"; then
+    echo "ERROR: Failed to download $repo" >&2
+    exit 1
+  fi
 }
 
-if ! check_model_dir "$models_vl" "VL"; then
-  echo "Place VL model files into: $models_vl" >&2
-  exit 1
-fi
-
-if ! check_model_dir "$models_llm" "LLM"; then
-  echo "Place LLM model files into: $models_llm" >&2
-  exit 1
-fi
+ensure_model "$models_vl" "Qwen/Qwen2.5-VL-32B-Instruct-AWQ"
+ensure_model "$models_llm" "Qwen/Qwen3-14B-AWQ"
 
 echo "[5/5] Starting stack..."
 input_root="${IDP_INPUT_ROOT:-${project_root}/data/input}"
