@@ -106,6 +106,9 @@ output_root="${IDP_OUTPUT_ROOT:-${project_root}/data/output}"
 models_root="${IDP_MODELS_ROOT:-${project_root}/transfer/models}"
 
 mkdir -p "$input_root" "$output_root" "$models_root"
+# Ensure hf-cache folders exist and are writable for vllm services
+mkdir -p "$models_vl/hf-cache" "$models_llm/hf-cache"
+chmod 0777 "$models_vl/hf-cache" "$models_llm/hf-cache"
 
 export IDP_SOURCE_ROOT="$project_root"
 export IDP_INPUT_ROOT="$input_root"

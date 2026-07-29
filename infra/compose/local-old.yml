@@ -5,12 +5,21 @@ services:
 
   vllm-vl:
     environment:
-      # Hide GPU from the container; use a CPU-friendly vllm image instead.
+      # Hide GPU from the container; keep GPU reservation but direct HF cache to writable mount
       CUDA_VISIBLE_DEVICES: ""
+      TRANSFORMERS_CACHE: /models/vl/hf-cache
+      HF_HOME: /models/vl/hf-cache
+    volumes:
+      - ${IDP_MODELS_ROOT:-../../transfer/models}/vl_hf_cache:/models/vl/hf-cache:rw
 
   vllm-llm:
     environment:
+      # Hide GPU from the container; keep GPU reservation but direct HF cache to writable mount
       CUDA_VISIBLE_DEVICES: ""
+      TRANSFORMERS_CACHE: /models/llm/hf-cache
+      HF_HOME: /models/llm/hf-cache
+    volumes:
+      - ${IDP_MODELS_ROOT:-../../transfer/models}/llm_hf_cache:/models/llm/hf-cache:rw
 
 networks:
   idp_internal:
