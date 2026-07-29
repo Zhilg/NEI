@@ -142,6 +142,7 @@
 - `src/idp/metrics.py` (Prometheus)
 - `src/idp/health.py`
 - `src/idp/cli.py` — заменяется на один запуск worker
+- `tests/` — все тесты удаляются, не нужны
 
 ### Новые/изменённые модули
 - `src/idp/renderer.py` — простой рендеринг PDF→PNG через PyMuPDF.
@@ -152,6 +153,13 @@
 - `src/idp/stats_writer.py` — append-only запись в `stats.jsonl`.
 - `src/idp/worker.py` — простой цикл: найти файлы → PDF→рендер→VLM→LLM / DOCX→mammoth→LLM → сохранить.
 - `src/idp/config.py` — минимальный конфиг (пути, эндпоинты vLLM, модель, DPI).
+
+### Изменения в `pyproject.toml`
+- Удалить зависимости: `alembic`, `minio`, `prometheus-client`, `psycopg`, `sqlalchemy`, `typer`.
+- Удалить `dev` зависимости: `pytest`, `mypy`, `ruff`, `huggingface-hub`.
+- Удалить секции `[tool.pytest.ini_options]`, `[tool.coverage.run]`, `[tool.mypy]`, `[tool.ruff]`.
+- Добавить зависимости: `mammoth`, `tqdm`, `httpx`.
+- Обновить `project.scripts`: `idp = "idp.worker:main"` (точка входа в worker).
 
 ## Риски
 1. **Качество Markdown от VLM** зависит от промпта и выбранной модели. Требуется итеративная подбор промпта.
