@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:v0.10.2
+FROM vllm/vllm-openai:v0.26.0
 
 ARG MODEL_NAME=Qwen/Qwen2-VL-2B-Instruct
 ARG HF_TOKEN=""

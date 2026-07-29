@@ -16,7 +16,7 @@ $vllmLlmImage = "local/vllm-llm:latest"
 $vllmWinVlImage = "local/vllm-win-vl:latest"
 $vllmWinLlmImage = "local/vllm-win-llm:latest"
 $pythonImage = "python:3.12-slim"
-$vllmImage = "vllm/vllm-openai:v0.10.2"
+$vllmImage = "vllm/vllm-openai:v0.26.0"
 
 # Windows E2E model configurations
 $winVlModel = "Qwen/Qwen2-VL-2B-Instruct"
