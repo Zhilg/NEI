@@ -1,0 +1,3 @@
+{"source_file": "seed", "type": "organization", "value": "ООО Тестовая компания", "page": 0, "paragraph": 0, "evidence": "Seed entity", "confidence": 1.0}
+{"source_file": "seed", "type": "person", "value": "Иванов И.И.", "page": 0, "paragraph": 0, "evidence": "Seed entity", "confidence": 1.0}
+{"source_file": "seed", "type": "address", "value": "г. Москва, ул. Примерная, д. 1", "page": 0, "paragraph": 0, "evidence": "Seed entity", "confidence": 1.0}

@@ -3,9 +3,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-data/
 .smoke-runtime/
 transfer/
 wheels/*.whl
 *.tar
 *.tar.sha256
+
+data/input/
+data/output/*.md
