@@ -1,0 +1,124 @@
+# Упрощённая архитектура PDF→Markdown с VLM
+
+## Цель
+Убрать всё лишнее (PostgreSQL, MinIO, MinerU, PaddleOCR, SwinIR, Controller, Operator, Fenic), оставить минимальный пайплайн: **PDF → VLM → Markdown → LLM → сущности**.
+
+## Архитектура
+
+### Сервисы (Docker Compose)
+| Сервис | Назначение | GPU |
+|---|---|---|
+| `vllm-vl` | Локальный vLLM с жёстко заданной VL-моделью | GPU0 |
+| `vllm-llm` | Локальный vLLM с LLM для извлечения сущностей | GPU0/GPU1 |
+| `worker` | Python-код, монтируемый в контейнер | CPU |
+
+### Удаляемые компоненты
+- PostgreSQL + Alembic + все ORM-сущности
+- MinIO + `minio-init`
+- MinerU (`magic-pdf`) + `LayoutAdapter`
+- PaddleOCR + скриптовые роутеры
+- SwinIR + quality gate
+- Controller (лизинг, capacity, метрики)
+- Operator CLI
+- Fenic-совместимый `EntityExtractor` с жёстким списком моделей
+
+## Пайплайн обработки
+
+### Этап 1: Рендеринг PDF→изображения
+- Используется **PyMuPDF** (`fitz`) — рендеринг страниц в PNG, текстовая прослойка **никогда не читается**.
+- DPI берётся из простого конфига (по умолчанию 200).
+- Выход: PNG-файлы страниц во временной директории.
+
+### Этап 2: VLM-реконструкция (PDF → Markdown)
+- Все PNG-страницы подаются в локальный vLLM-VL чанками (ограничение по количеству изображений на запрос).
+- Промпт явно указывает модели:
+  - игнорировать встроенный текстовый слой PDF;
+  - распознавать исключительно по визуальному представлению;
+  - конвертировать таблицы в корректный Markdown;
+  - анализировать изображения по смыслу и вставлять описание **в том месте документа, где находится оригинальное изображение**.
+- Результат: один файл `reconstructed.md`.
+
+### Этап 3: Извлечение сущностей
+- Готовый `reconstructed.md` отправляется в отдельный LLM (локальный vLLM).
+- Модель возвращает JSON-список сущностей (типы и поля — простой конфиг, без жёстко заданного списка моделей).
+- Валидация: минимальная (только JSON-схема), без привязки к bbox/block_id (так как MinerU убран).
+
+### Этап 4: Публикация результатов
+- `reconstructed.md` копируется в выходную директорию.
+- Новые сущности дописываются в накопительный `entities.jsonl` (по одной строке JSON на сущность).
+- Временные PNG удаляются.
+
+## Хранилище
+
+### Вместо PostgreSQL/MinIO
+- **Файловая система** через bind-mountы:
+  - `/input` — входные PDF (read-only)
+  - `/output` — итоговые `*.md` + `entities.jsonl`
+  - `/workspace` — исходный код (монтируется в worker)
+- Идемпотентность: если `output/<stem>.md` уже существует — файл пропускается.
+
+### Сущности (entities.jsonl)
+Формат строки (JSON):
+```json
+{"type": "person", "value": "Иванов И.И.", "page": 1, "evidence": "...", "confidence": 0.95}
+```
+- Файл открывается в режиме append.
+- Дубликаты не фильтруются на уровне хранилища (это может быть сделано на уровне приложения при необходимости).
+
+## Деплой
+
+### Docker Compose (`infra/compose/local.yml`)
+Упрощённый вариант:
+- Убраны: `postgres`, `minio`, `minio-init`, `migrate`, `profiles`, `controller`, `operator`, все `profiles`.
+- Остались: `vllm-vl`, `vllm-llm`, `worker`.
+- Тома:
+  - `${IDP_SOURCE_ROOT:-../..}:/workspace:ro`
+  - `${IDP_INPUT_ROOT:-../../data/input}:/input:ro`
+  - `${IDP_OUTPUT_ROOT:-../../data/output}:/output`
+  - `${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro`
+- Сеть: простая общая сеть без `internal: true`.
+- Нет проверок SHA-256, нет версионирования, нет инициализации бакетов/миграций.
+
+### Dockerfile
+- Базовый образ: `python:3.12-slim` (или аналогичный).
+- Установка зависимостей из `pyproject.toml` (без `tools_wheels/`).
+- Монтирование кода через volume — ничего не бейкится в образ.
+- Entrypoint: скрипт запуска worker.
+
+## Код
+
+### Удаляемые модули
+- `src/idp/persistence/` (PostgreSQL/SQLAlchemy)
+- `src/idp/storage.py` (MinIO/LocalArtifactStore)
+- `src/idp/services/mineru.py`
+- `src/idp/services/ocr.py`
+- `src/idp/services/vision.py` (SwinIR, quality gate) — заменяется на простой рендерер
+- `src/idp/services/controller.py`
+- `src/idp/services/publication.py` (MinIO публикация)
+- `src/idp/services/hashing.py` (SHA-256)
+- `src/idp/services/discovery.py` (старая логика сканирования с хешированием) — заменяется на простой `os.scandir`
+- `src/idp/config.py` — упрощается (убираются URL MinIO/Postgres, команды MinerU/OCR)
+- `src/idp/metrics.py` (Prometheus)
+- `src/idp/health.py`
+- `src/idp/cli.py` — заменяется на один запуск worker
+
+### Новые/изменённые модули
+- `src/idp/renderer.py` — простой рендеринг PDF→PNG через PyMuPDF.
+- `src/idp/vlm_client.py` — клиент к локальному vLLM-VL, chunked-отправка страниц, обработка Markdown.
+- `src/idp/entity_client.py` — клиент к локальному vLLM-LLM, извлечение сущностей в JSON.
+- `src/idp/entity_store.py` — append-only запись в `entities.jsonl`.
+- `src/idp/worker.py` — простой цикл: найти PDF → рендер → VLM → LLM → сохранить.
+- `src/idp/config.py` — минимальный конфиг (пути, эндпоинты vLLM, модель, DPI).
+
+## Риски
+1. **Качество Markdown от VLM** зависит от промпта и выбранной модели. Требуется итеративная подбор промпта.
+2. **Контекст VL-модели** — при большом количестве страниц документ не влезет в контекст. Решение: чанкинг по страницам с инструкцией сохранять reading order.
+3. **Качество сущностей** без жёсткой привязки к bbox/block_id может быть ниже. Решение: добавить в промпт требование указывать страницу и цитату (evidence).
+4. **Производительность** — отправка всех страниц как изображений требует много VRAM. Решение: ограничить количество страниц на запрос и/или использовать модели меньшего размера.
+
+## Валидация
+1. Запустить `docker compose up` с двумя реальными vLLM-сервисами.
+2. Положить тестовый PDF в `/input`.
+3. Проверить, что в `/output` появился `.md` с корректными таблицами и описаниями изображений.
+4. Проверить, что `entities.jsonl` пополнился строками.
+5. Запустить повторно — убедиться, что уже обработанный PDF пропущен.
