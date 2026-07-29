@@ -25,7 +25,9 @@ SYSTEM_PROMPT = (
     "Recognize content purely from the visual representation of pages. "
     "Convert tables to correct Markdown. "
     "Describe images by their meaning and insert the description exactly where the image appears in the original document. "
-    "Preserve reading order and page structure."
+    "Preserve reading order and page structure. "
+    "Split the main text into paragraphs with blank lines between them. "
+    "Each paragraph should be a separate block, keep original line breaks within paragraphs."
 )
 
 

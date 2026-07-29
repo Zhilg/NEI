@@ -12,8 +12,10 @@ from idp.config import settings
 
 ENTITY_SYSTEM_PROMPT = (
     "Extract entities from the provided Markdown document. "
-    "Return a JSON array of entities with fields: type, value, page, evidence, confidence. "
+    "The document text is split into paragraphs separated by blank lines. "
+    "Return a JSON array of entities with fields: type, value, page, paragraph, evidence, confidence. "
     "page is 1-based page number if available, otherwise 0. "
+    "paragraph is 1-based paragraph number within the page. "
     "evidence is the exact text snippet from the document. "
     "confidence is a float between 0 and 1. "
     "Supported types: person, organization, date, address, identifier, amount, other. "
@@ -62,6 +64,12 @@ async def extract_entities(markdown_path: Path) -> list[dict]:
             entities = parsed
         if not isinstance(entities, list):
             return []
-        return [e for e in entities if isinstance(e, dict)]
+        normalized = []
+        for e in entities:
+            if not isinstance(e, dict):
+                continue
+            e.setdefault("paragraph", 0)
+            normalized.append(e)
+        return normalized
     except json.JSONDecodeError:
         return []
