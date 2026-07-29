@@ -17,8 +17,6 @@ services:
       - "8000"
       - --gpu-memory-utilization
       - "0.95"
-      - --max-model-len
-      - "32768"
       - --trust-remote-code
       - --tokenizer-mode
       - slow
@@ -41,8 +39,6 @@ services:
       - "8000"
       - --gpu-memory-utilization
       - "0.95"
-      - --max-model-len
-      - "32768"
       - --trust-remote-code
       - --tokenizer-mode
       - slow
