@@ -90,7 +90,7 @@ services:
       - "32768"
       - --trust-remote-code
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-0}
+      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-1}
       HF_HOME: /models/llm/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -102,7 +102,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_LLM_GPU:-0}"]
+              device_ids: ["${IDP_VLLM_LLM_GPU:-1}"]
               capabilities: [gpu]
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
