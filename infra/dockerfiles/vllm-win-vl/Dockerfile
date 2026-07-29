@@ -1,5 +1,6 @@
-ARG MODEL_NAME=Qwen/Qwen2.5-VL-2B-Instruct
 FROM vllm/vllm-openai:v0.10.2
+
+ARG MODEL_NAME=Qwen/Qwen2.5-VL-2B-Instruct
 
 RUN pip install huggingface-hub
 
