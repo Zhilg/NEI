@@ -76,6 +76,6 @@ try {
     Write-Host "Completion marker: $completionPath"
     Write-Host ""
     Write-Host "Linux models should be manually placed in:"
-    Write-Host "  VL: $linuxVlDir"
-    Write-Host "  LLM: $linuxLlmDir"
+    Write-Host "  VL: $(Join-Path $transferDirectory 'models\vl')"
+    Write-Host "  LLM: $(Join-Path $transferDirectory 'models\llm')"
 } finally {}

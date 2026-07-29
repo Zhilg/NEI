@@ -35,8 +35,8 @@ transfer/
 ├── idp-images.tar.json     # метаданные
 ├── EXPORT-COMPLETE.txt     # маркер завершения
 └── models/
-    ├── vl/                 # Qwen2.5-VL-32B-Instruct-AWQ (кладёшь сам)
-    └── llm/                # Qwen3-14B-Instruct-AWQ (кладёшь сам)
+    ├── vl/                 # сюда содержимое папки VL-модели (веса, config.json и т.д.)
+    └── llm/                # сюда содержимое папки LLM-модели
 ```
 
 Если модели gated — используй `huggingface-cli login` или переменную `HF_TOKEN`.
