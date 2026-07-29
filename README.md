@@ -43,12 +43,25 @@ transfer/models/
 
 ## Запуск
 
-```bash
-# 1. Собери worker-образ
-docker build -t local/idp-app:latest .
+Один скрипт собирает всё и поднимает стек:
 
-# 2. Положи модели в transfer/models/vl/ и transfer/models/llm/
-# 3. Подними контейнеры
+```bash
+chmod +x scripts/build-and-start-linux.sh
+./scripts/build-and-start-linux.sh
+```
+
+Скрипт:
+1. Собирает `local/idp-app:latest` (worker)
+2. Собирает `local/vllm-vl:latest` и `local/vllm-llm:latest` с последней версией transformers
+3. Проверяет/скачивает модели в `transfer/models/`
+4. Поднимает контейнеры
+
+Или вручную:
+
+```bash
+docker build -t local/idp-app:latest .
+docker build -t local/vllm-vl:latest ./infra/dockerfiles/vllm-vl
+docker build -t local/vllm-llm:latest ./infra/dockerfiles/vllm-llm
 docker compose -f infra/compose/local.yml up -d
 ```
 
@@ -58,7 +71,7 @@ docker compose -f infra/compose/local.yml up -d
 
 ```bash
 cp ~/Downloads/document.pdf data/input/
-docker compose -f infra/compose/local.yml up -d
+./scripts/build-and-start-linux.sh
 ```
 
 ## Мониторинг
@@ -85,6 +98,6 @@ docker compose -f infra/compose/local.yml down
 
 - **Контейнеры никогда не имеют доступа к интернету** — сеть `internal: true`
 - **Никаких SHA-256, версионирования, whl-файлов** — всё максимально просто
-- **Модели качаешь сам** — никакие скрипты это не делают
+- **Модели качаешь сам** — скрипт может скачать их автоматически при первом запуске
 - **Linux vLLM-образы собираются с последней версией transformers** — достаточно `docker build`
 - **RTX 5070 12GB** — модели (Qwen2.5-VL-32B-AWQ + Qwen3-14B-AWQ) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов
