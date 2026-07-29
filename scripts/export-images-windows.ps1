@@ -49,9 +49,11 @@ try {
     Write-Host "[2/5] Building worker image..."
     Invoke-Docker build --pull=false --tag $appImage $projectRoot
 
-    Write-Host "[3/5] Preparing Linux vLLM images..."
-    Invoke-Docker tag $vllmImage $vllmVlImage
-    Invoke-Docker tag $vllmImage $vllmLlmImage
+    Write-Host "[3/5] Building Linux vLLM images with latest transformers..."
+    $linuxVlDir = Join-Path $projectRoot "infra\dockerfiles\vllm-vl"
+    $linuxLlmDir = Join-Path $projectRoot "infra\dockerfiles\vllm-llm"
+    Invoke-Docker build --pull=false --tag $vllmVlImage $linuxVlDir
+    Invoke-Docker build --pull=false --tag $vllmLlmImage $linuxLlmDir
 
     Write-Host "[4/5] Building Windows E2E images with baked-in small models..."
     $winVlDir = Join-Path $projectRoot "infra\dockerfiles\vllm-win-vl"

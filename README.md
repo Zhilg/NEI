@@ -27,7 +27,7 @@ DOCX конвертируется в Markdown через `mammoth`.
 
 **Скрипт `export-images-windows.ps1` собирает образы для обоих сценариев:**
 - **Windows E2E** — tiny-модели запекаются в образы во время сборки
-- **Linux production** — Linux vLLM-образы собираются без моделей, модели должны быть уже в `transfer/models/`
+- **Linux production** — Linux vLLM-образы собираются с последней версией transformers, модели должны быть уже в `transfer/models/`
 
 ```
 transfer/
