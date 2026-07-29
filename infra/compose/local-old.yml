@@ -1,0 +1,18 @@
+name: idp
+
+services:
+  # Do NOT change deploy.resources here — keep GPU reservation intact.
+
+  vllm-vl:
+    environment:
+      # Make the service use CPU only while still leaving device reservation in compose
+      CUDA_VISIBLE_DEVICES: ""
+
+  vllm-llm:
+    environment:
+      # Make the service use CPU only while still leaving device reservation in compose
+      CUDA_VISIBLE_DEVICES: ""
+
+networks:
+  idp_internal:
+    internal: true
