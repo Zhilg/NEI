@@ -27,7 +27,7 @@ def _find_files(input_root: Path) -> list[Path]:
     return files
 
 
-def _process_file(file_path: Path, stats: StatsWriter, entity_store: EntityStore) -> None:
+async def _process_file(file_path: Path, stats: StatsWriter, entity_store: EntityStore) -> None:
     relative = file_path.relative_to(settings.input_root)
     stem = file_path.stem
     output_md = settings.output_root / f"{stem}.md"
@@ -61,16 +61,20 @@ def _process_file(file_path: Path, stats: StatsWriter, entity_store: EntityStore
         timer.finish(status="error", error=str(exc))
 
 
-async def main() -> None:
+def main() -> None:
+    import asyncio
+    asyncio.run(_main())
+
+
+async def _main() -> None:
     settings.output_root.mkdir(parents=True, exist_ok=True)
     files = _find_files(settings.input_root)
     stats = StatsWriter(settings.output_root / "stats.jsonl")
     entity_store = EntityStore(settings.output_root / "entities.jsonl")
 
     for file_path in tqdm(files, desc="Files", unit="file"):
-        _process_file(file_path, stats, entity_store)
+        await _process_file(file_path, stats, entity_store)
 
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
