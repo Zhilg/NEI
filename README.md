@@ -25,9 +25,9 @@ DOCX конвертируется в Markdown через `mammoth`.
 
 ### Сценарий 1: Linux production (нормальные модели)
 
-**Скрипт `export-images-windows.ps1` качает модели для обоих сценариев:**
+**Скрипт `export-images-windows.ps1` собирает образы для обоих сценариев:**
 - **Windows E2E** — tiny-модели запекаются в образы во время сборки
-- **Linux production** — модели скачиваются в `transfer/models/` и тоже запекаются в Linux-образы
+- **Linux production** — Linux vLLM-образы собираются без моделей, модели должны быть уже в `transfer/models/`
 
 ```
 transfer/
@@ -35,8 +35,8 @@ transfer/
 ├── idp-images.tar.json     # метаданные
 ├── EXPORT-COMPLETE.txt     # маркер завершения
 └── models/
-    ├── vl/                 # Qwen2.5-VL-32B-Instruct (для Linux)
-    └── llm/                # Qwen3-14B-Instruct (для Linux)
+    ├── vl/                 # Qwen2.5-VL-32B-Instruct-AWQ (кладёшь сам)
+    └── llm/                # Qwen3-14B-Instruct-AWQ (кладёшь сам)
 ```
 
 Если модели gated — используй `huggingface-cli login` или переменную `HF_TOKEN`.
@@ -63,11 +63,10 @@ transfer/
 # 1. Собери worker-образ
 docker build -t local/idp-app:latest .
 
-# 2. Подними контейнеры
+# 2. Положи модели в transfer/models/vl/ и transfer/models/llm/
+# 3. Подними контейнеры
 docker compose -f infra/compose/local.yml --profile linux up -d
 ```
-
-Модели уже должны быть в `transfer/models/` (если используешь архив с Windows) или скачай их сам.
 
 ### Windows E2E
 
