@@ -59,6 +59,7 @@ async def reconstruct_markdown_from_images(images: list[Path]) -> str:
                     {"role": "user", "content": _build_user_content(chunk)},
                 ],
                 "temperature": 0.1,
+                "max_tokens": 16384,
             }
             response = await client.post(
                 f"{settings.vl_endpoint}/chat/completions",
