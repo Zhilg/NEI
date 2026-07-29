@@ -33,6 +33,17 @@ transfer/models/
 
 Каждая подпапка должна содержать полный набор файлов модели: `config.json`, `model.safetensors`, `tokenizer.json` и т.д.
 
+Внутри подпапки должен лежать полный набор файлов скачанной модели, а не сама скачанная папка. Например:
+```
+transfer/models/vl/
+├── config.json
+├── model.safetensors.index.json
+├── model-00001-of-00008.safetensors
+├── model-00002-of-00008.safetensors
+├── preprocessor_config.json
+└── tokenizer.json
+```
+
 **Рекомендации по моделям:**
 
 | GPU VRAM | VL-модель (в `vl/`) | LLM-модель (в `llm/`) |

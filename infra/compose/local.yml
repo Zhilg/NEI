@@ -48,8 +48,7 @@ services:
       - "0.95"
       - --max-model-len
       - "32768"
-      - --quantization
-      - awq
+      - --trust-remote-code
     environment:
       CUDA_VISIBLE_DEVICES: ${IDP_VLLM_VL_GPU:-0}
       HF_HOME: /models/vl/hf-cache
@@ -89,8 +88,7 @@ services:
       - "0.95"
       - --max-model-len
       - "32768"
-      - --quantization
-      - awq
+      - --trust-remote-code
     environment:
       CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-0}
       HF_HOME: /models/llm/hf-cache

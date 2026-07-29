@@ -22,24 +22,29 @@ echo "[4/5] Checking models..."
 models_vl="$project_root/transfer/models/vl"
 models_llm="$project_root/transfer/models/llm"
 
-if [[ ! -d "$models_vl" ]] || [[ ! -d "$models_llm" ]]; then
-  echo "Models not found. Creating directories and downloading..."
-  mkdir -p "$models_vl" "$models_llm"
-  pip install huggingface-hub -q
-  python3 -c "
-from huggingface_hub import snapshot_download
-import sys
-try:
-    snapshot_download('Qwen/Qwen2.5-VL-32B-Instruct', local_dir='$models_vl', local_dir_use_symlinks=False)
-except Exception as e:
-    print(f'Failed to download VL model: {e}', file=sys.stderr)
-    sys.exit(1)
-try:
-    snapshot_download('Qwen/Qwen3-14B-Instruct', local_dir='$models_llm', local_dir_use_symlinks=False)
-except Exception as e:
-    print(f'Failed to download LLM model: {e}', file=sys.stderr)
-    sys.exit(1)
-"
+check_model_dir() {
+    local dir="$1"
+    local name="$2"
+    if [[ ! -d "$dir" ]]; then
+        echo "ERROR: Model directory missing: $dir" >&2
+        return 1
+    fi
+    if [[ ! -f "$dir/config.json" ]]; then
+        echo "ERROR: $name directory exists but config.json is missing." >&2
+        echo "Expected contents of $dir:" >&2
+        ls -la "$dir" >&2 || true
+        return 1
+    fi
+}
+
+if ! check_model_dir "$models_vl" "VL"; then
+  echo "Place VL model files into: $models_vl" >&2
+  exit 1
+fi
+
+if ! check_model_dir "$models_llm" "LLM"; then
+  echo "Place LLM model files into: $models_llm" >&2
+  exit 1
 fi
 
 echo "[5/5] Starting stack..."
