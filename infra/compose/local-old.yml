@@ -18,8 +18,6 @@ services:
       - --gpu-memory-utilization
       - "0.95"
       - --trust-remote-code
-      - --image-input-type
-      - pixel_values
       - --tokenizer-mode
       - slow
     volumes:
@@ -41,6 +39,8 @@ services:
       - "8000"
       - --gpu-memory-utilization
       - "0.95"
+      - --max-model-len
+      - "2048"
       - --trust-remote-code
       - --tokenizer-mode
       - slow
