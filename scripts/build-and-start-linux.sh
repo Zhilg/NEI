@@ -93,8 +93,8 @@ PY'
 # Choose which models to fetch
 if [[ "$OLD_MODE" -eq 1 ]]; then
   # Small models chosen by request to exercise vLLM in --old mode
-  ensure_model "$models_vl" "Qwen/Qwen2-VL-2B-Instruct"
-  ensure_model "$models_llm" "HuggingFaceTB/SmolLM2-135M-Instruct"
+  ensure_model "$models_vl" "llava-hf/llava-1.5-7b-hf"
+  ensure_model "$models_llm" "HuggingFaceTB/SmolLM-135M-Instruct"
 else
   ensure_model "$models_vl" "Qwen/Qwen2.5-VL-32B-Instruct-AWQ"
   ensure_model "$models_llm" "Qwen/Qwen3-14B-AWQ"
@@ -121,8 +121,8 @@ if [[ "$OLD_MODE" -eq 1 ]]; then
   export IDP_VLLM_VL_IMAGE="local/vllm-vl:old"
   export IDP_VLLM_LLM_IMAGE="local/vllm-llm:old"
   # Default small models requested
-  export IDP_VL_MODEL="${IDP_VL_MODEL:-Qwen/Qwen2-VL-2B-Instruct}"
-  export IDP_LLM_MODEL="${IDP_LLM_MODEL:-HuggingFaceTB/SmolLM2-135M-Instruct}"
+  export IDP_VL_MODEL="${IDP_VL_MODEL:-llava-hf/llava-1.5-7b-hf}"
+  export IDP_LLM_MODEL="${IDP_LLM_MODEL:-HuggingFaceTB/SmolLM-135M-Instruct}"
 else
   export IDP_VLLM_VL_IMAGE="local/vllm-vl:latest"
   export IDP_VLLM_LLM_IMAGE="local/vllm-llm:latest"

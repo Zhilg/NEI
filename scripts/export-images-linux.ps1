@@ -14,7 +14,7 @@ $appImage = "local/idp-app:latest"
 $vllmVlImage = "local/vllm-vl:latest"
 $vllmLlmImage = "local/vllm-llm:latest"
 $pythonImage = "python:3.12-slim"
-$vllmImage = "vllm/vllm-openai:v0.25.0"
+$vllmImage = "vllm/vllm-openai:v0.5.0"
 
 function Invoke-Docker {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
