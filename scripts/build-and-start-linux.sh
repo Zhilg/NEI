@@ -26,12 +26,13 @@ fi
 
 # Build or pull images depending on mode
 if [[ "$OLD_MODE" -eq 1 ]]; then
-  echo "[1/5] Old-driver mode: pulling compatible vllm image and tagging local images..."
-  OLD_BASE_IMAGE="${IDP_OLD_VLLM_BASE:-vllm/vllm-openai:v0.25.0}"
-  echo "  Pulling $OLD_BASE_IMAGE"
-  docker pull "$OLD_BASE_IMAGE"
-  docker tag "$OLD_BASE_IMAGE" local/vllm-vl:old
-  docker tag "$OLD_BASE_IMAGE" local/vllm-llm:old
+  echo "[1/5] Old-driver mode: building CPU-only vllm images (may take a while)"
+
+  echo "  Building CPU image for vllm-llm"
+  docker build -t local/vllm-llm:old -f "$project_root/infra/dockerfiles/vllm-llm/Dockerfile.cpu" "$project_root/infra/dockerfiles/vllm-llm"
+
+  echo "  Building CPU image for vllm-vl"
+  docker build -t local/vllm-vl:old -f "$project_root/infra/dockerfiles/vllm-vl/Dockerfile.cpu" "$project_root/infra/dockerfiles/vllm-vl"
 
   echo "[2/5] Building worker image..."
   docker build -t local/idp-app:latest "$project_root"
