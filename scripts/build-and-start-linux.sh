@@ -26,13 +26,12 @@ fi
 
 # Build or pull images depending on mode
 if [[ "$OLD_MODE" -eq 1 ]]; then
-  echo "[1/5] Old-driver mode: building CPU-only vllm images (may take a while)"
-
-  echo "  Building CPU image for vllm-llm"
-  docker build -t local/vllm-llm:old -f "$project_root/infra/dockerfiles/vllm-llm/Dockerfile.cpu" "$project_root/infra/dockerfiles/vllm-llm"
-
-  echo "  Building CPU image for vllm-vl"
-  docker build -t local/vllm-vl:old -f "$project_root/infra/dockerfiles/vllm-vl/Dockerfile.cpu" "$project_root/infra/dockerfiles/vllm-vl"
+  echo "[1/5] Old-driver mode: pulling vllm v0.5 GPU image and tagging local images"
+  OLD_BASE_IMAGE="${IDP_OLD_VLLM_BASE:-vllm/vllm-openai:v0.5.0}"
+  echo "  Pulling $OLD_BASE_IMAGE"
+  docker pull "$OLD_BASE_IMAGE"
+  docker tag "$OLD_BASE_IMAGE" local/vllm-vl:old
+  docker tag "$OLD_BASE_IMAGE" local/vllm-llm:old
 
   echo "[2/5] Building worker image..."
   docker build -t local/idp-app:latest "$project_root"
@@ -69,17 +68,17 @@ ensure_model() {
     return 0
   fi
 
-  echo "  Downloading $repo -> $target_dir"
-  if ! command -v huggingface-cli >/dev/null 2>&1; then
-    pip install -q huggingface-hub
-  fi
+  echo "  Downloading $repo -> $target_dir using an isolated container (no host changes)"
 
-  local args=("download" "$repo" "--local-dir" "$target_dir" "--local-dir-use-symlinks" "False")
-  if [[ -n "$token" ]]; then
-    args+=("--token" "$token")
-  fi
+  # Use an ephemeral Python container to download the model with huggingface-hub
+  docker run --rm \
+    -e REPO="$repo" \
+    -e HF_TOKEN="$token" \
+    -v "$target_dir":"/target" \
+    python:3.12-slim \
+    bash -lc "pip install -q huggingface-hub && python - <<'PY'\nimport os\nfrom huggingface_hub import snapshot_download\nrepo=os.environ['REPO']\ntarget='/target'\ntoken=os.environ.get('HF_TOKEN') or None\nsnapshot_download(repo_id=repo, local_dir=target, local_dir_use_symlinks=False, token=token)\nPY"
 
-  if ! huggingface-cli "${args[@]}"; then
+  if [[ $? -ne 0 ]]; then
     echo "ERROR: Failed to download $repo" >&2
     exit 1
   fi
@@ -87,9 +86,9 @@ ensure_model() {
 
 # Choose which models to fetch
 if [[ "$OLD_MODE" -eq 1 ]]; then
-  # Small models to test startup under old-driver-compatible images
-  ensure_model "$models_llm" "distilgpt2"
-  ensure_model "$models_vl" "google/vit-base-patch16-224"
+  # Small models chosen by request to exercise vLLM in --old mode
+  ensure_model "$models_vl" "HuggingFaceTB/SmolVLM-256M-Instruct"
+  ensure_model "$models_llm" "HuggingFaceTB/SmolLM2-135M-Instruct"
 else
   ensure_model "$models_vl" "Qwen/Qwen2.5-VL-32B-Instruct-AWQ"
   ensure_model "$models_llm" "Qwen/Qwen3-14B-AWQ"
@@ -112,9 +111,9 @@ export IDP_APP_IMAGE="local/idp-app:latest"
 if [[ "$OLD_MODE" -eq 1 ]]; then
   export IDP_VLLM_VL_IMAGE="local/vllm-vl:old"
   export IDP_VLLM_LLM_IMAGE="local/vllm-llm:old"
-  # For clarity, set small model names as defaults
-  export IDP_VL_MODEL="${IDP_VL_MODEL:-google/vit-base-patch16-224}"
-  export IDP_LLM_MODEL="${IDP_LLM_MODEL:-distilgpt2}"
+  # Default small models requested
+  export IDP_VL_MODEL="${IDP_VL_MODEL:-HuggingFaceTB/SmolVLM-256M-Instruct}"
+  export IDP_LLM_MODEL="${IDP_LLM_MODEL:-HuggingFaceTB/SmolLM2-135M-Instruct}"
 else
   export IDP_VLLM_VL_IMAGE="local/vllm-vl:latest"
   export IDP_VLLM_LLM_IMAGE="local/vllm-llm:latest"
