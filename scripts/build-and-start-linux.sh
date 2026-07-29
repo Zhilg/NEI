@@ -93,6 +93,9 @@ PY'
 # Choose which models to fetch
 if [[ "$OLD_MODE" -eq 1 ]]; then
   # Small models chosen by request to exercise vLLM in --old mode
+  # Remove any incompatible models from previous runs so ensure_model re-downloads
+  rm -rf "$models_vl" "$models_llm"
+  mkdir -p "$models_vl" "$models_llm"
   ensure_model "$models_vl" "llava-hf/llava-1.5-7b-hf"
   ensure_model "$models_llm" "HuggingFaceTB/SmolLM-135M-Instruct"
 else
