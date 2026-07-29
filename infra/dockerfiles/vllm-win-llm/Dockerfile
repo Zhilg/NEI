@@ -5,7 +5,8 @@ ARG HF_TOKEN=""
 
 ENV HF_TOKEN=${HF_TOKEN}
 
-RUN pip install huggingface-hub
+RUN pip install --upgrade pip && \
+    pip install --upgrade huggingface_hub transformers tokenizers accelerate safetensors
 
 RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('${MODEL_NAME}', local_dir='/models', local_dir_use_symlinks=False, token='${HF_TOKEN}')"
 

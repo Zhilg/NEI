@@ -143,5 +143,5 @@ docker compose -f infra/compose/local.yml --profile linux down
 
 - **Контейнеры никогда не имеют доступа к интернету** — сеть `internal: true`
 - **Никаких SHA-256, версионирования, whl-файлов** — всё максимально просто
-- **Скрипт качает модели для Linux и Windows** — просто запусти `export-images-windows.ps1`
-- **RTX 5070 12GB** — win-test модели (2B VL + 0.8B LLM) влезают comfortably. Linux модели (32B VL + 14B LLM) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов
+- **Скрипт собирает образы для Windows E2E и Linux** — просто запусти `export-images-windows.ps1`
+- **RTX 5070 12GB** — win-test модели (Qwen3-VL-2B + Qwen3.5-0.8B) влезают comfortably. Linux модели (Qwen2.5-VL-32B-AWQ + Qwen3-14B-AWQ) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов

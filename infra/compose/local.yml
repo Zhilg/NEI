@@ -99,7 +99,7 @@ services:
               capabilities: [gpu]
     profiles: [linux]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
       interval: 15s
       timeout: 5s
       retries: 40
@@ -141,7 +141,7 @@ services:
               capabilities: [gpu]
     profiles: [linux]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
       interval: 15s
       timeout: 5s
       retries: 40
@@ -176,7 +176,7 @@ services:
               capabilities: [gpu]
     profiles: [win-test]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
       interval: 15s
       timeout: 5s
       retries: 40
@@ -211,7 +211,7 @@ services:
               capabilities: [gpu]
     profiles: [win-test]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
       interval: 15s
       timeout: 5s
       retries: 40
