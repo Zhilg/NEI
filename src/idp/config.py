@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     render_dpi: int = Field(default=200, ge=72, le=600)
     vl_endpoint: str = "http://vllm-vl:8000/v1"
     llm_endpoint: str = "http://vllm-llm:8000/v1"
-    vl_model: str = "Qwen2.5-VL-32B-Instruct"
-    llm_model: str = "Qwen3-14B-Instruct"
+    vl_model: str = "Qwen2.5-VL-32B-Instruct-AWQ"
+    llm_model: str = "Qwen3-14B-AWQ"
     vl_timeout_seconds: float = Field(default=600, gt=0, le=3600)
     llm_timeout_seconds: float = Field(default=300, gt=0, le=3600)
     max_images_per_request: int = Field(default=10, gt=0)

@@ -39,7 +39,7 @@ transfer/models/
 |---|---|---|
 | 8 GB | `Qwen/Qwen2-VL-2B-Instruct` | `Qwen/Qwen2.5-0.5B-Instruct` |
 | 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct` |
-| 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct` | `Qwen/Qwen3-14B-Instruct` |
+| 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct-AWQ` | `Qwen/Qwen3-14B-AWQ` |
 
 ## Деплой
 
