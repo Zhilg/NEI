@@ -4,6 +4,21 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Parse arguments
+OLD_MODE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --old)
+      OLD_MODE=1
+      shift
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker CLI not found in PATH." >&2
   exit 1
@@ -69,7 +84,12 @@ export IDP_VLLM_VL_IMAGE="local/vllm-vl:latest"
 export IDP_VLLM_LLM_IMAGE="local/vllm-llm:latest"
 
 cd "$project_root"
-docker compose -f infra/compose/local.yml up -d
+if [[ "$OLD_MODE" -eq 1 ]]; then
+  echo "[*] Old-driver mode enabled: using compose override infra/compose/local-old.yml"
+  docker compose -f infra/compose/local.yml -f infra/compose/local-old.yml up -d
+else
+  docker compose -f infra/compose/local.yml up -d
+fi
 
 echo ""
 echo "=== Stack started ==="
