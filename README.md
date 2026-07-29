@@ -23,25 +23,15 @@ DOCX конвертируется в Markdown через `mammoth`.
 
 ## Модели
 
-### Сценарий 1: Linux production (нормальные модели)
-
-**Скрипт `export-images-windows.ps1` собирает образы для обоих сценариев:**
-- **Windows E2E** — tiny-модели запекаются в образы во время сборки
-- **Linux production** — Linux vLLM-образы собираются с последней версией transformers, модели должны быть уже в `transfer/models/`
+Скачай модели сам с HuggingFace и положи в:
 
 ```
-transfer/
-├── idp-images.tar          # все образы в одном архиве
-├── idp-images.tar.json     # метаданные
-├── EXPORT-COMPLETE.txt     # маркер завершения
-└── models/
-    ├── vl/                 # сюда содержимое папки VL-модели (веса, config.json и т.д.)
-    └── llm/                # сюда содержимое папки LLM-модели
+transfer/models/
+├── vl/    # VL-модель для реконструкции PDF → Markdown
+└── llm/   # LLM для извлечения сущностей
 ```
 
-Если модели gated — используй `huggingface-cli login` или переменную `HF_TOKEN`.
-
-**Каждая подпапка должна содержать полный набор файлов модели:** `config.json`, `model.safetensors`, `tokenizer.json` и т.д.
+Каждая подпапка должна содержать полный набор файлов модели: `config.json`, `model.safetensors`, `tokenizer.json` и т.д.
 
 **Рекомендации по моделям:**
 
@@ -51,13 +41,7 @@ transfer/
 | 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct` |
 | 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct` | `Qwen/Qwen3-14B-Instruct` |
 
-### Сценарий 2: Windows E2E тестирование (крошечные модели запечены в образы)
-
-Для end-to-end тестирования используются маленькие модели, уже запечённые в Docker-образы. Никаких монтирований не требуется.
-
 ## Запуск
-
-### Linux production
 
 ```bash
 # 1. Собери worker-образ
@@ -65,49 +49,7 @@ docker build -t local/idp-app:latest .
 
 # 2. Положи модели в transfer/models/vl/ и transfer/models/llm/
 # 3. Подними контейнеры
-docker compose -f infra/compose/local.yml --profile linux up -d
-```
-
-### Windows E2E
-
-На Windows собери и экспортируй образы:
-
-```powershell
-# Если модели на HuggingFace gated — передай токен
-$env:HF_TOKEN = "hf_..."
-.\scripts\export-images-windows.ps1
-```
-
-Перенеси папку проекта на Linux/WSL2 и импортируй:
-
-```bash
-chmod +x scripts/import-images-linux.sh
-./scripts/import-images-linux.sh win-test
-```
-
-Или напрямую:
-```bash
-docker compose -f infra/compose/local.yml --profile win-test up -d
-```
-
-## Переключение между сценариями
-
-```bash
-# Linux production
-docker compose -f infra/compose/local.yml --profile linux up -d
-
-# Windows E2E
-docker compose -f infra/compose/local.yml --profile win-test up -d
-```
-
-По умолчанию (без профиля) ничего не запускается.
-
-### GPU устройства
-
-По умолчанию все сервисы используют GPU 0. Если у тебя несколько GPU, переопредели:
-
-```bash
-IDP_WORKER_GPU=0 IDP_VLLM_VL_GPU=0 IDP_VLLM_LLM_GPU=1 docker compose -f infra/compose/local.yml --profile linux up -d
+docker compose -f infra/compose/local.yml up -d
 ```
 
 ## Подача документов
@@ -116,7 +58,7 @@ IDP_WORKER_GPU=0 IDP_VLLM_VL_GPU=0 IDP_VLLM_LLM_GPU=1 docker compose -f infra/co
 
 ```bash
 cp ~/Downloads/document.pdf data/input/
-docker compose -f infra/compose/local.yml --profile linux up -d
+docker compose -f infra/compose/local.yml up -d
 ```
 
 ## Мониторинг
@@ -128,13 +70,13 @@ Files: 100%|████| 5/5 [03:24<00:00, 40.80s/file, file=doc.pdf, stage=don
 
 Логи:
 ```bash
-docker compose -f infra/compose/local.yml --profile linux logs -f worker
+docker compose -f infra/compose/local.yml logs -f worker
 ```
 
 ## Остановка
 
 ```bash
-docker compose -f infra/compose/local.yml --profile linux down
+docker compose -f infra/compose/local.yml down
 ```
 
 Данные сохраняются в `data/output/`.
@@ -143,5 +85,6 @@ docker compose -f infra/compose/local.yml --profile linux down
 
 - **Контейнеры никогда не имеют доступа к интернету** — сеть `internal: true`
 - **Никаких SHA-256, версионирования, whl-файлов** — всё максимально просто
-- **Скрипт собирает образы для Windows E2E и Linux** — просто запусти `export-images-windows.ps1`
-- **RTX 5070 12GB** — win-test модели (Qwen2-VL-2B + Qwen2.5-0.5B-Instruct) влезают comfortably. Linux модели (Qwen2.5-VL-32B-AWQ + Qwen3-14B-AWQ) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов
+- **Модели качаешь сам** — никакие скрипты это не делают
+- **Linux vLLM-образы собираются с последней версией transformers** — достаточно `docker build`
+- **RTX 5070 12GB** — модели (Qwen2.5-VL-32B-AWQ + Qwen3-14B-AWQ) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов
