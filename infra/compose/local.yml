@@ -1,164 +1,45 @@
 name: idp
 
-x-app: &app
-  image: ${IDP_APP_IMAGE:-local/idp-app:latest}
-  pull_policy: never
-  working_dir: /workspace
-  networks: [idp_internal]
-  environment: &app-environment
-    PYTHONPATH: /workspace/src
-    IDP_DATABASE_URL: postgresql+psycopg://idp:${IDP_POSTGRES_PASSWORD:-idp}@postgres:5432/idp
-    IDP_MINIO_ENDPOINT: minio:9000
-    IDP_MINIO_ACCESS_KEY: ${IDP_MINIO_ACCESS_KEY:-minioadmin}
-    IDP_MINIO_SECRET_KEY: ${IDP_MINIO_SECRET_KEY:-minioadmin}
-    IDP_ALLOWED_ROOTS: '["/input"]'
-    IDP_DATA_ROOT: /data
-    IDP_BATCH_STAGING_ROOT: /data/staging
-    IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
-    IDP_OFFLINE_MODE: "true"
-    IDP_TELEMETRY_ENABLED: "false"
-    HF_HUB_OFFLINE: "1"
-    TRANSFORMERS_OFFLINE: "1"
-  volumes:
-    - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
-    - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
-    - ${IDP_DATA_ROOT:-../../data/runtime}:/data
-    - ${IDP_TOOLS_ROOT:-../../data/tools}:/tools:ro
-
-x-worker-environment: &worker-environment
-  <<: *app-environment
-  IDP_MINERU_COMMAND: '["/tools/mineru/run", "--images", "{images}", "--output", "{output}"]'
-  IDP_OCR_DETECTOR_COMMAND: '["/tools/ocr/detect", "--input", "{input}", "--output", "{output}"]'
-  IDP_OCR_ROUTER_COMMAND: '["/tools/ocr/route", "--input", "{input}", "--output", "{output}"]'
-  IDP_OCR_EAST_SLAVIC_COMMAND: '["/tools/ocr/recognize-east-slavic", "--input", "{input}", "--output", "{output}"]'
-  IDP_OCR_CYRILLIC_COMMAND: '["/tools/ocr/recognize-cyrillic", "--input", "{input}", "--output", "{output}"]'
-  IDP_OCR_LATIN_CJK_COMMAND: '["/tools/ocr/recognize-latin-cjk", "--input", "{input}", "--output", "{output}"]'
-  IDP_DOCX_CONVERTER_COMMAND: '["soffice", "--headless", "--convert-to", "pdf", "--outdir", "{output}", "{input}"]'
-
 services:
-  postgres:
-    image: ${IDP_POSTGRES_IMAGE:-postgres:16.9-alpine}
-    pull_policy: never
-    restart: unless-stopped
-    networks: [idp_internal]
-    environment:
-      POSTGRES_DB: idp
-      POSTGRES_USER: idp
-      POSTGRES_PASSWORD: ${IDP_POSTGRES_PASSWORD:-idp}
-    volumes:
-      - ${IDP_DATA_ROOT:-../../data/runtime}/postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U idp -d idp"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  minio:
-    image: ${IDP_MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
-    pull_policy: never
-    command: server /data --console-address :9001
-    restart: unless-stopped
-    networks: [idp_internal]
-    environment:
-      MINIO_ROOT_USER: ${IDP_MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${IDP_MINIO_SECRET_KEY:-minioadmin}
-    volumes:
-      - ${IDP_DATA_ROOT:-../../data/runtime}/minio:/data
-    ports:
-      - "${IDP_MINIO_PORT:-9000}:9000"
-      - "${IDP_MINIO_CONSOLE_PORT:-9001}:9001"
-
-  minio-init:
-    image: ${IDP_MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-05-21T01-59-54Z}
-    pull_policy: never
-    networks: [idp_internal]
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - >-
-        until mc alias set local http://minio:9000 ${IDP_MINIO_ACCESS_KEY:-minioadmin} ${IDP_MINIO_SECRET_KEY:-minioadmin};
-        do sleep 2; done;
-        mc mb --ignore-existing local/idp-artifacts
-    depends_on:
-      minio:
-        condition: service_started
-    restart: "no"
-
-  migrate:
-    <<: *app
-    command: ["alembic", "upgrade", "head"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
-
-  profiles:
-    <<: *app
-    command: ["idp", "bootstrap"]
-    environment: *worker-environment
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    restart: "no"
-
-  controller:
-    <<: *app
-    command: ["idp", "controller", "run"]
-    restart: unless-stopped
-    environment:
-      <<: *app-environment
-      IDP_METRICS_PORT: "9100"
-      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      profiles:
-        condition: service_completed_successfully
-      minio-init:
-        condition: service_completed_successfully
-    ports:
-      - "${IDP_CONTROLLER_METRICS_PORT:-9100}:9100"
-
   worker:
-    <<: *app
-    command: ["idp", "worker", "run"]
-    restart: unless-stopped
-    profiles: [models]
+    image: ${IDP_APP_IMAGE:-local/idp-app:latest}
+    pull_policy: never
+    command: ["idp"]
     environment:
-      <<: *worker-environment
-      CUDA_VISIBLE_DEVICES: ${IDP_QWEN3_GPU:-1}
-      IDP_METRICS_PORT: "9101"
-      IDP_PIPELINE_PROFILE_VERSION: ${IDP_PIPELINE_PROFILE_VERSION:-v1}
+      PYTHONPATH: /workspace/src
+      IDP_INPUT_ROOT: /input
+      IDP_OUTPUT_ROOT: /output
+      IDP_MODELS_ROOT: /models
+    volumes:
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+      - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
+      - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
+      - ${IDP_MODELS_ROOT:-../../transfer/models}:/models:ro
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_QWEN3_GPU:-1}"]
+              device_ids: ["${IDP_WORKER_GPU:-0}"]
               capabilities: [gpu]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      profiles:
-        condition: service_completed_successfully
-      minio-init:
-        condition: service_completed_successfully
-      qwen-vl:
-        condition: service_healthy
-      qwen3:
-        condition: service_healthy
-    ports:
-      - "${IDP_WORKER_METRICS_PORT:-9101}:9101"
 
-  qwen-vl:
-    image: ${IDP_QWEN_VL_IMAGE:-local/qwen-vl:latest}
+  vllm-vl:
+    image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
-    command: ["--model", "/models/qwen-vl", "--served-model-name", "Qwen2.5-VL-32B-Instruct", "--quantization", "awq", "--dtype", "half", "--host", "0.0.0.0", "--port", "8000", "--enforce-eager", "--gpu-memory-utilization", "1.0"]
-    restart: unless-stopped
-    networks: [idp_internal]
+    command:
+      - --model
+      - /models/vl
+      - --served-model-name
+      - ${IDP_VL_MODEL:-Qwen2.5-VL-32B-Instruct}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - "0.95"
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_QWEN_VL_GPU:-0}
-      HF_HOME: /models/qwen-vl/hf-cache
+      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_VL_GPU:-0}
+      HF_HOME: /models/vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
@@ -169,25 +50,26 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_QWEN_VL_GPU:-0}"]
+              device_ids: ["${IDP_VLLM_VL_GPU:-0}"]
               capabilities: [gpu]
-    profiles: [models]
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
-      interval: 15s
-      timeout: 5s
-      retries: 40
-      start_period: 60s
 
-  qwen3:
-    image: ${IDP_QWEN3_IMAGE:-local/qwen3:latest}
+  vllm-llm:
+    image: ${IDP_VLLM_LLM_IMAGE:-local/vllm-llm:latest}
     pull_policy: never
-    command: ["--model", "/models/qwen3", "--served-model-name", "Qwen3-14B", "--quantization", "awq", "--host", "0.0.0.0", "--port", "8000"]
-    restart: unless-stopped
-    networks: [idp_internal]
+    command:
+      - --model
+      - /models/llm
+      - --served-model-name
+      - ${IDP_LLM_MODEL:-Qwen3-14B-Instruct}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - "0.95"
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_QWEN3_GPU:-1}
-      HF_HOME: /models/qwen3/hf-cache
+      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_LLM_GPU:-1}
+      HF_HOME: /models/llm/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
@@ -198,28 +80,5 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_QWEN3_GPU:-1}"]
+              device_ids: ["${IDP_VLLM_LLM_GPU:-1}"]
               capabilities: [gpu]
-    profiles: [models]
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
-      interval: 15s
-      timeout: 5s
-      retries: 40
-      start_period: 60s
-
-  operator:
-    <<: *app
-    command: ["idp", "healthcheck", "--no-models"]
-    profiles: [operator]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      profiles:
-        condition: service_completed_successfully
-      minio-init:
-        condition: service_completed_successfully
-
-networks:
-  idp_internal:
-    internal: true
