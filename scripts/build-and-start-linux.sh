@@ -37,8 +37,8 @@ if [[ "$OLD_MODE" -eq 1 ]]; then
   docker build -t local/idp-app:latest "$project_root"
 
   echo "[3/5] Ensuring small models are in place for old mode..."
-  models_vl="$project_root/transfer/models/vl"
-  models_llm="$project_root/transfer/models/llm"
+  models_vl="$project_root/transfer/models/v0.5/vl"
+  models_llm="$project_root/transfer/models/v0.5/llm"
 
   mkdir -p "$models_vl" "$models_llm"
 else
@@ -93,9 +93,6 @@ PY'
 # Choose which models to fetch
 if [[ "$OLD_MODE" -eq 1 ]]; then
   # Small models chosen by request to exercise vLLM in --old mode
-  # Remove any incompatible models from previous runs so ensure_model re-downloads
-  rm -rf "$models_vl" "$models_llm"
-  mkdir -p "$models_vl" "$models_llm"
   ensure_model "$models_vl" "llava-hf/llava-1.5-7b-hf"
   ensure_model "$models_llm" "HuggingFaceTB/SmolLM-135M-Instruct"
 else
@@ -106,7 +103,11 @@ fi
 echo "[5/5] Starting stack..."
 input_root="${IDP_INPUT_ROOT:-${project_root}/data/input}"
 output_root="${IDP_OUTPUT_ROOT:-${project_root}/data/output}"
-models_root="${IDP_MODELS_ROOT:-${project_root}/transfer/models}"
+if [[ "$OLD_MODE" -eq 1 ]]; then
+  models_root="${IDP_MODELS_ROOT:-${project_root}/transfer/models/v0.5}"
+else
+  models_root="${IDP_MODELS_ROOT:-${project_root}/transfer/models}"
+fi
 
 mkdir -p "$input_root" "$output_root" "$models_root"
 # Ensure hf-cache folders exist and are writable for vllm services
