@@ -47,7 +47,7 @@ transfer/
 
 | GPU VRAM | VL-модель (в `vl/`) | LLM-модель (в `llm/`) |
 |---|---|---|
-| 8 GB | `Qwen/Qwen2.5-VL-2B-Instruct` | `Qwen/Qwen2.5-0.5B` |
+| 8 GB | `Qwen/Qwen2-VL-2B-Instruct` | `Qwen/Qwen2.5-0.5B` |
 | 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct` |
 | 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct` | `Qwen/Qwen3-14B-Instruct` |
 
@@ -144,4 +144,4 @@ docker compose -f infra/compose/local.yml --profile linux down
 - **Контейнеры никогда не имеют доступа к интернету** — сеть `internal: true`
 - **Никаких SHA-256, версионирования, whl-файлов** — всё максимально просто
 - **Скрипт собирает образы для Windows E2E и Linux** — просто запусти `export-images-windows.ps1`
-- **RTX 5070 12GB** — win-test модели (Qwen3-VL-2B + Qwen3.5-0.8B) влезают comfortably. Linux модели (Qwen2.5-VL-32B-AWQ + Qwen3-14B-AWQ) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов
+- **RTX 5070 12GB** — win-test модели (Qwen2-VL-2B + Qwen2.5-0.5B) влезают comfortably. Linux модели (Qwen2.5-VL-32B-AWQ + Qwen3-14B-AWQ) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов

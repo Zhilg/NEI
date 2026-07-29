@@ -19,7 +19,7 @@ $pythonImage = "python:3.12-slim"
 $vllmImage = "vllm/vllm-openai:v0.10.2"
 
 # Windows E2E model configurations
-$winVlModel = "Qwen/Qwen2.5-VL-2B-Instruct"
+$winVlModel = "Qwen/Qwen2-VL-2B-Instruct"
 $winLlmModel = "Qwen/Qwen2.5-0.5B"
 
 # Linux models are expected to be already in transfer/models/
