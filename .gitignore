@@ -1,12 +1,57 @@
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .smoke-runtime/
-transfer/
-wheels/*.whl
-*.tar
-*.tar.sha256
 
-data/output/*.md
+# Python
+.venv/
+venv/
+env/
+.env
+*.egg-info/
+dist/
+build/
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Data / output
+data/
+*.log
+
+# Models / transfer
+transfer/
+test-models
+.test-models/*
+
+# Docker / compose
+.dockerignore
+
+# Kilo workspace
+.kilo/
+
+# Archives / binaries
+*.rar
+*.zip
+*.tar
+*.tar.gz
+*.tar.sha256
+*.whl
+*.bin
+*.h5
+*.onnx
+
+# Lock files (input-side)
+*.tmp
+*.temp
+.cache/

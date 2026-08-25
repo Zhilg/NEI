@@ -1,6 +1,6 @@
 # Автономный конвейер PDF/DOCX → Markdown с VLM
 
-Минимальный пайплайн: **PDF → VLM → Markdown → LLM → сущности**.
+Минимальный пайплайн: **PDF → VLM → Markdown → сущности**.
 DOCX конвертируется в Markdown через `mammoth`.
 Без PostgreSQL, MinIO, MinerU, PaddleOCR, SwinIR, Controller, Operator, Fenic.
 
@@ -9,14 +9,13 @@ DOCX конвертируется в Markdown через `mammoth`.
 | Сервис | Назначение | GPU |
 |---|---|---|
 | `vllm-vl` | Локальный vLLM с VL-моделью | GPU0 |
-| `vllm-llm` | Локальный vLLM с LLM для сущностей | GPU1 |
 | `worker` | Python-код, монтируемый в контейнер | CPU |
 
 ## Результаты
 
 В `data/output/`:
 - `<stem>.md` — реконструированный Markdown с сохранением абзацев
-- `entities.jsonl` — все сущности с привязкой к параграфу (append-only)
+- `entities.json` — все сущности с привязкой к файлу-источнику
 - `stats.jsonl` — статистика по каждому файлу
 
 Идемпотентность: если `<stem>.md` уже существует, файл пропускается.
@@ -27,8 +26,7 @@ DOCX конвертируется в Markdown через `mammoth`.
 
 ```
 transfer/models/
-├── vl/    # VL-модель для реконструкции PDF → Markdown
-└── llm/   # LLM для извлечения сущностей
+└── vl/    # VL-модель для реконструкции PDF → Markdown и извлечения сущностей
 ```
 
 Каждая подпапка должна содержать полный набор файлов модели: `config.json`, `model.safetensors`, `tokenizer.json` и т.д.
@@ -46,11 +44,15 @@ transfer/models/vl/
 
 **Рекомендации по моделям:**
 
-| GPU VRAM | VL-модель (в `vl/`) | LLM-модель (в `llm/`) |
-|---|---|---|
-| 8 GB | `Qwen/Qwen2-VL-2B-Instruct` | `Qwen/Qwen2.5-0.5B-Instruct` |
-| 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` | `Qwen/Qwen2.5-7B-Instruct` |
-| 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct-AWQ` | `Qwen/Qwen3-14B-AWQ` |
+| GPU VRAM | VL-модель (в `vl/`) |
+|---|---|
+| 8 GB | `Qwen/Qwen2-VL-2B-Instruct` |
+| 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` |
+| 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct-AWQ` |
+transfer/models/
+├── vl/    # VL-модель для реконструкции PDF → Markdown
+└── llm/   # LLM-модель для извлечения сущностей из текста (DOCX, HTML, PPTX)
+```
 
 ## Деплой
 
@@ -67,7 +69,6 @@ $env:HF_TOKEN = "hf_..."
 Скрипт собирает:
 - `local/idp-app:latest` — worker с кодом
 - `local/vllm-vl:latest` — vLLM VL с последней версией transformers
-- `local/vllm-llm:latest` — vLLM LLM с последней версией transformers
 
 Все образы сохраняются в `transfer/idp-images-linux.tar`.
 
@@ -93,7 +94,6 @@ chmod +x scripts/import-images-linux.sh
 ```bash
 docker build -t local/idp-app:latest .
 docker build -t local/vllm-vl:latest ./infra/dockerfiles/vllm-vl
-docker build -t local/vllm-llm:latest ./infra/dockerfiles/vllm-llm
 docker compose -f infra/compose/local.yml up -d
 ```
 
@@ -132,4 +132,4 @@ docker compose -f infra/compose/local.yml down
 - **Никаких SHA-256, версионирования, whl-файлов** — всё максимально просто
 - **Модели качаешь сам** — никакие скрипты это не делают
 - **Linux vLLM-образы собираются с последней версией transformers** — достаточно `docker build`
-- **RTX 5070 12GB** — модели (Qwen2.5-VL-32B-AWQ + Qwen3-14B-AWQ) требуют AWQ-квантизацию и обрезку контекста до 32768 токенов
+- **RTX 5070 12GB** — модель Qwen2.5-VL-32B-AWQ требует AWQ-квантизацию и обрезку контекста до 32768 токенов

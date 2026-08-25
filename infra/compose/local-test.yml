@@ -1,0 +1,83 @@
+name: idp-test
+
+services:
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: ${IDP_APP_IMAGE:-local/idp-app:latest}
+    command: ["idp"]
+    environment:
+      PYTHONPATH: /workspace/src
+      IDP_INPUT_ROOT: /input
+      IDP_OUTPUT_ROOT: /output
+      IDP_MODELS_ROOT: /models
+      IDP_VL_ENDPOINT: http://vllm-vl:8000/v1
+      IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen/Qwen2-VL-2B-Instruct}
+      IDP_VL_MAX_TOKENS: "2048"
+      IDP_TEST_MODE: "true"
+    volumes:
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace
+      - ${IDP_INPUT_ROOT:-../../data/input}:/input
+      - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${IDP_WORKER_GPU:-0}"]
+              capabilities: [gpu]
+    depends_on:
+      vllm-vl:
+        condition: service_healthy
+
+  vllm-vl:
+    build:
+      context: ../..
+      dockerfile: infra/dockerfiles/vllm-vl/Dockerfile
+    image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
+    restart: unless-stopped
+    command:
+      - --model
+      - /models/vl
+      - --served-model-name
+      - ${IDP_VL_MODEL:-Qwen/Qwen2-VL-2B-Instruct}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - "0.90"
+      - --max-model-len
+      - "2048"
+      - --trust-remote-code
+      - --tokenizer-mode
+      - slow
+    environment:
+      CUDA_VISIBLE_DEVICES: "${IDP_VLLM_VL_GPU:-0}"
+      NVIDIA_DRIVER_CAPABILITIES: all
+      HF_HOME: /models/vl/hf-cache
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_NO_USAGE_STATS: "1"
+      VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+      VLLM_WSL2_ENABLE_PIN_MEMORY: "1"
+    volumes:
+      - ${IDP_MODELS_ROOT:-../../test-models}:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${IDP_VLLM_VL_GPU:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+
+networks:
+  idp_internal:
+    internal: true

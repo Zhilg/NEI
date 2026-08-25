@@ -1,0 +1,190 @@
+{
+  "version": "entity-v1",
+  "description": "Entity types extracted from documents. Edit this file to add, remove, or describe entity types.",
+  "entity_types": [
+    {
+      "name": "person",
+      "description": "ФИО физического лица, включая инициалы и должности"
+    },
+    {
+      "name": "organization",
+      "description": "Полное или краткое наименование юридического лица, учреждения, организации (без лишних слов типа 'ООО', 'ЗАО' если они не в названии)"
+    },
+    {
+      "name": "date",
+      "description": "Дата в любом формате (дД.мм.ГГГГ, ГГГГ-мм-дД, текстом)"
+    },
+    {
+      "name": "address",
+      "description": "Почтовый адрес, адресная строка с индексом, городом, улицей"
+    },
+    {
+      "name": "doc_code",
+      "description": "Код или шифр документа (МУ, МИ, ГОСТ, ОСТ, СНиП, СанПиН, НПА, методические указания)"
+    },
+    {
+      "name": "identifier",
+      "description": "Номера документов, счетов, накладных, ISSN, ISBN, регистрационные номера"
+    },
+    {
+      "name": "amount",
+      "description": "Денежные суммы, числа с валютой или единицами измерения"
+    },
+    {
+      "name": "sender",
+      "description": "Отправитель письма, документа, корреспонденции"
+    },
+    {
+      "name": "recipient",
+      "description": "Получатель письма, документа, корреспонденции, адресат"
+    },
+    {
+      "name": "document_number",
+      "description": "Номер документа (счета, договора, накладной, акта, спецификации)"
+    },
+    {
+      "name": "document_date",
+      "description": "Дата составления или отправки документа"
+    },
+    {
+      "name": "state_organ",
+      "description": "Государственный орган или орган управления (Министерство обороны РФ, Минобороны, ФГБУ, и т.п.)"
+    },
+    {
+      "name": "order",
+      "description": "Приказ с номером и/или датой (например, 'Приказ № 123 от 01.01.2020'). Само слово 'приказ' без номера — не сущность."
+    },
+    {
+      "name": "rubricator",
+      "description": "Рубрикатор (классификатор, код рубрикатора, тематический код)"
+    },
+    {
+      "name": "number_in_rubricator",
+      "description": "Номер в рубрикаторе (номер по классификатору, код в рубрикаторе)"
+    },
+    {
+      "name": "subject",
+      "description": "Тема письма или заголовок документа (кратко, обычно 1-2 строки)"
+    },
+    {
+      "name": "contract_number",
+      "description": "Номер договора или контракта"
+    },
+    {
+      "name": "invoice_number",
+      "description": "Номер счета-фактуры или товарного счета"
+    },
+    {
+      "name": "total_amount",
+      "description": "Итоговая сумма к оплате, всего прописью или цифрами"
+    },
+    {
+      "name": "tax_amount",
+      "description": "Сумма налога, обычно НДС"
+    },
+    {
+      "name": "vat_rate",
+      "description": "Ставка НДС в процентах (например, 20%, 10%, 0%)"
+    },
+    {
+      "name": "bank_name",
+      "description": "Наименование банка (например, Сбербанк, ВТБ)"
+    },
+    {
+      "name": "bik",
+      "description": "БИК банка (9 цифр)"
+    },
+    {
+      "name": "account_number",
+      "description": "Номер расчетного или корреспондентского счета"
+    },
+    {
+      "name": "inn",
+      "description": "ИНН юридического лица или физического лица (10 или 12 цифр)"
+    },
+    {
+      "name": "ogrn",
+      "description": "ОГРН юридического лица (13 цифр) или ОГРНИП (15 цифр)"
+    },
+    {
+      "name": "kpp",
+      "description": "КПП юридического лица (9 цифр)"
+    },
+    {
+      "name": "phone",
+      "description": "Номер телефона в любом формате (+7, 8, с кодом города)"
+    },
+    {
+      "name": "email",
+      "description": "Адрес электронной почты"
+    },
+    {
+      "name": "position",
+      "description": "Должность сотрудника, подписавшего документ"
+    },
+    {
+      "name": "legal_address",
+      "description": "Юридический адрес организации"
+    },
+    {
+      "name": "postal_address",
+      "description": "Почтовый адрес, адрес доставки"
+    },
+    {
+      "name": "signature",
+      "description": "Фамилия или инициалы подписавшего лица"
+    },
+    {
+      "name": "stamp",
+      "description": "Надпись на печати или штампе (например, МП, ВТОРОЙ ЭКЗЕМПЛЯР)"
+    },
+    {
+      "name": "payment_details",
+      "description": "Платежные реквизиты: банк, БИК, корр. счет, р/с"
+    },
+    {
+      "name": "tracking_number",
+      "description": "Номер отслеживания отправления, почтовый идентификатор"
+    },
+    {
+      "name": "delivery_date",
+      "description": "Дата доставки или срок поставки"
+    },
+    {
+      "name": "weight",
+      "description": "Вес груза или товара"
+    },
+    {
+      "name": "quantity",
+      "description": "Количество товаров, мест, единиц измерения"
+    },
+    {
+      "name": "handwritten_note",
+      "description": "Рукописная заметка или комментарий на документе"
+    },
+    {
+      "name": "handwritten_signature",
+      "description": "Рукописная подпись"
+    },
+    {
+      "name": "handwritten_date",
+      "description": "Рукописная дата, вписанная от руки"
+    },
+    {
+      "name": "handwritten_amount",
+      "description": "Рукописная сумма, вписанная от руки (прописью или цифрами)"
+    },
+    {
+      "name": "handwritten_name",
+      "description": "Рукописное ФИО или должность, вписанная от руки"
+    },
+    {
+      "name": "handwritten_text",
+      "description": "Любой другой рукописный текст на документе"
+    },
+    {
+      "name": "other",
+      "description": "Auto-detected entity type: other"
+    }
+  ]
+}
