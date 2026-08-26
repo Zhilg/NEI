@@ -120,52 +120,6 @@ def _merge_vlm_and_text_markdown(vlm_markdown: str, text_markdown: str, visual_i
 
 
 def _postprocess_markdown(markdown: str) -> str:
-    vlm_pages: dict[int, str] = {}
-    for line in vlm_markdown.splitlines():
-        match = re.match(r"^<!--\s*page\s+(\d+)\s*-->", line.strip())
-        if match:
-            page_num = int(match.group(1))
-            vlm_pages[page_num] = ""
-    
-    current_page = None
-    current_lines: list[str] = []
-    for line in vlm_markdown.splitlines():
-        match = re.match(r"^<!--\s*page\s+(\d+)\s*-->", line.strip())
-        if match:
-            if current_page is not None and current_page in vlm_pages:
-                vlm_pages[current_page] = "\n".join(current_lines).strip()
-            current_page = int(match.group(1))
-            current_lines = []
-            continue
-        if current_page is not None:
-            current_lines.append(line)
-    if current_page is not None and current_page in vlm_pages:
-        vlm_pages[current_page] = "\n".join(current_lines).strip()
-
-    visual_set = {i + 1 for i in visual_indices}
-    text_pages: dict[int, str] = {}
-    current_page = None
-    current_lines = []
-    for line in text_markdown.splitlines():
-        match = re.match(r"^<!--\s*page\s+(\d+)\s*-->", line.strip())
-        if match:
-            if current_page is not None and current_page not in visual_set:
-                text_pages[current_page] = "\n".join(current_lines).strip()
-            current_page = int(match.group(1))
-            current_lines = []
-            continue
-        if current_page is not None:
-            current_lines.append(line)
-    if current_page is not None and current_page not in visual_set:
-        text_pages[current_page] = "\n".join(current_lines).strip()
-
-    all_pages = sorted(set(vlm_pages.keys()) | set(text_pages.keys()))
-    parts = []
-    for page_num in all_pages:
-        content = vlm_pages.get(page_num) or text_pages.get(page_num, "")
-        if content:
-            parts.append(f"<!-- page {page_num} -->\n{content}")
-    return "\n\n".join(parts)
     lines = markdown.splitlines()
     result: list[str] = []
     i = 0
@@ -263,8 +217,8 @@ async def _process_file(
                 }
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
-            llm_endpoint = settings.text_llm_endpoint or settings.vl_endpoint
-            llm_model = settings.text_llm_model or settings.vl_model
+            llm_endpoint = settings.vl_endpoint
+            llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(markdown, endpoint=llm_endpoint, model=llm_model)
             if artifacts_mode:
                 output_md_tmp.write_text(markdown, encoding="utf-8")
@@ -278,8 +232,8 @@ async def _process_file(
             vlm_markdown, vlm_entities = await extract_markdown_and_entities(pngs)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(vlm_markdown)
-            llm_endpoint = settings.text_llm_endpoint or settings.vl_endpoint
-            llm_model = settings.text_llm_model or settings.vl_model
+            llm_endpoint = settings.vl_endpoint
+            llm_model = settings.vl_model
             text_entities = await extract_entities_from_text(text, endpoint=llm_endpoint, model=llm_model)
             all_entities = vlm_entities + text_entities
             markdown = _merge_vlm_and_text_markdown(vlm_markdown, text, visual_indices)
@@ -295,8 +249,8 @@ async def _process_file(
             markdown = convert_docx_to_markdown(file_path)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
-            llm_endpoint = settings.text_llm_endpoint or settings.vl_endpoint
-            llm_model = settings.text_llm_model or settings.vl_model
+            llm_endpoint = settings.vl_endpoint
+            llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(markdown, endpoint=llm_endpoint, model=llm_model)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
@@ -307,8 +261,8 @@ async def _process_file(
             markdown = convert_pptx_to_markdown(file_path)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
-            llm_endpoint = settings.text_llm_endpoint or settings.vl_endpoint
-            llm_model = settings.text_llm_model or settings.vl_model
+            llm_endpoint = settings.vl_endpoint
+            llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(markdown, endpoint=llm_endpoint, model=llm_model)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
@@ -319,8 +273,8 @@ async def _process_file(
             markdown = convert_html_to_markdown(file_path)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
-            llm_endpoint = settings.text_llm_endpoint or settings.vl_endpoint
-            llm_model = settings.text_llm_model or settings.vl_model
+            llm_endpoint = settings.vl_endpoint
+            llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(markdown, endpoint=llm_endpoint, model=llm_model)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
@@ -383,7 +337,7 @@ async def _main() -> None:
 
     settings.output_root.mkdir(parents=True, exist_ok=True)
     files = _find_files(settings.input_root)
-    result_writer = ResultWriter(settings.output_root / "results.jsonl")
+    result_writer = ResultWriter(settings.output_root / "results.jsonl", pretty=settings.artifacts_mode)
 
     processed: set[str] = set()
     results_path = settings.output_root / "results.jsonl"

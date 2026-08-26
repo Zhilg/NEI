@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from typing import Union
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -20,24 +20,24 @@ class Settings(BaseSettings):
     models_root: Path = Field(default=Path("/models"))
     render_dpi: int = Field(default=300, ge=72, le=600)
     vl_endpoint: str = "http://vllm-vl:8000/v1"
-    vl_endpoints: list[str] = Field(default_factory=list)
+    vl_endpoints: Union[str, list[str]] = Field(default="")
     vl_model: str = "Qwen2.5-VL-32B-Instruct-AWQ"
     vl_timeout_seconds: float = Field(default=600, gt=0, le=3600)
     vl_max_tokens: int = Field(default=8192, ge=1, le=65536)
-    vl_max_images: int = Field(default=3, gt=0)
+    vl_max_images: int = Field(default=1, gt=0)
     vl_concurrency: int = Field(default=8, ge=1, le=64)
-
-    text_llm_endpoint: str = ""
-    text_llm_model: str = ""
-    # Recommended non-Qwen text-only models for Russian entity extraction:
-    #   IDP_TEXT_LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.3
-    #   IDP_TEXT_LLM_MODEL=IlyaGusev/saiga_mistral_7b
-    #   IDP_TEXT_LLM_MODEL=IlyaGusev/saiga_llama3_8b
 
     test_mode: bool = Field(default=False)
     artifacts_mode: bool = Field(default=False)
     entity_schema_path: Path = Field(default=Path(__file__).parent / "entity_schema.json")
     trash_path: str = Field(default="")
+    min_entity_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
+
+    vllm_quantization: str = Field(default="awq")
+    vllm_dtype: str = Field(default="half")
+    vllm_gpu_memory_utilization: float = Field(default=0.9, ge=0.1, le=1.0)
+    vllm_max_model_len: int = Field(default=32768, ge=1024)
+    vllm_kv_cache_memory: str = Field(default="15000000000")
 
     @field_validator("input_root", "output_root", "models_root")
     @classmethod
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
-    @field_validator("vl_endpoint", "text_llm_endpoint")
+    @field_validator("vl_endpoint")
     @classmethod
     def require_local_endpoint(cls, value: str) -> str:
         if not value:
@@ -62,10 +62,21 @@ class Settings(BaseSettings):
     @classmethod
     def parse_vl_endpoints(cls, value: str | list[str]) -> list[str]:
         if isinstance(value, list):
-            return [v.rstrip("/") for v in value if v]
+            return [v.strip().rstrip("/") for v in value if v and v.strip()]
         if not value:
             return []
-        return [v.strip().rstrip("/") for v in str(value).split(",") if v.strip()]
+        if isinstance(value, str):
+            value = value.strip('"').strip("'")
+            if not value:
+                return []
+            return [v.strip().rstrip("/") for v in value.split(",") if v.strip()]
+        return []
+
+    @field_validator("vllm_kv_cache_memory")
+    @classmethod
+    def parse_kv_cache_memory(cls, value: str) -> str:
+        return str(value).strip()
+        
 
 
 settings = Settings()

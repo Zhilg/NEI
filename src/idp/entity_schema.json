@@ -185,6 +185,22 @@
     {
       "name": "other",
       "description": "Auto-detected entity type: other"
+    },
+    {
+      "name": "doi",
+      "description": "Auto-detected entity type: doi"
+    },
+    {
+      "name": "isbn",
+      "description": "Auto-detected entity type: isbn"
+    },
+    {
+      "name": "reference",
+      "description": "Auto-detected entity type: reference"
+    },
+    {
+      "name": "volume",
+      "description": "Auto-detected entity type: volume"
     }
   ]
 }

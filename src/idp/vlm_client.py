@@ -186,7 +186,7 @@ _SHORT_VALUE_TYPES = {"stamp", "signature", "handwritten_signature"}
 _JUNK_TYPES = {"subject"}
 
 
-def _validate_entity(entity: dict) -> dict | None:
+def _validate_entity(entity: dict, source_text: str = "") -> dict | None:
     etype = str(entity.get("type", "other"))
     if etype in _JUNK_TYPES:
         return None
@@ -204,6 +204,11 @@ def _validate_entity(entity: dict) -> dict | None:
     evidence = str(entity.get("evidence", "")).strip()
     if evidence and value == evidence and len(value) > 3 and etype not in _SHORT_VALUE_TYPES:
         return None
+    if source_text and evidence and len(evidence) >= 3:
+        normalized_source = " ".join(source_text.split())
+        normalized_evidence = " ".join(evidence.split())
+        if normalized_evidence not in normalized_source:
+            return None
     return entity
 
 
@@ -283,6 +288,16 @@ SYSTEM_PROMPT_ENT = (
     "Extract atomic metadata entities from the provided text.\n\n"
     "ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value. "
     "Valid examples: dates, amounts, phone numbers, INN, OGRN, names, addresses, document numbers, codes.\n\n"
+    "PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context. "
+    "This includes:\n"
+    "- Names with titles/positions: 'С.С. Захаров, ведущий научный сотрудник'\n"
+    "- Names without any title or context: just 'Захаров' or 'Иванов'\n"
+    "- Names in lists: 'С.С. Захаров, В.С. Оксентюк, А.Ф. Безубов'\n"
+    "- Names in signatures: 'Д. Теребов'\n"
+    "- Names in documents: 'С.И. Радошанов'\n\n"
+    "For person entities, extract the FULL NAME as it appears in the text. "
+    "If initials are used (e.g., 'С.С. Захаров'), keep them as-is. "
+    "If only last name appears (e.g., 'Захаров'), extract it as the value.\n\n"
     "FORBIDDEN (do NOT extract these):\n"
     "- Full sentences or clauses\n"
     "- Paragraphs or headings\n"
@@ -384,7 +399,7 @@ async def extract_entities_from_text(
     model = model or settings.vl_model
     sys_prompt = SYSTEM_PROMPT_ENT_TEST if settings.test_mode else SYSTEM_PROMPT_ENT
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
-    max_chars = 2000 if settings.test_mode else 8000
+    max_chars = 500 if settings.test_mode else 1500
     if len(text) > max_chars:
         chunks = _chunk_text(text, max_chars)
     else:
@@ -421,8 +436,11 @@ async def extract_entities_from_text(
                     for entity in raw_entities:
                         if not isinstance(entity, dict):
                             continue
-                        validated = _validate_entity(entity)
+                        validated = _validate_entity(entity, chunk)
                         if validated is None:
+                            continue
+                        confidence = float(entity.get("confidence", 0.0))
+                        if confidence < settings.min_entity_confidence:
                             continue
                         handwritten = entity.get("handwritten")
                         if handwritten is None:
@@ -458,12 +476,31 @@ def _chunk_text(text: str, max_chars: int) -> list[str]:
     current: list[str] = []
     current_len = 0
     for para in paragraphs:
-        if current_len + len(para) + 2 > max_chars and current:
+        para_len = len(para)
+        if para_len > max_chars:
+            if current:
+                chunks.append("\n\n".join(current))
+                current = []
+                current_len = 0
+            words = para.split()
+            sub_chunk: list[str] = []
+            sub_len = 0
+            for word in words:
+                if sub_len + len(word) + 1 > max_chars and sub_chunk:
+                    chunks.append(" ".join(sub_chunk))
+                    sub_chunk = []
+                    sub_len = 0
+                sub_chunk.append(word)
+                sub_len += len(word) + 1
+            if sub_chunk:
+                chunks.append(" ".join(sub_chunk))
+            continue
+        if current_len + para_len + 2 > max_chars and current:
             chunks.append("\n\n".join(current))
             current = []
             current_len = 0
         current.append(para)
-        current_len += len(para) + 2
+        current_len += para_len + 2
     if current:
         chunks.append("\n\n".join(current))
     return chunks
@@ -580,8 +617,11 @@ async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[d
                     for entity in raw_entities:
                         if not isinstance(entity, dict):
                             continue
-                        validated = _validate_entity(entity)
+                        validated = _validate_entity(entity, md)
                         if validated is None:
+                            continue
+                        confidence = float(entity.get("confidence", 0.0))
+                        if confidence < settings.min_entity_confidence:
                             continue
                         handwritten = entity.get("handwritten")
                         if handwritten is None:

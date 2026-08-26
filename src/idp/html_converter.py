@@ -50,6 +50,8 @@ class _TextExtractor(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list) -> None:
         if tag in ("script", "style", "noscript", "iframe", "svg"):
             self._skip_depth += 1
+        if tag in ("button", "input", "select", "textarea", "option", "label", "form"):
+            self._skip_depth += 1
         if tag == "table":
             self._in_table = True
         if tag in ("tr",):
@@ -60,11 +62,15 @@ class _TextExtractor(HTMLParser):
                 self._flush_cell()
         if tag in ("p", "div", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6",
                     "blockquote", "title", "caption", "pre", "section",
-                    "article", "header", "footer", "nav", "aside", "figure", "figcaption"):
+                    "article", "header", "footer", "nav", "aside", "figure", "figcaption",
+                    "span", "a", "b", "strong", "i", "em", "u", "small", "sub", "sup",
+                    "td", "th", "tr", "tbody", "thead", "tfoot"):
             self._parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in ("script", "style", "noscript", "iframe", "svg"):
+            self._skip_depth = max(0, self._skip_depth - 1)
+        if tag in ("button", "input", "select", "textarea", "option", "label", "form"):
             self._skip_depth = max(0, self._skip_depth - 1)
         if tag == "table":
             self._in_table = False
@@ -77,7 +83,9 @@ class _TextExtractor(HTMLParser):
                 self._flush_cell()
         if tag in ("p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6",
                     "blockquote", "title", "caption", "pre", "section",
-                    "article", "header", "footer", "nav", "aside", "figure", "figcaption"):
+                    "article", "header", "footer", "nav", "aside", "figure", "figcaption",
+                    "span", "a", "b", "strong", "i", "em", "u", "small", "sub", "sup",
+                    "td", "th", "tr", "tbody", "thead", "tfoot"):
             self._parts.append("\n")
 
     def handle_data(self, data: str) -> None:

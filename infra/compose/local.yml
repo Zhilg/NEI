@@ -13,11 +13,8 @@ services:
       IDP_OUTPUT_ROOT: /output
       IDP_MODELS_ROOT: /models
 
-      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1}
+      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
       IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen2.5-VL-32B-Instruct-AWQ}
-
-      IDP_TEXT_LLM_ENDPOINT: ${IDP_TEXT_LLM_ENDPOINT:-}
-      IDP_TEXT_LLM_MODEL: ${IDP_TEXT_LLM_MODEL:-}
 
       IDP_VL_CONCURRENCY: ${IDP_VL_CONCURRENCY:-8}
 
@@ -35,20 +32,21 @@ services:
               capabilities: [gpu]
 
     depends_on:
-      vllm-vl:
+      vllm-vl-0:
+        condition: service_healthy
+      vllm-vl-1:
         condition: service_healthy
 
-  vllm-vl:
+  vllm-vl-0:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
     restart: unless-stopped
     deploy:
-      replicas: ${IDP_VLLM_REPLICAS:-1}
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_VL_GPU:-0}"]
+              device_ids: ["${IDP_VLLM_VL_GPU_0:-0}"]
               capabilities: [gpu]
 
     command:
@@ -61,16 +59,19 @@ services:
       - --port
       - "8000"
       - --quantization
-      - "awq"
+      - ${IDP_VLLM_QUANTIZATION:-awq}
       - --dtype
-      - "half"
+      - ${IDP_VLLM_DTYPE:-half}
       - --gpu-memory-utilization
-      - "0.9"
+      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.9}
       - --max-model-len
-      - "50000"
+      - ${IDP_VLLM_MAX_MODEL_LEN:-32768}
       - --trust-remote-code
+      - --kv-cache-memory
+      - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
 
     environment:
+      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_VL_GPU_0:-0}
       HF_HOME: /models/vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -86,43 +87,48 @@ services:
       retries: 40
       start_period: 90s
 
-  text-llm:
-    profiles: ["text-llm"]
-    image: ${IDP_TEXT_LLM_IMAGE:-local/vllm-vl:latest}
+  vllm-vl-1:
+    image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${IDP_VLLM_VL_GPU_1:-1}"]
+              capabilities: [gpu]
 
     command:
       - --model
-      - /models/text
+      - /models/vl
       - --served-model-name
-      - ${IDP_TEXT_LLM_MODEL:-mistralai/Mistral-7B-Instruct-v0.3}
+      - ${IDP_VL_MODEL:-Qwen2.5-VL-32B-Instruct-AWQ}
       - --host
       - 0.0.0.0
       - --port
       - "8001"
-      - --trust-remote-code
+      - --quantization
+      - ${IDP_VLLM_QUANTIZATION:-awq}
       - --dtype
-      - "half"
+      - ${IDP_VLLM_DTYPE:-half}
       - --gpu-memory-utilization
-      - "0.9"
+      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.9}
+      - --max-model-len
+      - ${IDP_VLLM_MAX_MODEL_LEN:-32768}
+      - --trust-remote-code
+      - --kv-cache-memory
+      - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
 
     environment:
-      HF_HOME: /models/text/hf-cache
+      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_VL_GPU_1:-1}
+      HF_HOME: /models/vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
 
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
-
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${IDP_TEXT_LLM_GPU:-1}"]
-              capabilities: [gpu]
 
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/v1/models', timeout=2)\""]
