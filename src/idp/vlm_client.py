@@ -346,6 +346,43 @@ SYSTEM_PROMPT_COMBINED_TEST = (
     "Return a single JSON object with 'markdown' and 'entities' keys. No extra text."
 )
 
+SYSTEM_PROMPT_ENT_VISUAL = (
+    "Extract atomic metadata entities from this document page image.\n\n"
+    "ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value. "
+    "Valid examples: dates, amounts, phone numbers, INN, OGRN, names, addresses, document numbers, codes.\n\n"
+    "PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context. "
+    "This includes:\n"
+    "- Names with titles/positions: 'И. И. Иванов, ведущий научный сотрудник'\n"
+    "- Names without any title or context: just 'Сталин' or 'Иванов'\n"
+    "- Names in lists: 'И. И. Иванов, Д. Д. Дятлов, В.В. Должанский'\n"
+    "- Names in signatures: 'В. Лаптев'\n"
+    "- Names in documents: 'И.В. Сталин'\n\n"
+    "For person entities, extract the FULL NAME as it appears in the text. "
+    "If initials are used (e.g., 'И.В. Сталин'), keep them as-is. "
+    "If only last name appears (e.g., 'Сталин'), extract it as the value.\n\n"
+    "FORBIDDEN (do NOT extract these):\n"
+    "- Full sentences or clauses\n"
+    "- Paragraphs or headings\n"
+    "- Generic document type words without specific value (e.g., just 'приказ', 'договор', 'акт')\n"
+    "- Boilerplate phrases like 'см. приложение', 'без изменений', 'ответственный'\n"
+    "- Values longer than 150 characters\n"
+    "- Values that are identical to the surrounding sentence\n\n"
+    "For each entity provide:\n"
+    "- type: one of the schema types below, or 'other' if none matches\n"
+    "- value: exact short text from the document\n"
+    "- normalized_value: normalized form if applicable, otherwise omit\n"
+    "- page: 1-based page number\n"
+    "- paragraph: 1-based paragraph number within the page\n"
+    "- evidence: exact short snippet containing the entity\n"
+    "- confidence: float 0.0-1.0\n"
+    "- handwritten: true if handwritten, false otherwise\n\n"
+    f"Schema:\n{_build_entity_type_descriptions()}\n\n"
+    'Return ONLY valid JSON: {"entities": [...]}\n'
+    "No explanations, no code fences."
+)
+
+SYSTEM_PROMPT_ENT_VISUAL_TEST = "Extract entities from this document page image. Return only JSON with an 'entities' array."
+
 
 async def reconstruct_markdown(images: list[Path]) -> str:
     if not images:
@@ -399,7 +436,7 @@ async def extract_entities_from_text(
     model = model or settings.vl_model
     sys_prompt = SYSTEM_PROMPT_ENT_TEST if settings.test_mode else SYSTEM_PROMPT_ENT
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
-    max_chars = 500 if settings.test_mode else 1500
+    max_chars = 500 if settings.test_mode else 6000
     if len(text) > max_chars:
         chunks = _chunk_text(text, max_chars)
     else:
@@ -649,3 +686,75 @@ async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[d
             markdown_parts.append(f"<!-- page {i + 1} -->\n{md}")
         all_entities.extend(entities)
     return "\n\n".join(markdown_parts), _deduplicate_entities(all_entities)
+
+
+async def extract_entities_from_images(images: list[Path]) -> list[dict]:
+    if not images:
+        return []
+    sys_prompt = SYSTEM_PROMPT_ENT_VISUAL_TEST if settings.test_mode else SYSTEM_PROMPT_ENT_VISUAL
+    max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+    selector = get_endpoint_selector()
+    semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+    async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+        async def _process_chunk(i: int, chunk: list[Path]) -> list[dict]:
+            async with semaphore:
+                user_content = [
+                    {"type": "text", "text": "Extract all entities from this document page image."},
+                ]
+                for img in chunk:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                    })
+                payload = {
+                    "model": settings.vl_model,
+                    "messages": [
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": max_tokens,
+                }
+                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload)
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                parsed = _parse_vlm_json_response(content, f"entities visual page {i + 1}")
+                if not parsed:
+                    return []
+                raw_entities = parsed.get("entities", [])
+                result: list[dict] = []
+                if isinstance(raw_entities, list):
+                    for entity in raw_entities:
+                        if not isinstance(entity, dict):
+                            continue
+                        validated = _validate_entity(entity, content)
+                        if validated is None:
+                            continue
+                        confidence = float(entity.get("confidence", 0.0))
+                        if confidence < settings.min_entity_confidence:
+                            continue
+                        handwritten = entity.get("handwritten")
+                        if handwritten is None:
+                            evidence_str = str(entity.get("evidence", ""))
+                            value_str = str(entity.get("value", ""))
+                            handwritten = "[HANDWRITTEN:" in evidence_str or "[HANDWRITTEN:" in value_str
+                        result.append({
+                            "type": str(entity.get("type", "other")),
+                            "value": str(entity.get("value", "")),
+                            "normalized_value": entity.get("normalized_value"),
+                            "page": int(entity.get("page", i + 1)),
+                            "paragraph": int(entity.get("paragraph", 0)),
+                            "evidence": str(entity.get("evidence", "")),
+                            "confidence": float(entity.get("confidence", 0.0)),
+                            "handwritten": bool(handwritten),
+                        })
+                return result
+
+        tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
+        chunk_results = await asyncio.gather(*tasks)
+
+    all_entities: list[dict] = []
+    for entities in chunk_results:
+        all_entities.extend(entities)
+    return _deduplicate_entities(all_entities)

@@ -21,6 +21,7 @@ from idp.renderer import extract_pdf_text_and_visual_pages
 from idp.result_writer import ResultWriter
 from idp.stats_writer import StatsWriter, FileTimer
 from idp.vlm_client import (
+    extract_entities_from_images,
     extract_entities_from_text,
     extract_markdown_and_entities,
     extract_paragraphs,
@@ -228,21 +229,29 @@ async def _process_file(
             pbar.set_postfix(file=file_path.name, stage="render")
             text, pngs, visual_indices = extract_pdf_text_and_visual_pages(file_path)
             timer.pages = len(pngs)
-            pbar.set_postfix(file=file_path.name, stage="vlm_combined")
-            vlm_markdown, vlm_entities = await extract_markdown_and_entities(pngs)
+            if artifacts_mode:
+                pbar.set_postfix(file=file_path.name, stage="vlm_combined")
+                vlm_markdown, vlm_entities = await extract_markdown_and_entities(pngs)
+                paragraphs = extract_paragraphs(vlm_markdown)
+            else:
+                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
+                vlm_entities = await extract_entities_from_images(pngs)
+                paragraphs = []
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-            paragraphs = extract_paragraphs(vlm_markdown)
             llm_endpoint = settings.vl_endpoint
             llm_model = settings.vl_model
             text_entities = await extract_entities_from_text(text, endpoint=llm_endpoint, model=llm_model)
             all_entities = vlm_entities + text_entities
-            markdown = _merge_vlm_and_text_markdown(vlm_markdown, text, visual_indices)
-            if text.strip():
-                text_paras = extract_paragraphs(text)
-                paragraphs.extend(text_paras)
             if artifacts_mode:
+                markdown = _merge_vlm_and_text_markdown(vlm_markdown, text, visual_indices)
+                if text.strip():
+                    text_paras = extract_paragraphs(text)
+                    paragraphs.extend(text_paras)
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
+            else:
+                if text.strip():
+                    paragraphs = extract_paragraphs(text)
             status = "ok"
         elif file_path.suffix.lower() == ".docx":
             pbar.set_postfix(file=file_path.name, stage="docx")
@@ -337,7 +346,10 @@ async def _main() -> None:
 
     settings.output_root.mkdir(parents=True, exist_ok=True)
     files = _find_files(settings.input_root)
-    result_writer = ResultWriter(settings.output_root / "results.jsonl", pretty=settings.artifacts_mode)
+    result_writer = ResultWriter(
+        settings.output_root / "results.jsonl",
+        pretty_path=settings.output_root / "results_readable.json",
+    )
 
     processed: set[str] = set()
     results_path = settings.output_root / "results.jsonl"
