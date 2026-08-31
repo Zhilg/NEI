@@ -48,16 +48,24 @@ def get_endpoint_selector() -> RoundRobinEndpointSelector:
 
 
 async def _post_with_retry(client: httpx.AsyncClient, url: str, payload: dict) -> httpx.Response:
-    response = await client.post(url, json=payload)
-    if response.status_code == 429:
-        await asyncio.sleep(1)
-        response = await client.post(url, json=payload)
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"VLM request failed: {response.status_code} {response.text}"
-        )
-    response.raise_for_status()
-    return response
+    for attempt in range(3):
+        try:
+            response = await client.post(url, json=payload)
+        except (httpx.NetworkError, httpx.TimeoutException):
+            if attempt < 2:
+                await asyncio.sleep(1)
+                continue
+            raise
+        if response.status_code == 429:
+            await asyncio.sleep(1)
+            response = await client.post(url, json=payload)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"VLM request failed: {response.status_code} {response.text}"
+            )
+        response.raise_for_status()
+        return response
+    raise RuntimeError("VLM request failed after retries")
 
 
 def _load_entity_schema_raw() -> dict:
@@ -693,6 +701,7 @@ async def extract_entities_from_images(images: list[Path]) -> list[dict]:
         return []
     sys_prompt = SYSTEM_PROMPT_ENT_VISUAL_TEST if settings.test_mode else SYSTEM_PROMPT_ENT_VISUAL
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+    chunks = _chunked(images, settings.vl_max_images)
     selector = get_endpoint_selector()
     semaphore = asyncio.Semaphore(settings.vl_concurrency)
 
