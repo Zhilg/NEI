@@ -37,6 +37,11 @@ services:
       vllm-vl-1:
         condition: service_healthy
 
+    networks:
+      idp_internal:
+        aliases:
+          - vllm-vl
+
   vllm-vl-0:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
@@ -87,6 +92,12 @@ services:
       retries: 40
       start_period: 90s
 
+    networks:
+      idp_internal:
+        aliases:
+          - vllm-vl-0
+          - vllm-vl
+
   vllm-vl-1:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
@@ -136,6 +147,12 @@ services:
       timeout: 5s
       retries: 40
       start_period: 90s
+
+    networks:
+      idp_internal:
+        aliases:
+          - vllm-vl-1
+          - vllm-vl
 
 networks:
   idp_internal:
