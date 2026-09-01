@@ -91,6 +91,7 @@ services:
       VLLM_NO_USAGE_STATS: "1"
       VLLM_IMAGE_MAX_PIXELS: "3000000"
       VLLM_IMAGE_MIN_PIXELS: "1003520"
+      VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
 
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
@@ -154,7 +155,8 @@ services:
       VLLM_NO_USAGE_STATS: "1"
       VLLM_IMAGE_MAX_PIXELS: "3000000"
       VLLM_IMAGE_MIN_PIXELS: "1003520"
-
+      VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
+      
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
 
