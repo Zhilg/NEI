@@ -221,8 +221,6 @@ def _validate_entity(entity: dict, source_text: str = "") -> dict | None:
     if value.endswith(".") and len(words) > 5 and etype not in _LONG_VALUE_TYPES:
         return None
     evidence = str(entity.get("evidence", "")).strip()
-    if evidence and value == evidence and len(value) > 3 and etype not in _SHORT_VALUE_TYPES:
-        return None
     if source_text and evidence and len(evidence) >= 3:
         normalized_source = " ".join(source_text.lower().split())
         normalized_evidence = " ".join(evidence.lower().split())
