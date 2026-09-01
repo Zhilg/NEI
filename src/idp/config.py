@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     input_root: Path = Field(default=Path("/input"))
     output_root: Path = Field(default=Path("/output"))
     models_root: Path = Field(default=Path("/models"))
-    render_dpi: int = Field(default=300, ge=72, le=600)
+    render_dpi: int = Field(default=400, ge=72, le=600)
+    upscale_factor: int = Field(default=2, ge=1, le=4)
+    max_image_dimension: int = Field(default=2048, ge=512, le=4096)
     vl_endpoint: str = "http://vllm-vl:8000/v1"
     vl_endpoints: Union[str, list[str]] = Field(default="")
     vl_model: str = "Qwen2.5-VL-32B-Instruct-AWQ"

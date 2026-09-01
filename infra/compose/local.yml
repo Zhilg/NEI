@@ -74,9 +74,11 @@ services:
       - --dtype
       - ${IDP_VLLM_DTYPE:-half}
       - --gpu-memory-utilization
-      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.9}
+      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
-      - ${IDP_VLLM_MAX_MODEL_LEN:-32768}
+      - ${IDP_VLLM_MAX_MODEL_LEN:-45000}
+      - --limit-mm-per-prompt
+      - vision=3
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
@@ -87,6 +89,8 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
+      VLLM_IMAGE_MAX_PIXELS: "3000000"
+      VLLM_IMAGE_MIN_PIXELS: "1003520"
 
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
@@ -133,9 +137,11 @@ services:
       - --dtype
       - ${IDP_VLLM_DTYPE:-half}
       - --gpu-memory-utilization
-      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.9}
+      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
-      - ${IDP_VLLM_MAX_MODEL_LEN:-32768}
+      - ${IDP_VLLM_MAX_MODEL_LEN:-45000}
+      - --limit-mm-per-prompt
+      - vision=3
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
@@ -146,6 +152,8 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
+      VLLM_IMAGE_MAX_PIXELS: "3000000"
+      VLLM_IMAGE_MIN_PIXELS: "1003520"
 
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
