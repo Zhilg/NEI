@@ -4,6 +4,9 @@ services:
   worker:
     image: ${IDP_APP_IMAGE:-local/idp-app:latest}
     pull_policy: never
+    build:
+      context: ${IDP_SOURCE_ROOT:-../../}
+      dockerfile: Dockerfile
     command: ["idp"]
 
     environment:
@@ -45,6 +48,9 @@ services:
   vllm-vl-0:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
+    build:
+      context: ${IDP_SOURCE_ROOT:-../../}
+      dockerfile: infra/dockerfiles/vllm-vl/Dockerfile
     restart: unless-stopped
     deploy:
       resources:
@@ -101,6 +107,9 @@ services:
   vllm-vl-1:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
+    build:
+      context: ${IDP_SOURCE_ROOT:-../../}
+      dockerfile: infra/dockerfiles/vllm-vl/Dockerfile
     restart: unless-stopped
     deploy:
       resources:

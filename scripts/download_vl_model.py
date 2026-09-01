@@ -9,6 +9,8 @@ import os
 import sys
 from pathlib import Path
 
+os.environ.setdefault("HF_HUB_DISABLE_XET", "true")
+
 REPO_ID = "Qwen/Qwen2.5-VL-32B-Instruct-AWQ"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -37,8 +39,6 @@ def main() -> int:
         repo_id=REPO_ID,
         cache_dir=str(HF_CACHE),
         local_dir=str(MODEL_DIR),
-        local_dir_use_symlinks=False,
-        resume_download=True,
     )
 
     print(f"[dl] Done. Files at {MODEL_DIR}")
