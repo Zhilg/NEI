@@ -76,9 +76,9 @@ services:
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
-      - ${IDP_VLLM_MAX_MODEL_LEN:-45000}
+      - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
       - --limit-mm-per-prompt
-      - vision=3
+      - '{"vision": 3}'
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
@@ -140,9 +140,9 @@ services:
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
-      - ${IDP_VLLM_MAX_MODEL_LEN:-45000}
+      - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
       - --limit-mm-per-prompt
-      - vision=3
+      - '{"vision": 3}'
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
