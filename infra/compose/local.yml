@@ -78,7 +78,7 @@ services:
       - --max-model-len
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
       - --limit-mm-per-prompt
-      - '{"vision": 3}'
+      - vision=3
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
@@ -142,7 +142,7 @@ services:
       - --max-model-len
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
       - --limit-mm-per-prompt
-      - '{"vision": 3}'
+      - vision=3
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}

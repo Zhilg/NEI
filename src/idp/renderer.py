@@ -64,12 +64,15 @@ def extract_pdf_text_and_visual_pages(pdf_path: Path) -> tuple[str, list[Path], 
         mat = fitz.Matrix(settings.render_dpi / 72, settings.render_dpi / 72)
         pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        print(f"Renderer: page {page_index + 1} raw size: {pix.width}x{pix.height}", file=sys.stderr)
         img = _upscale_image(img, scale=settings.upscale_factor)
         img = _resize_to_max_dimension(img, settings.max_image_dimension)
+        print(f"Renderer: page {page_index + 1} final size: {img.width}x{img.height}", file=sys.stderr)
         out_path = output_dir / f"page_{page_index + 1:05d}.png"
         img.save(out_path, "PNG")
         pngs.append(out_path)
         visual_page_indices.append(page_index)
     doc.close()
 
+    print(f"Renderer: produced {len(pngs)} images", file=sys.stderr)
     return "", pngs, visual_page_indices

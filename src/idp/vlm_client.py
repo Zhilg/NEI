@@ -57,7 +57,8 @@ async def _post_with_retry(
     for attempt in range(3):
         try:
             response = await client.post(url, json=payload)
-        except (httpx.NetworkError, httpx.TimeoutException):
+        except (httpx.NetworkError, httpx.TimeoutException) as e:
+            print(f"VLM network error (attempt {attempt + 1}): {e}", file=sys.stderr)
             if attempt < 2:
                 if selector is not None:
                     url = f"{selector.next()}/chat/completions"
@@ -70,9 +71,9 @@ async def _post_with_retry(
                 url = f"{selector.next()}/chat/completions"
             response = await client.post(url, json=payload)
         if response.status_code != 200:
-            raise RuntimeError(
-                f"VLM request failed: {response.status_code} {response.text}"
-            )
+            error_msg = f"VLM request failed: {response.status_code} {response.text[:500]}"
+            print(error_msg, file=sys.stderr)
+            raise RuntimeError(error_msg)
         response.raise_for_status()
         return response
     raise RuntimeError("VLM request failed after retries")
@@ -661,11 +662,16 @@ async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[d
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
                 }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
+                url = f"{selector.next()}/chat/completions"
+                print(f"VLM request to {url}, images: {len(chunk)}, model: {settings.vl_model}", file=sys.stderr)
+                response = await _post_with_retry(client, url, payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
+                print(f"VLM response length: {len(content) if content else 0}", file=sys.stderr)
+                print(f"VLM response preview: {content[:200] if content else 'EMPTY'}", file=sys.stderr)
                 parsed = _parse_vlm_json_response(content, f"combined page {i + 1}")
                 if not parsed:
+                    print(f"VLM parse failed for chunk {i + 1}", file=sys.stderr)
                     return "", []
                 md = parsed.get("markdown", "")
                 raw_entities = parsed.get("entities", [])
