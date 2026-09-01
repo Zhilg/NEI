@@ -76,7 +76,7 @@ services:
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
 
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_VL_GPU_0:-0}
+      NVIDIA_DRIVER_CAPABILITIES: all
       HF_HOME: /models/vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -132,7 +132,7 @@ services:
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
 
     environment:
-      CUDA_VISIBLE_DEVICES: ${IDP_VLLM_VL_GPU_1:-1}
+      NVIDIA_DRIVER_CAPABILITIES: all
       HF_HOME: /models/vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"

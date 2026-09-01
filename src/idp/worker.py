@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -21,7 +22,6 @@ from idp.renderer import extract_pdf_text_and_visual_pages
 from idp.result_writer import ResultWriter
 from idp.stats_writer import StatsWriter, FileTimer
 from idp.vlm_client import (
-    extract_entities_from_images,
     extract_entities_from_text,
     extract_markdown_and_entities,
     extract_paragraphs,
@@ -69,55 +69,6 @@ def _get_new_entity_types(entities: list[dict], schema: dict) -> list[dict]:
     for name in sorted(found_types):
         new_types.append({"name": name, "description": f"Auto-detected entity type: {name}"})
     return new_types
-
-
-def _merge_vlm_and_text_markdown(vlm_markdown: str, text_markdown: str, visual_indices: list[int]) -> str:
-    vlm_pages: dict[int, str] = {}
-    for line in vlm_markdown.splitlines():
-        match = re.match(r"^<!--\s*page\s+(\d+)\s*-->", line.strip())
-        if match:
-            page_num = int(match.group(1))
-            vlm_pages[page_num] = ""
-    
-    current_page = None
-    current_lines: list[str] = []
-    for line in vlm_markdown.splitlines():
-        match = re.match(r"^<!--\s*page\s+(\d+)\s*-->", line.strip())
-        if match:
-            if current_page is not None and current_page in vlm_pages:
-                vlm_pages[current_page] = "\n".join(current_lines).strip()
-            current_page = int(match.group(1))
-            current_lines = []
-            continue
-        if current_page is not None:
-            current_lines.append(line)
-    if current_page is not None and current_page in vlm_pages:
-        vlm_pages[current_page] = "\n".join(current_lines).strip()
-
-    visual_set = {i + 1 for i in visual_indices}
-    text_pages: dict[int, str] = {}
-    current_page = None
-    current_lines = []
-    for line in text_markdown.splitlines():
-        match = re.match(r"^<!--\s*page\s+(\d+)\s*-->", line.strip())
-        if match:
-            if current_page is not None and current_page not in visual_set:
-                text_pages[current_page] = "\n".join(current_lines).strip()
-            current_page = int(match.group(1))
-            current_lines = []
-            continue
-        if current_page is not None:
-            current_lines.append(line)
-    if current_page is not None and current_page not in visual_set:
-        text_pages[current_page] = "\n".join(current_lines).strip()
-
-    all_pages = sorted(set(vlm_pages.keys()) | set(text_pages.keys()))
-    parts = []
-    for page_num in all_pages:
-        content = vlm_pages.get(page_num) or text_pages.get(page_num, "")
-        if content:
-            parts.append(f"<!-- page {page_num} -->\n{content}")
-    return "\n\n".join(parts)
 
 
 def _postprocess_markdown(markdown: str) -> str:
@@ -218,32 +169,29 @@ async def _process_file(
                 }
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
-            llm_endpoint = settings.vl_endpoint
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, endpoint=llm_endpoint, model=llm_model)
+            all_entities = await extract_entities_from_text(markdown, model=llm_model)
             if artifacts_mode:
                 output_md_tmp.write_text(markdown, encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
             status = "ok"
         elif file_path.suffix.lower() == ".pdf":
             pbar.set_postfix(file=file_path.name, stage="render")
-            text, pngs, visual_indices = extract_pdf_text_and_visual_pages(file_path)
+            _, pngs, _ = extract_pdf_text_and_visual_pages(file_path)
             timer.pages = len(pngs)
-            if artifacts_mode:
-                pbar.set_postfix(file=file_path.name, stage="vlm_combined")
-                vlm_markdown, vlm_entities = await extract_markdown_and_entities(pngs)
-            else:
-                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-                vlm_entities = await extract_entities_from_images(pngs)
+            rendered_dir = settings.output_root / "rendered" / file_path.stem
+            rendered_dir.mkdir(parents=True, exist_ok=True)
+            for png in pngs:
+                shutil.copy2(png, rendered_dir / png.name)
+            pbar.set_postfix(file=file_path.name, stage="vlm_combined")
+            vlm_markdown, vlm_entities = await extract_markdown_and_entities(pngs)
             pbar.set_postfix(file=file_path.name, stage="text_entities")
-            llm_endpoint = settings.vl_endpoint
             llm_model = settings.vl_model
-            text_entities = await extract_entities_from_text(text, endpoint=llm_endpoint, model=llm_model)
-            all_entities = vlm_entities + text_entities
-            paragraphs = extract_paragraphs(text)
+            markdown_entities = await extract_entities_from_text(vlm_markdown, model=llm_model)
+            all_entities = vlm_entities + markdown_entities
+            paragraphs = extract_paragraphs(vlm_markdown)
             if artifacts_mode:
-                markdown = _merge_vlm_and_text_markdown(vlm_markdown, text, visual_indices)
-                output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
+                output_md_tmp.write_text(_postprocess_markdown(vlm_markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
             status = "ok"
         elif file_path.suffix.lower() == ".docx":
@@ -251,9 +199,8 @@ async def _process_file(
             markdown = convert_docx_to_markdown(file_path)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
-            llm_endpoint = settings.vl_endpoint
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, endpoint=llm_endpoint, model=llm_model)
+            all_entities = await extract_entities_from_text(markdown, model=llm_model)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
@@ -263,9 +210,8 @@ async def _process_file(
             markdown = convert_pptx_to_markdown(file_path)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
-            llm_endpoint = settings.vl_endpoint
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, endpoint=llm_endpoint, model=llm_model)
+            all_entities = await extract_entities_from_text(markdown, model=llm_model)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
@@ -275,9 +221,8 @@ async def _process_file(
             markdown = convert_html_to_markdown(file_path)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
-            llm_endpoint = settings.vl_endpoint
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, endpoint=llm_endpoint, model=llm_model)
+            all_entities = await extract_entities_from_text(markdown, model=llm_model)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)

@@ -36,21 +36,17 @@ def _upscale_image(img: Image.Image, scale: int = 2) -> Image.Image:
 
 def extract_pdf_text_and_visual_pages(pdf_path: Path) -> tuple[str, list[Path], list[int]]:
     doc = fitz.open(pdf_path)
-    text_parts: list[str] = []
-    visual_page_indices: list[int] = []
-    for page_index in range(len(doc)):
-        page = doc.load_page(page_index)
-        text = page.get_text("text")
-        text_parts.append(f"<!-- page {page_index + 1} -->\n{text}")
-        if page.get_images():
-            visual_page_indices.append(page_index)
+    num_pages = len(doc)
     doc.close()
 
     output_dir = Path(tempfile.gettempdir()) / "idp_pdf_pages" / pdf_path.stem
     output_dir.mkdir(parents=True, exist_ok=True)
+
     pngs: list[Path] = []
-    for page_index in visual_page_indices:
-        page = fitz.open(pdf_path).load_page(page_index)
+    visual_page_indices: list[int] = []
+    doc = fitz.open(pdf_path)
+    for page_index in range(num_pages):
+        page = doc.load_page(page_index)
         mat = fitz.Matrix(settings.render_dpi / 72, settings.render_dpi / 72)
         pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -58,5 +54,7 @@ def extract_pdf_text_and_visual_pages(pdf_path: Path) -> tuple[str, list[Path], 
         out_path = output_dir / f"page_{page_index + 1:05d}.png"
         img.save(out_path, "PNG")
         pngs.append(out_path)
-    full_text = "\n\n".join(text_parts)
-    return full_text, pngs, visual_page_indices
+        visual_page_indices.append(page_index)
+    doc.close()
+
+    return "", pngs, visual_page_indices

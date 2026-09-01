@@ -47,17 +47,27 @@ def get_endpoint_selector() -> RoundRobinEndpointSelector:
     return RoundRobinEndpointSelector(get_vl_endpoints())
 
 
-async def _post_with_retry(client: httpx.AsyncClient, url: str, payload: dict) -> httpx.Response:
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    *,
+    selector: RoundRobinEndpointSelector | None = None,
+) -> httpx.Response:
     for attempt in range(3):
         try:
             response = await client.post(url, json=payload)
         except (httpx.NetworkError, httpx.TimeoutException):
             if attempt < 2:
+                if selector is not None:
+                    url = f"{selector.next()}/chat/completions"
                 await asyncio.sleep(1)
                 continue
             raise
         if response.status_code == 429:
             await asyncio.sleep(1)
+            if selector is not None:
+                url = f"{selector.next()}/chat/completions"
             response = await client.post(url, json=payload)
         if response.status_code != 200:
             raise RuntimeError(
@@ -191,7 +201,7 @@ _LONG_VALUE_TYPES = {
     "handwritten_amount", "payment_details",
 }
 _SHORT_VALUE_TYPES = {"stamp", "signature", "handwritten_signature"}
-_JUNK_TYPES = {"subject"}
+_JUNK_TYPES: set[str] = set()
 
 
 def _validate_entity(entity: dict, source_text: str = "") -> dict | None:
@@ -213,10 +223,10 @@ def _validate_entity(entity: dict, source_text: str = "") -> dict | None:
     if evidence and value == evidence and len(value) > 3 and etype not in _SHORT_VALUE_TYPES:
         return None
     if source_text and evidence and len(evidence) >= 3:
-        normalized_source = " ".join(source_text.split())
-        normalized_evidence = " ".join(evidence.split())
+        normalized_source = " ".join(source_text.lower().split())
+        normalized_evidence = " ".join(evidence.lower().split())
         if normalized_evidence not in normalized_source:
-            return None
+            pass
     return entity
 
 
@@ -421,7 +431,7 @@ async def reconstruct_markdown(images: list[Path]) -> str:
                     "temperature": 0.1,
                     "max_tokens": max_tokens,
                 }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload)
+                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 return _strip_code_fences(content)
@@ -440,7 +450,6 @@ async def extract_entities_from_text(
     endpoint: str | None = None,
     model: str | None = None,
 ) -> list[dict]:
-    endpoint = endpoint or settings.vl_endpoint
     model = model or settings.vl_model
     sys_prompt = SYSTEM_PROMPT_ENT_TEST if settings.test_mode else SYSTEM_PROMPT_ENT
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
@@ -469,7 +478,7 @@ async def extract_entities_from_text(
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
                 }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload)
+                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 parsed = _parse_vlm_json_response(content, f"entities chunk {i + 1}")
@@ -649,7 +658,7 @@ async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[d
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
                 }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload)
+                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 parsed = _parse_vlm_json_response(content, f"combined page {i + 1}")
@@ -725,7 +734,7 @@ async def extract_entities_from_images(images: list[Path]) -> list[dict]:
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
                 }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload)
+                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 parsed = _parse_vlm_json_response(content, f"entities visual page {i + 1}")
