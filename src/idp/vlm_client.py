@@ -482,13 +482,18 @@ async def extract_entities_from_text(
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
                 }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
+                url = f"{selector.next()}/chat/completions"
+                response = await _post_with_retry(client, url, payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
+                print(f"ENT chunk {i+1} response length: {len(content) if content else 0}", file=sys.stderr)
+                print(f"ENT chunk {i+1} preview: {content[:300] if content else 'EMPTY'}", file=sys.stderr)
                 parsed = _parse_vlm_json_response(content, f"entities chunk {i + 1}")
                 if not parsed:
+                    print(f"ENT chunk {i+1} PARSE FAILED", file=sys.stderr)
                     return []
                 raw_entities = parsed.get("entities", parsed.get("result", []))
+                print(f"ENT chunk {i+1} raw entities: {len(raw_entities) if isinstance(raw_entities, list) else 'NOT A LIST'}", file=sys.stderr)
                 result: list[dict] = []
                 if isinstance(raw_entities, list):
                     for entity in raw_entities:
@@ -496,9 +501,11 @@ async def extract_entities_from_text(
                             continue
                         validated = _validate_entity(entity, chunk)
                         if validated is None:
+                            print(f"ENT chunk {i+1} FILTERED: {entity}", file=sys.stderr)
                             continue
                         confidence = float(entity.get("confidence", 0.0))
                         if confidence < settings.min_entity_confidence:
+                            print(f"ENT chunk {i+1} LOW CONF ({confidence}): {entity}", file=sys.stderr)
                             continue
                         handwritten = entity.get("handwritten")
                         if handwritten is None:
@@ -523,7 +530,9 @@ async def extract_entities_from_text(
     all_entities: list[dict] = []
     for entities in chunk_results:
         all_entities.extend(entities)
-    return _deduplicate_entities(all_entities)
+    final = _deduplicate_entities(all_entities)
+    print(f"ENT total: {len(final)} entities after dedup", file=sys.stderr)
+    return final
 
 
 def _chunk_text(text: str, max_chars: int) -> list[str]:
