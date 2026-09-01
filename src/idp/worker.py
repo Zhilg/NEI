@@ -23,8 +23,8 @@ from idp.result_writer import ResultWriter
 from idp.stats_writer import StatsWriter, FileTimer
 from idp.vlm_client import (
     extract_entities_from_text,
-    extract_markdown_and_entities,
     extract_paragraphs,
+    reconstruct_markdown,
     update_entity_schema,
 )
 
@@ -183,12 +183,11 @@ async def _process_file(
             rendered_dir.mkdir(parents=True, exist_ok=True)
             for png in pngs:
                 shutil.copy2(png, rendered_dir / png.name)
-            pbar.set_postfix(file=file_path.name, stage="vlm_combined")
-            vlm_markdown, vlm_entities = await extract_markdown_and_entities(pngs)
+            pbar.set_postfix(file=file_path.name, stage="vlm_markdown")
+            vlm_markdown = await reconstruct_markdown(pngs)
             pbar.set_postfix(file=file_path.name, stage="text_entities")
             llm_model = settings.vl_model
-            markdown_entities = await extract_entities_from_text(vlm_markdown, model=llm_model)
-            all_entities = vlm_entities + markdown_entities
+            all_entities = await extract_entities_from_text(vlm_markdown, model=llm_model)
             paragraphs = extract_paragraphs(vlm_markdown)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(vlm_markdown), encoding="utf-8")
