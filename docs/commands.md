@@ -35,7 +35,25 @@ curl http://localhost:8000/v1/models
 curl http://localhost:8001/v1/models
 ```
 
-Оба должны вернуть модель `Qwen2.5-VL-32B-Instruct-AWQ`.
+Оба должны вернуть модель `Qwen2.5-VL-32B-Instruct-AWQ` (или `Qwen3.8-27B`, если используете профиль `local-new`).
+
+## Переключение VL-модели
+
+Для сравнения моделей используйте два compose-файла:
+
+```bash
+# Старая модель Qwen2.5-VL-32B-Instruct-AWQ (vl/)
+docker compose -f infra/compose/local.yml up -d
+
+# Новая модель Qwen3.8-27B (new_vl/)
+docker compose -f infra/compose/local.yml -f infra/compose/local-new.yml up -d
+```
+
+Модели скачиваются скриптами:
+```bash
+python scripts/download_vl_model.py
+python scripts/download_new_vl_model.py
+```
 
 ## Настройка GPU
 
