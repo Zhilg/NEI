@@ -1,8 +1,8 @@
-"""Download Qwen3-VL-27B-Instruct model per infra/compose/local.yml.
+"""Download Qwen3.8-27B-FP8 model.
 
 Model path inside container: /models/new_vl
-Local host path:     ../../transfer/models/new_vl  (relative to infra/compose)
-HF cache:            ../../transfer/models/new_vl/hf-cache
+Local project path:        transfer/models/new_vl/
+HF cache:                  transfer/models/new_vl/hf-cache/
 """
 
 import os
@@ -11,10 +11,11 @@ from pathlib import Path
 
 os.environ.setdefault("HF_HUB_DISABLE_XET", "true")
 
-REPO_ID = "Qwen/Qwen3.8-27B"
+REPO_ID = "Qwen/Qwen3.8-27B-FP8"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-MODELS_ROOT = (SCRIPT_DIR / ".." / ".." / "transfer" / "models").resolve()
+PROJECT_ROOT = SCRIPT_DIR.parent
+MODELS_ROOT = PROJECT_ROOT / "transfer" / "models"
 MODEL_DIR = MODELS_ROOT / "new_vl"
 HF_CACHE = MODEL_DIR / "hf-cache"
 
