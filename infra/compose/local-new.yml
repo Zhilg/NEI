@@ -41,10 +41,8 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
-      - --quantization
-      - ${IDP_VLLM_QUANTIZATION:-awq}
       - --dtype
-      - ${IDP_VLLM_DTYPE:-half}
+      - bfloat16
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
@@ -100,10 +98,8 @@ services:
       - 0.0.0.0
       - --port
       - "8001"
-      - --quantization
-      - ${IDP_VLLM_QUANTIZATION:-awq}
       - --dtype
-      - ${IDP_VLLM_DTYPE:-half}
+      - bfloat16
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
