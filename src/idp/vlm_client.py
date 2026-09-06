@@ -298,7 +298,7 @@ SYSTEM_PROMPT_MD = (
     "HANDWRITING DETECTION:\n"
     "If any text is handwritten (cursive, ink, marker, different from printed text), wrap it in [HANDWRITTEN: ...]. "
     "Example: 'The price is [HANDWRITTEN: 5000] rubles.'\n\n"
-    "Output ONLY the Markdown text. No explanations."
+    "Output ONLY the Markdown text. No explanations. No thinking blocks. No reasoning."
 )
 
 SYSTEM_PROMPT_MD_TEST = "Convert the document images to Markdown. Output only Markdown."
@@ -335,7 +335,7 @@ SYSTEM_PROMPT_ENT = (
     "- handwritten: true if handwritten, false otherwise\n\n"
     f"Schema:\n{_build_entity_type_descriptions()}\n\n"
     'Return ONLY valid JSON: {"entities": [...]}\n'
-    "No explanations, no code fences."
+    "No explanations, no code fences, no thinking blocks, no reasoning."
 )
 
 SYSTEM_PROMPT_ENT_TEST = "Extract entities from the text. Return only JSON with an 'entities' array."
@@ -358,7 +358,7 @@ SYSTEM_PROMPT_COMBINED = (
     "For each entity provide: type, value, normalized_value (if applicable), page, paragraph, evidence, confidence (0.0-1.0), handwritten (true/false).\n\n"
     "Return a single JSON object with TWO keys:\n"
     '{"markdown": "<reconstructed markdown>", "entities": [<entity objects>]}\n'
-    "No explanations, no code fences, no extra text."
+    "No explanations, no code fences, no extra text, no thinking blocks, no reasoning."
 )
 
 SYSTEM_PROMPT_COMBINED_TEST = (
@@ -398,7 +398,7 @@ SYSTEM_PROMPT_ENT_VISUAL = (
     "- handwritten: true if handwritten, false otherwise\n\n"
     f"Schema:\n{_build_entity_type_descriptions()}\n\n"
     'Return ONLY valid JSON: {"entities": [...]}\n'
-    "No explanations, no code fences."
+    "No explanations, no code fences, no thinking blocks, no reasoning."
 )
 
 SYSTEM_PROMPT_ENT_VISUAL_TEST = "Extract entities from this document page image. Return only JSON with an 'entities' array."
@@ -603,8 +603,20 @@ def _strip_code_fences(content: str) -> str:
 
 def _strip_thinking_blocks(content: str) -> str:
     import re
-    pattern = re.compile(r'<think>\s*.*?\s*</think>\s*', re.DOTALL | re.IGNORECASE)
-    return pattern.sub('', content).strip()
+    patterns = [
+        re.compile(r'<think>\s*.*?\s*</think>\s*', re.DOTALL | re.IGNORECASE),
+        re.compile(r'<thinking>\s*.*?\s*</thinking>\s*', re.DOTALL | re.IGNORECASE),
+        re.compile(r'\[THINKING\][^\[]*\[/THINKING\]', re.DOTALL | re.IGNORECASE),
+        re.compile(r'<thought>\s*.*?\s*</thought>\s*', re.DOTALL | re.IGNORECASE),
+        re.compile(r'<reasoning>\s*.*?\s*</reasoning>\s*', re.DOTALL | re.IGNORECASE),
+    ]
+    result = content
+    for pattern in patterns:
+        result = pattern.sub('', result)
+    result = re.sub(r'</think>\s*$', '', result, flags=re.DOTALL | re.IGNORECASE).strip()
+    result = re.sub(r'</thinking>\s*$', '', result, flags=re.DOTALL | re.IGNORECASE).strip()
+    result = re.sub(r'\[/THINKING\]\s*$', '', result, flags=re.DOTALL | re.IGNORECASE).strip()
+    return result.strip()
 
 
 def _parse_vlm_json_response(content: str, context: str) -> dict:
