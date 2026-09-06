@@ -432,11 +432,12 @@ async def reconstruct_markdown(images: list[Path]) -> str:
                     ],
                     "temperature": 0.1,
                     "max_tokens": max_tokens,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                 }
                 response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
-                return _strip_code_fences(content)
+                return _strip_code_fences(_strip_thinking_blocks(content))
 
         tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
         parts = await asyncio.gather(*tasks)
@@ -479,11 +480,13 @@ async def extract_entities_from_text(
                     ],
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                 }
                 url = f"{selector.next()}/chat/completions"
                 response = await _post_with_retry(client, url, payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
+                content = _strip_thinking_blocks(content)
                 print(f"ENT chunk {i+1} response length: {len(content) if content else 0}", file=sys.stderr)
                 print(f"ENT chunk {i+1} preview: {content[:300] if content else 'EMPTY'}", file=sys.stderr)
                 parsed = _parse_vlm_json_response(content, f"entities chunk {i + 1}")
@@ -598,6 +601,12 @@ def _strip_code_fences(content: str) -> str:
     return cleaned
 
 
+def _strip_thinking_blocks(content: str) -> str:
+    import re
+    pattern = re.compile(r'<think>\s*.*?\s*</think>\s*', re.DOTALL | re.IGNORECASE)
+    return pattern.sub('', content).strip()
+
+
 def _parse_vlm_json_response(content: str, context: str) -> dict:
     cleaned = _strip_code_fences(content)
     try:
@@ -668,12 +677,14 @@ async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[d
                     ],
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                 }
                 url = f"{selector.next()}/chat/completions"
                 print(f"VLM request to {url}, images: {len(chunk)}, model: {settings.vl_model}", file=sys.stderr)
                 response = await _post_with_retry(client, url, payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
+                content = _strip_thinking_blocks(content)
                 print(f"VLM response length: {len(content) if content else 0}", file=sys.stderr)
                 print(f"VLM response preview: {content[:200] if content else 'EMPTY'}", file=sys.stderr)
                 parsed = _parse_vlm_json_response(content, f"combined page {i + 1}")
@@ -749,10 +760,12 @@ async def extract_entities_from_images(images: list[Path]) -> list[dict]:
                     ],
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                 }
                 response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
+                content = _strip_thinking_blocks(content)
                 parsed = _parse_vlm_json_response(content, f"entities visual page {i + 1}")
                 if not parsed:
                     return []
