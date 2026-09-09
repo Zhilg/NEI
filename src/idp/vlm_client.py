@@ -613,6 +613,13 @@ def _strip_thinking_blocks(content: str) -> str:
         re.compile(r'<reasoning>\s*.*?\s*</reasoning>\s*', re.DOTALL | re.IGNORECASE),
         re.compile(r'<arg_value>[^\n]*</arg_value>', re.DOTALL | re.IGNORECASE),
         re.compile(r'thinking\s*:?\s*.*?\n', re.DOTALL | re.IGNORECASE),
+        re.compile(r'First.*?\n', re.DOTALL | re.IGNORECASE),
+        re.compile(r'Need.*?\n', re.DOTALL | re.IGNORECASE),
+        re.compile(r'I will.*?\n', re.DOTALL | re.IGNORECASE),
+        re.compile(r'Then.*?\n', re.DOTALL | re.IGNORECASE),
+        re.compile(r'The user.*?\n', re.DOTALL | re.IGNORECASE),
+        re.compile(r'Let me.*?\n', re.DOTALL | re.IGNORECASE),
+        re.compile(r'I need.*?\n', re.DOTALL | re.IGNORECASE),
     ]
     result = content
     for pattern in patterns:

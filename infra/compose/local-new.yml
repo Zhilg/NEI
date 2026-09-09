@@ -3,7 +3,7 @@ name: idp-new
 services:
   worker:
     volumes:
-      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace
       - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
       - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
     environment:
