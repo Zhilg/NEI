@@ -1,4 +1,4 @@
-"""Download Qwen3.8-27B-FP8 model.
+"""Download Qwen3.8-27B-AWQ-INT4 model from cyankiwi.
 
 Model path inside container: /models/new_vl
 Local project path:        transfer/models/new_vl/
@@ -11,7 +11,7 @@ from pathlib import Path
 
 os.environ.setdefault("HF_HUB_DISABLE_XET", "true")
 
-REPO_ID = "Qwen/Qwen3.8-27B-FP8"
+REPO_ID = "cyankiwi/Qwen3.8-27B-AWQ-INT4"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent

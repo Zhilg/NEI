@@ -49,7 +49,7 @@ transfer/models/vl/
 | 8 GB | `Qwen/Qwen2-VL-2B-Instruct` |
 | 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` |
 | 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct-AWQ` |
-| 24 GB | `Qwen/Qwen3.8-27B-FP8` |
+| 24 GB | `cyankiwi/Qwen3.8-27B-AWQ-INT4` |
 transfer/models/
 ├── new_vl/  # VL-модель для реконструкции PDF → Markdown
 └── llm/     # LLM-модель для извлечения сущностей из текста (DOCX, HTML, PPTX)

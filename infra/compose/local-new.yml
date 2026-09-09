@@ -36,15 +36,15 @@ services:
       - --model
       - /models/new_vl
       - --served-model-name
-      - Qwen3.8-27B-FP8
+      - Qwen3.8-27B
       - --host
       - 0.0.0.0
       - --port
       - "8000"
       - --quantization
-      - fp8
+      - awq
       - --dtype
-      - bfloat16
+      - half
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
@@ -95,15 +95,15 @@ services:
       - --model
       - /models/new_vl
       - --served-model-name
-      - Qwen3.8-27B-FP8
+      - Qwen3.8-27B
       - --host
       - 0.0.0.0
       - --port
       - "8001"
       - --quantization
-      - fp8
+      - awq
       - --dtype
-      - bfloat16
+      - half
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
