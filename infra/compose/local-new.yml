@@ -51,6 +51,8 @@ services:
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
       - --limit-mm-per-prompt
       - '{"vision": 3}'
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
@@ -110,6 +112,8 @@ services:
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
       - --limit-mm-per-prompt
       - '{"vision": 3}'
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
