@@ -42,7 +42,7 @@ services:
       - --port
       - "8000"
       - --quantization
-      - awq
+      - compressed-tensors
       - --dtype
       - half
       - --gpu-memory-utilization
@@ -101,7 +101,7 @@ services:
       - --port
       - "8001"
       - --quantization
-      - awq
+      - compressed-tensors
       - --dtype
       - half
       - --gpu-memory-utilization
