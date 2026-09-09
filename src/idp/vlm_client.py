@@ -432,7 +432,7 @@ async def reconstruct_markdown(images: list[Path]) -> str:
                     ],
                     "temperature": 0.1,
                     "max_tokens": max_tokens,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    "extra_body": {"thinking": False, "top_k": 20},
                 }
                 response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
                 data = response.json()
@@ -480,7 +480,7 @@ async def extract_entities_from_text(
                     ],
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    "extra_body": {"thinking": False, "top_k": 20},
                 }
                 url = f"{selector.next()}/chat/completions"
                 response = await _post_with_retry(client, url, payload, selector=selector)
@@ -689,7 +689,7 @@ async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[d
                     ],
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    "extra_body": {"thinking": False, "top_k": 20},
                 }
                 url = f"{selector.next()}/chat/completions"
                 print(f"VLM request to {url}, images: {len(chunk)}, model: {settings.vl_model}", file=sys.stderr)
@@ -772,7 +772,7 @@ async def extract_entities_from_images(images: list[Path]) -> list[dict]:
                     ],
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    "extra_body": {"thinking": False, "top_k": 20},
                 }
                 response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
                 data = response.json()
