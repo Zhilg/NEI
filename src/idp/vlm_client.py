@@ -606,16 +606,18 @@ def _strip_code_fences(content: str) -> str:
 def _strip_thinking_blocks(content: str) -> str:
     import re
     patterns = [
-        re.compile(r'<think>\s*.*?\s*</think>\s*', re.DOTALL | re.IGNORECASE),
+        re.compile(r'.*?\s*>>>\s*', re.DOTALL | re.IGNORECASE),
         re.compile(r'<thinking>\s*.*?\s*</thinking>\s*', re.DOTALL | re.IGNORECASE),
         re.compile(r'\[THINKING\][^\[]*\[/THINKING\]', re.DOTALL | re.IGNORECASE),
         re.compile(r'<thought>\s*.*?\s*</thought>\s*', re.DOTALL | re.IGNORECASE),
         re.compile(r'<reasoning>\s*.*?\s*</reasoning>\s*', re.DOTALL | re.IGNORECASE),
+        re.compile(r'<arg_value>[^\n]*</arg_value>', re.DOTALL | re.IGNORECASE),
+        re.compile(r'thinking\s*:?\s*.*?\n', re.DOTALL | re.IGNORECASE),
     ]
     result = content
     for pattern in patterns:
         result = pattern.sub('', result)
-    result = re.sub(r'</think>\s*$', '', result, flags=re.DOTALL | re.IGNORECASE).strip()
+    result = re.sub(r'>>>\s*$', '', result, flags=re.DOTALL | re.IGNORECASE).strip()
     result = re.sub(r'</thinking>\s*$', '', result, flags=re.DOTALL | re.IGNORECASE).strip()
     result = re.sub(r'\[/THINKING\]\s*$', '', result, flags=re.DOTALL | re.IGNORECASE).strip()
     return result.strip()
