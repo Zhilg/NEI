@@ -54,8 +54,6 @@ services:
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
-      - --thinking
-      - none
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
     build:
@@ -115,8 +113,6 @@ services:
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
-      - --thinking
-      - none
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
     build:
