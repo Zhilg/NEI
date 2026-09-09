@@ -12,7 +12,7 @@ services:
       IDP_OUTPUT_ROOT: /output
       IDP_MODELS_ROOT: /models
       IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
-      IDP_VL_MODEL: Qwen3.8-27B-FP8
+      IDP_VL_MODEL: Qwen3.8-27B
       IDP_VL_CONCURRENCY: ${IDP_VL_CONCURRENCY:-8}
     deploy:
       resources:
