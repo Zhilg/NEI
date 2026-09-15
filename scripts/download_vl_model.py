@@ -1,8 +1,8 @@
-"""Download Qwen3.8-27B-AWQ-INT4 model per infra/compose/local.yml.
+"""Download Qwen3.8-27B-AWQ-INT4 model from cyankiwi.
 
-Model path inside container: /models/vl
-Local host path:   ../../transfer/models/vl  (relative to infra/compose)
-HF cache:          ../../transfer/models/vl/hf-cache
+Model path inside container: /models/new_vl
+Local project path:        transfer/models/new_vl/
+HF cache:                  transfer/models/new_vl/hf-cache/
 """
 
 import os
@@ -14,8 +14,9 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "true")
 REPO_ID = "cyankiwi/Qwen3.8-27B-AWQ-INT4"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-MODELS_ROOT = (SCRIPT_DIR / ".." / ".." / "transfer" / "models").resolve()
-MODEL_DIR = MODELS_ROOT / "vl"
+PROJECT_ROOT = SCRIPT_DIR.parent
+MODELS_ROOT = PROJECT_ROOT / "transfer" / "models"
+MODEL_DIR = MODELS_ROOT / "new_vl"
 HF_CACHE = MODEL_DIR / "hf-cache"
 
 

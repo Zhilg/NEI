@@ -62,7 +62,7 @@ services:
 
     command:
       - --model
-      - /models/vl
+      - /models/new_vl
       - --served-model-name
       - ${IDP_VL_MODEL:-Qwen3.8-27B}
       - --host
@@ -70,22 +70,24 @@ services:
       - --port
       - "8000"
       - --quantization
-      - ${IDP_VLLM_QUANTIZATION:-awq}
+      - compressed-tensors
       - --dtype
-      - ${IDP_VLLM_DTYPE:-half}
+      - half
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
       - --limit-mm-per-prompt
       - '{"vision": 3}'
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
 
     environment:
       NVIDIA_DRIVER_CAPABILITIES: all
-      HF_HOME: /models/vl/hf-cache
+      HF_HOME: /models/new_vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
@@ -126,7 +128,7 @@ services:
 
     command:
       - --model
-      - /models/vl
+      - /models/new_vl
       - --served-model-name
       - ${IDP_VL_MODEL:-Qwen3.8-27B}
       - --host
@@ -134,29 +136,31 @@ services:
       - --port
       - "8001"
       - --quantization
-      - ${IDP_VLLM_QUANTIZATION:-awq}
+      - compressed-tensors
       - --dtype
-      - ${IDP_VLLM_DTYPE:-half}
+      - half
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
       - --limit-mm-per-prompt
       - '{"vision": 3}'
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
 
     environment:
       NVIDIA_DRIVER_CAPABILITIES: all
-      HF_HOME: /models/vl/hf-cache
+      HF_HOME: /models/new_vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       VLLM_NO_USAGE_STATS: "1"
       VLLM_IMAGE_MAX_PIXELS: "6000000"
       VLLM_IMAGE_MIN_PIXELS: "1003520"
       VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
-      
+
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
 
@@ -173,6 +177,6 @@ services:
           - vllm-vl-1
           - vllm-vl
 
-networks:
-  idp_internal:
-    internal: true
+  networks:
+    idp_internal:
+      internal: true
