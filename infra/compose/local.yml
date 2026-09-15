@@ -41,9 +41,7 @@ services:
         condition: service_healthy
 
     networks:
-      - name: idp_internal
-        aliases:
-          - vllm-vl
+      - idp_internal
 
   vllm-vl-0:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
@@ -106,10 +104,7 @@ services:
       start_period: 90s
 
     networks:
-      - name: idp_internal
-        aliases:
-          - vllm-vl-0
-          - vllm-vl
+      - idp_internal
 
   vllm-vl-1:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
@@ -172,11 +167,8 @@ services:
       start_period: 90s
 
     networks:
-      - name: idp_internal
-        aliases:
-          - vllm-vl-1
-          - vllm-vl
+      - idp_internal
 
-  networks:
-    idp_internal:
-      internal: true
+networks:
+  idp_internal:
+    internal: true
