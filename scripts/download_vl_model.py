@@ -1,4 +1,4 @@
-"""Download Qwen2.5-VL-32B-Instruct-AWQ model per infra/compose/local.yml.
+"""Download Qwen3.8-27B-AWQ-INT4 model per infra/compose/local.yml.
 
 Model path inside container: /models/vl
 Local host path:   ../../transfer/models/vl  (relative to infra/compose)
@@ -11,7 +11,7 @@ from pathlib import Path
 
 os.environ.setdefault("HF_HUB_DISABLE_XET", "true")
 
-REPO_ID = "Qwen/Qwen2.5-VL-32B-Instruct-AWQ"
+REPO_ID = "cyankiwi/Qwen3.8-27B-AWQ-INT4"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MODELS_ROOT = (SCRIPT_DIR / ".." / ".." / "transfer" / "models").resolve()

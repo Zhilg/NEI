@@ -13,7 +13,7 @@ flowchart LR
     E --> F["MinerU 3.4\nfull layout manifest\nall blocks + order"]
     F --> G["PaddleOCR\nline OCR inside text blocks"]
     F --> H["all non-text block crops"]
-    G --> I["Qwen2.5-VL-32B\none logical reconstruction run"]
+    G --> I["Qwen3.8-27B\none logical reconstruction run"]
     H --> I
     I --> J["Grounded document Markdown\nOCR and light logic findings"]
     J --> K["Fenic + Qwen3-14B\ntyped entity extraction"]
@@ -38,7 +38,7 @@ flowchart LR
 | SwinIR x4 | Улучшает страницу без GAN | page image | chosen image, fallback decision |
 | MinerU 3.4 | Полный layout документа | chosen page image | all block types, bbox, hierarchy, reading order |
 | PaddleOCR | Распознаёт строки в text-bearing blocks | MinerU text-block crops | OCR tokens, confidence, provenance |
-| Qwen2.5-VL-32B | Собирает и проверяет документ | layout, images/crops, OCR | grounded Markdown, findings |
+| Qwen3.8-27B | Собирает и проверяет документ | layout, images/crops, OCR | grounded Markdown, findings |
 | Fenic + Qwen3-14B | Извлекает сущности по Pydantic schema | Markdown with provenance | typed entities with evidence |
 
 ## Блоки MinerU
@@ -54,7 +54,7 @@ flowchart TB
     PG[(PostgreSQL job queue)] --> CPU["CPU bounded pools\nscan, hash, render, MinIO I/O"]
     PG --> GPU1["GPU1 bounded queues\nSwinIR -> MinerU -> PaddleOCR"]
     PG --> S["GPU0 admission scheduler\nexactly one heavy role"]
-    S --> VLM["Qwen2.5-VL-32B\nreconstruction + validation"]
+    S --> VLM["Qwen3.8-27B\nreconstruction + validation"]
     S --> TXT["Qwen3-14B\nFenic extraction"]
 ```
 

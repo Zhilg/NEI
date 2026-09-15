@@ -84,7 +84,7 @@ The OCR manifest keeps raw and normalized text, token/line geometry in page coor
 
 ### 5. Qwen-VL reconstruction and validation
 
-One logical Qwen2.5-VL-32B-Instruct reconstruction run receives layout, selected page images, all semantically relevant crops, OCR tokens and coordinate transforms. Long documents may use deterministic internal page/chunk batching, but there is no separate validation model or pipeline.
+One logical Qwen3.8-27B reconstruction run receives layout, selected page images, all semantically relevant crops, OCR tokens and coordinate transforms. Long documents may use deterministic internal page/chunk batching, but there is no separate validation model or pipeline.
 
 Its structured response must:
 
@@ -108,7 +108,7 @@ flowchart LR
     J[("PostgreSQL jobs")] --> CPU["CPU pools\nscan/hash/render/storage"]
     J --> G1["GPU1 bounded queues\nSwinIR -> MinerU -> OCR"]
     J --> A["GPU0 admission scheduler"]
-    A --> QV["Qwen2.5-VL-32B"]
+    A --> QV["Qwen3.8-27B"]
     A --> Q3["Qwen3-14B / Fenic"]
 ```
 

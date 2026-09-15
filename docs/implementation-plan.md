@@ -50,7 +50,7 @@ The approved detailed plan is maintained at `.kilo/plans/1783855590272-resilient
 1. Add line detection only within MinerU text-bearing blocks.
 2. Add Russian-first line routing: East-Slavic PP-OCRv5, generic Cyrillic PP-OCRv5 and Latin/CJK PP-OCRv6.
 3. Persist OCR provenance and unsupported-script findings.
-4. Implement GPU0 admission scheduler and Qwen2.5-VL-32B structured reconstruction.
+4. Implement GPU0 admission scheduler and Qwen3.8-27B structured reconstruction.
 5. Require one logical Qwen-VL run to validate OCR, transcribe tables, interpret non-text blocks, assemble Markdown and report lightweight evidence-backed validation findings.
 
 **Done when:** the result is one grounded Markdown document with full block coverage and no unreferenced OCR/VLM fact.
