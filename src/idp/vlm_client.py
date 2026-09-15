@@ -276,6 +276,62 @@ def extract_paragraphs(markdown: str) -> list[dict]:
     return result
 
 
+SYSTEM_PROMPT_ANNOTATION = (
+    "Create a brief annotation (1-2 sentences) for this document. "
+    "Identify the document type, main topic, and key entities. "
+    "Output only the annotation text. No markdown, no quotes, no explanations."
+)
+
+
+async def generate_document_annotation(
+    images: list[Path] | None = None,
+    text: str | None = None,
+    endpoint: str | None = None,
+    model: str | None = None,
+) -> str:
+    if not images and not text:
+        return ""
+    endpoint = endpoint or settings.vl_endpoint
+    model = model or settings.vl_model
+    url = f"{endpoint}/chat/completions"
+    selector = get_endpoint_selector()
+    semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+    async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+        async def _process() -> str:
+            async with semaphore:
+                if text:
+                    user_content = [
+                        {"type": "text", "text": f"Document text:\n{text}\n\nGenerate a brief annotation (1-2 sentences)."},
+                    ]
+                else:
+                    user_content = [
+                        {"type": "text", "text": "Generate a brief annotation (1-2 sentences) for this document page."},
+                    ]
+                    for img in images[:2]:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                        })
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT_ANNOTATION},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 200,
+                    "include_reasoning": False,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                }
+                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                return _strip_code_fences(_strip_thinking_blocks(content)).strip()
+
+        return await _process()
+
+
 SYSTEM_PROMPT_MD = (
     "Reconstruct the document page as clean Markdown.\n\n"
     "STRICTLY EXCLUDE the following noise elements:\n"

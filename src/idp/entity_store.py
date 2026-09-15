@@ -14,7 +14,7 @@ class EntityStore:
         self._data: dict[str, dict[str, Any]] = {}
         self._dirty = False
 
-    def append(self, source_file: str, paragraphs: list[dict[str, Any]], entities: list[dict[str, Any]]) -> None:
+    def append(self, source_file: str, paragraphs: list[dict[str, Any]], entities: list[dict[str, Any]], annotation: str = "") -> None:
         seen: set[tuple] = set()
         unique_entities: list[dict[str, Any]] = []
         for entity in entities:
@@ -26,7 +26,7 @@ class EntityStore:
                 continue
             seen.add(key)
             unique_entities.append(entity)
-        self._data[source_file] = {"paragraphs": paragraphs, "entities": unique_entities}
+        self._data[source_file] = {"paragraphs": paragraphs, "entities": unique_entities, "annotation": annotation}
         self._dirty = True
         self.flush()
 

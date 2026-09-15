@@ -19,11 +19,13 @@ from idp.docx_converter import convert_docx_to_markdown
 from idp.html_converter import convert_html_folder_to_markdown, convert_html_to_markdown
 from idp.pptx_converter import convert_pptx_to_markdown
 from idp.renderer import extract_pdf_text_and_visual_pages
+from idp.entity_store import EntityStore
 from idp.result_writer import ResultWriter
 from idp.stats_writer import StatsWriter, FileTimer
 from idp.vlm_client import (
     extract_entities_from_text,
     extract_paragraphs,
+    generate_document_annotation,
     reconstruct_markdown,
     update_entity_schema,
 )
@@ -126,6 +128,7 @@ def _aggregate_entities(entities: list[dict]) -> list[dict]:
 async def _process_file(
     file_path: Path,
     result_writer: ResultWriter,
+    entity_store: EntityStore,
     pbar: tqdm,
     artifacts_mode: bool,
 ) -> dict:
@@ -146,6 +149,7 @@ async def _process_file(
     markdown = ""
     paragraphs: list[dict] = []
     all_entities: list[dict] = []
+    annotation = ""
     status = "error"
     error = None
 
@@ -162,15 +166,20 @@ async def _process_file(
                     "size_bytes": timer.size_bytes,
                     "pages": None,
                     "duration_sec": round(time.perf_counter() - timer.start, 3),
-                    "status": status,
-                    "error": error,
-                    "paragraphs": [],
-                    "entities": [],
-                }
+                "status": status,
+                "error": error,
+                "paragraphs": [],
+                "entities": [],
+                "annotation": "",
+            }
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
             llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(markdown, model=llm_model)
+            try:
+                annotation = await generate_document_annotation(text=markdown)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
                 output_md_tmp.write_text(markdown, encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
@@ -189,6 +198,10 @@ async def _process_file(
             llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(vlm_markdown, model=llm_model)
             paragraphs = extract_paragraphs(vlm_markdown)
+            try:
+                annotation = await generate_document_annotation(images=pngs[:2])
+            except Exception as exc:  # noqa: BLE001
+                print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(vlm_markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
@@ -200,6 +213,10 @@ async def _process_file(
             paragraphs = extract_paragraphs(markdown)
             llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(markdown, model=llm_model)
+            try:
+                annotation = await generate_document_annotation(text=markdown)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
@@ -211,6 +228,10 @@ async def _process_file(
             paragraphs = extract_paragraphs(markdown)
             llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(markdown, model=llm_model)
+            try:
+                annotation = await generate_document_annotation(text=markdown)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
@@ -222,6 +243,10 @@ async def _process_file(
             paragraphs = extract_paragraphs(markdown)
             llm_model = settings.vl_model
             all_entities = await extract_entities_from_text(markdown, model=llm_model)
+            try:
+                annotation = await generate_document_annotation(text=markdown)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
                 output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
@@ -239,6 +264,7 @@ async def _process_file(
                 "error": error,
                 "paragraphs": [],
                 "entities": [],
+                "annotation": "",
             }
         pbar.set_postfix(file=file_path.name, stage="done")
     except Exception as exc:  # noqa: BLE001
@@ -271,7 +297,9 @@ async def _process_file(
         "error": error,
         "paragraphs": paragraphs,
         "entities": aggregated,
+        "annotation": annotation,
     }
+    entity_store.append(str(relative), paragraphs, aggregated, annotation)
     result_writer.write(result)
     return result
 
@@ -287,6 +315,7 @@ async def _main() -> None:
         settings.output_root / "results.jsonl",
         pretty_path=settings.output_root / "results_readable.json",
     )
+    entity_store = EntityStore(settings.output_root / "entities.json")
 
     processed: set[str] = set()
     results_path = settings.output_root / "results.jsonl"
@@ -309,7 +338,7 @@ async def _main() -> None:
         if _already_processed(file_path, processed):
             pbar.set_postfix(file=file_path.name, stage="skip")
             continue
-        result = await _process_file(file_path, result_writer, pbar, settings.artifacts_mode)
+        result = await _process_file(file_path, result_writer, entity_store, pbar, settings.artifacts_mode)
         all_new_entities.extend(result.get("entities", []))
 
     if all_new_entities:

@@ -35,14 +35,14 @@ curl http://localhost:8000/v1/models
 curl http://localhost:8001/v1/models
 ```
 
-Оба должны вернуть модель `Qwen2.5-VL-32B-Instruct-AWQ` (или `cyankiwi/Qwen3.8-27B-AWQ-INT4`, если используете профиль `local-new`).
+Оба должны вернуть модель `Qwen3.8-27B` (или `cyankiwi/Qwen3.8-27B-AWQ-INT4`, если используете профиль `local-new`).
 
 ## Переключение VL-модели
 
 Для сравнения моделей используйте два compose-файла:
 
 ```bash
-# Старая модель Qwen2.5-VL-32B-Instruct-AWQ (vl/)
+# Старая модель Qwen3.8-27B-AWQ-INT4 (vl/)
 docker compose -f infra/compose/local.yml up -d
 
 # Новая модель cyankiwi/Qwen3.8-27B-AWQ-INT4 (new_vl/)

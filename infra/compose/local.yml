@@ -17,7 +17,7 @@ services:
       IDP_MODELS_ROOT: /models
 
       IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
-      IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen2.5-VL-32B-Instruct-AWQ}
+      IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}
 
       IDP_VL_CONCURRENCY: ${IDP_VL_CONCURRENCY:-8}
 
@@ -64,7 +64,7 @@ services:
       - --model
       - /models/vl
       - --served-model-name
-      - ${IDP_VL_MODEL:-Qwen2.5-VL-32B-Instruct-AWQ}
+      - ${IDP_VL_MODEL:-Qwen3.8-27B}
       - --host
       - 0.0.0.0
       - --port
@@ -128,7 +128,7 @@ services:
       - --model
       - /models/vl
       - --served-model-name
-      - ${IDP_VL_MODEL:-Qwen2.5-VL-32B-Instruct-AWQ}
+      - ${IDP_VL_MODEL:-Qwen3.8-27B}
       - --host
       - 0.0.0.0
       - --port

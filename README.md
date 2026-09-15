@@ -47,8 +47,8 @@ transfer/models/vl/
 | GPU VRAM | VL-модель (в `vl/`) |
 |---|---|
 | 8 GB | `Qwen/Qwen2-VL-2B-Instruct` |
-| 12 GB | `Qwen/Qwen2.5-VL-7B-Instruct` |
-| 24 GB | `Qwen/Qwen2.5-VL-32B-Instruct-AWQ` |
+| 12 GB | `Qwen/Qwen3-VL-7B-Instruct` |
+| 24 GB | `cyankiwi/Qwen3.8-27B-AWQ-INT4` |
 | 24 GB | `cyankiwi/Qwen3.8-27B-AWQ-INT4` |
 transfer/models/
 ├── new_vl/  # VL-модель для реконструкции PDF → Markdown
@@ -133,4 +133,4 @@ docker compose -f infra/compose/local.yml down
 - **Никаких SHA-256, версионирования, whl-файлов** — всё максимально просто
 - **Модели качаешь сам** — никакие скрипты это не делают
 - **Linux vLLM-образы собираются с последней версией transformers** — достаточно `docker build`
-- **RTX 5070 12GB** — модель Qwen2.5-VL-32B-AWQ требует AWQ-квантизацию и обрезку контекста до 32768 токенов
+- **RTX 5070 12GB** — модель Qwen3.8-27B-AWQ-INT4 требует AWQ-квантизацию и обрезку контекста до 32768 токенов
