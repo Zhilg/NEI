@@ -14,8 +14,17 @@ from pathlib import Path
 import httpx
 
 from idp.config import settings
+from idp.document_classifier import detect_document_type
 
 _ENTITY_SCHEMA_PATH = Path(__file__).parent / "entity_schema.json"
+
+_OCR_ARTIFACT_PATTERNS = [
+    re.compile(r"\b8OO(\s*мм|\s*mm)\b", re.IGNORECASE),
+    re.compile(r"\bO0(\s*мм|\s*mm)\b", re.IGNORECASE),
+    re.compile(r"(?<=\d)\s*-\s*(?=\d)"),
+    re.compile(r"\b0+([1-9]\d*)\b"),
+    re.compile(r"\b([1-9]\d*)0{3,}\b"),
+]
 
 _VL_ENDPOINTS: list[str] = []
 _VL_ENDPOINT_INDEX = 0
@@ -230,6 +239,15 @@ def _validate_entity(entity: dict, source_text: str = "") -> dict | None:
 
 
 _PAGE_MARKER_RE = re.compile(r"<!--\s*page\s+(\d+)\s*-->")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+
+
+def _detect_heading(text: str) -> tuple[str, int] | None:
+    match = _HEADING_RE.match(text.strip())
+    if match:
+        level = len(match.group(1))
+        return match.group(2).strip(), level
+    return None
 
 
 def extract_paragraphs(markdown: str) -> list[dict]:
@@ -237,42 +255,45 @@ def extract_paragraphs(markdown: str) -> list[dict]:
     page = 1
     para_num = 0
     current_lines: list[str] = []
+    current_section: str | None = None
+    current_section_level: int = 0
+
+    def _flush() -> None:
+        nonlocal para_num
+        if current_lines:
+            para_num += 1
+            text = "\n".join(current_lines).strip()
+            item: dict = {
+                "page": page,
+                "paragraph": para_num,
+                "text": text,
+            }
+            if current_section:
+                item["section"] = current_section
+                item["section_level"] = current_section_level
+            result.append(item)
+            current_lines.clear()
 
     for line in markdown.splitlines():
         stripped = line.strip()
         match = _PAGE_MARKER_RE.match(stripped)
         if match is not None:
-            if current_lines:
-                para_num += 1
-                result.append({
-                    "page": page,
-                    "paragraph": para_num,
-                    "text": "\n".join(current_lines).strip(),
-                })
-                current_lines = []
+            _flush()
             page = int(match.group(1))
             para_num = 0
+            continue
+        heading = _detect_heading(stripped)
+        if heading:
+            _flush()
+            current_section, current_section_level = heading
+            current_lines.append(stripped)
             continue
         if stripped:
             current_lines.append(stripped)
         else:
-            if current_lines:
-                para_num += 1
-                result.append({
-                    "page": page,
-                    "paragraph": para_num,
-                    "text": "\n".join(current_lines).strip(),
-                })
-                current_lines = []
+            _flush()
 
-    if current_lines:
-        para_num += 1
-        result.append({
-            "page": page,
-            "paragraph": para_num,
-            "text": "\n".join(current_lines).strip(),
-        })
-
+    _flush()
     return result
 
 
@@ -459,6 +480,189 @@ SYSTEM_PROMPT_ENT_VISUAL = (
 
 SYSTEM_PROMPT_ENT_VISUAL_TEST = "Extract entities from this document page image. Return only JSON with an 'entities' array."
 
+SYSTEM_PROMPT_ENT_BASE = (
+    "Extract atomic metadata entities from the provided text.\n\n"
+    "ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value. "
+    "Valid examples: dates, amounts, phone numbers, INN, OGRN, names, addresses, document numbers, codes.\n\n"
+    "PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context. "
+    "This includes:\n"
+    "- Names with titles/positions: 'И. И. Иванов, ведущий научный сотрудник'\n"
+    "- Names without any title or context: just 'Сталин' or 'Иванов'\n"
+    "- Names in lists: 'И. И. Иванов, Д. Д. Дятлов, В.В. Должанский'\n"
+    "- Names in signatures: 'В. Лаптев'\n"
+    "- Names in documents: 'И.В. Сталин'\n\n"
+    "For person entities, extract the FULL NAME as it appears in the text. "
+    "If initials are used (e.g., 'И.В. Сталин'), keep them as-is. "
+    "If only last name appears (e.g., 'Сталин'), extract it as the value.\n\n"
+    "FORBIDDEN (do NOT extract these):\n"
+    "- Full sentences or clauses\n"
+    "- Paragraphs or headings\n"
+    "- Generic document type words without specific value (e.g., just 'приказ', 'договор', 'акт')\n"
+    "- Boilerplate phrases like 'см. приложение', 'без изменений', 'ответственный'\n"
+    "- Values longer than 150 characters\n"
+    "- Values that are identical to the surrounding sentence\n\n"
+    "For each entity provide:\n"
+    "- type: one of the schema types below, or 'other' if none matches\n"
+    "- value: exact short text from the document\n"
+    "- normalized_value: normalized form if applicable, otherwise omit\n"
+    "- page: 1-based page number\n"
+    "- paragraph: 1-based paragraph number within the page\n"
+    "- evidence: exact short snippet containing the entity\n"
+    "- confidence: float 0.0-1.0\n"
+    "- handwritten: true if handwritten, false otherwise\n\n"
+    f"Schema:\n{_build_entity_type_descriptions()}\n\n"
+    'Return ONLY valid JSON: {"entities": [...]}\n'
+    "No explanations, no code fences, no thinking blocks, no reasoning."
+)
+
+SYSTEM_PROMPT_ENT_DIRECTIVE = (
+    "Extract atomic metadata entities from this directive document (order/instruction/recommendation).\n\n"
+    "Focus on:\n"
+    "- Directive type and number\n"
+    "- Date\n"
+    "- Addressee (whom it is addressed to: subdivision, position, name)\n"
+    "- Signer (who signed: position, name)\n"
+    "- Basis/reference document\n"
+    "- Item numbers and task descriptions\n"
+    "- Deadlines/dates\n"
+    "- Control officer\n\n"
+    "PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context. "
+    "This includes:\n"
+    "- Names with titles/positions: 'И. И. Иванов, ведущий научный сотрудник'\n"
+    "- Names without any title or context: just 'Сталин' or 'Иванов'\n"
+    "- Names in lists: 'И. И. Иванов, Д. Д. Дятлов, В.В. Должанский'\n"
+    "- Names in signatures: 'В. Лаптев'\n"
+    "- Names in documents: 'И.В. Сталин'\n\n"
+    "For person entities, extract the FULL NAME as it appears in the text. "
+    "If initials are used (e.g., 'И.В. Сталин'), keep them as-is. "
+    "If only last name appears (e.g., 'Сталин'), extract it as the value.\n\n"
+    "FORBIDDEN:\n"
+    "- Full sentences or clauses\n"
+    "- Generic words like 'пункт' without number\n"
+    "- Values longer than 150 characters\n\n"
+    "For each entity provide: type, value, normalized_value, page, paragraph, evidence, confidence, handwritten.\n\n"
+    f"Schema:\n{_build_entity_type_descriptions()}\n\n"
+    'Return ONLY valid JSON: {"entities": [...]}\n'
+    "No explanations, no code fences, no thinking blocks, no reasoning."
+)
+
+SYSTEM_PROMPT_ENT_CERTIFICATE = (
+    "Extract atomic metadata entities from this certificate/statement document.\n\n"
+    "Focus on:\n"
+    "- Certificate type, number, issue date\n"
+    "- To whom issued (ФИО, status)\n"
+    "- Issuer (organization, position, name)\n"
+    "- Basis document\n"
+    "- Status facts (has/does not have, working/studying, etc.)\n"
+    "- Periods and dates (pay attention to AS_OF vs FOR_PERIOD)\n"
+    "- Amounts, rates, codes\n\n"
+    "PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context. "
+    "This includes:\n"
+    "- Names with titles/positions: 'И. И. Иванов, ведущий научный сотрудник'\n"
+    "- Names without any title or context: just 'Сталин' or 'Иванов'\n"
+    "- Names in lists: 'И. И. Иванов, Д. Д. Дятлов, В.В. Должанский'\n"
+    "- Names in signatures: 'В. Лаптев'\n"
+    "- Names in documents: 'И.В. Сталин'\n\n"
+    "For person entities, extract the FULL NAME as it appears in the text. "
+    "If initials are used (e.g., 'И.В. Сталин'), keep them as-is. "
+    "If only last name appears (e.g., 'Сталин'), extract it as the value.\n\n"
+    "FORBIDDEN:\n"
+    "- Full sentences or clauses\n"
+    "- Generic words like 'справка' without number/date\n"
+    "- Values longer than 150 characters\n\n"
+    "For each entity provide: type, value, normalized_value, page, paragraph, evidence, confidence, handwritten.\n\n"
+    f"Schema:\n{_build_entity_type_descriptions()}\n\n"
+    'Return ONLY valid JSON: {"entities": [...]}\n'
+    "No explanations, no code fences, no thinking blocks, no reasoning."
+)
+
+SYSTEM_PROMPT_ENT_TTKH = (
+    "Extract atomic metadata entities from this tactical-technical characteristics (ТТХ) document.\n\n"
+    "Focus on:\n"
+    "- Object/equipment name and model\n"
+    "- Mass, dimensions\n"
+    "- Crew/size\n"
+    "- Armament/equipment\n"
+    "- Range, speed, endurance\n"
+    "- Engine/powerplant\n"
+    "- Armor/protection\n"
+    "- Electronics/systems\n"
+    "- Dates and versions\n\n"
+    "Preserve units and measurements exactly as written. "
+    "Do NOT normalize technical parameters to generic placeholders.\n\n"
+    "FORBIDDEN:\n"
+    "- Full sentences or clauses\n"
+    "- Generic words like 'характеристики' without value\n"
+    "- Values longer than 150 characters\n\n"
+    "For each entity provide: type, value, normalized_value, page, paragraph, evidence, confidence, handwritten.\n\n"
+    f"Schema:\n{_build_entity_type_descriptions()}\n\n"
+    'Return ONLY valid JSON: {"entities": [...]}\n'
+    "No explanations, no code fences, no thinking blocks, no reasoning."
+)
+
+SYSTEM_PROMPT_ENT_TTZ = (
+    "Extract atomic metadata entities from this technical specification (ТТЗ) document.\n\n"
+    "Focus on:\n"
+    "- Requirement numbers (e.g., 3.2.1)\n"
+    "- Requirement text (functional, non-functional, constraints)\n"
+    "- Quantitative norms: time, temperature, ranges, probabilities\n"
+    "- Standards (ГОСТ, ISO, IEEE, ТУ)\n"
+    "- Deadline/dates\n"
+    "- Executors/responsible persons\n\n"
+    "PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context. "
+    "This includes:\n"
+    "- Names with titles/positions: 'И. И. Иванов, ведущий научный сотрудник'\n"
+    "- Names without any title or context: just 'Сталин' or 'Иванов'\n"
+    "- Names in lists: 'И. И. Иванов, Д. Д. Дятлов, В.В. Должанский'\n"
+    "- Names in signatures: 'В. Лаптев'\n"
+    "- Names in documents: 'И.В. Сталин'\n\n"
+    "For person entities, extract the FULL NAME as it appears in the text. "
+    "If initials are used (e.g., 'И.В. Сталин'), keep them as-is. "
+    "If only last name appears (e.g., 'Сталин'), extract it as the value.\n\n"
+    "FORBIDDEN:\n"
+    "- Full sentences or clauses\n"
+    "- Generic words like 'требование' without specifics\n"
+    "- Values longer than 150 characters\n\n"
+    "For each entity provide: type, value, normalized_value, page, paragraph, evidence, confidence, handwritten.\n\n"
+    f"Schema:\n{_build_entity_type_descriptions()}\n\n"
+    'Return ONLY valid JSON: {"entities": [...]}\n'
+    "No explanations, no code fences, no thinking blocks, no reasoning."
+)
+
+SYSTEM_PROMPT_ENT_SUMMARY = (
+    "Extract atomic metadata entities from this operational/financial/epidemiological summary.\n\n"
+    "Focus on:\n"
+    "- Summary type and period\n"
+    "- Dates and times\n"
+    "- Locations/regions/objects\n"
+    "- Statuses and categories\n"
+    "- Quantities, counts, amounts\n"
+    "- Identifiers and codes\n"
+    "- Responsible persons/units\n\n"
+    "PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context. "
+    "This includes:\n"
+    "- Names with titles/positions: 'И. И. Иванов, ведущий научный сотрудник'\n"
+    "- Names without any title or context: just 'Сталин' or 'Иванов'\n"
+    "- Names in lists: 'И. И. Иванов, Д. Д. Дятлов, В.В. Должанский'\n"
+    "- Names in signatures: 'В. Лаптев'\n"
+    "- Names in documents: 'И.В. Сталин'\n\n"
+    "For person entities, extract the FULL NAME as it appears in the text. "
+    "If initials are used (e.g., 'И.В. Сталин'), keep them as-is. "
+    "If only last name appears (e.g., 'Сталин'), extract it as the value.\n\n"
+    "Preserve exact status wording (e.g., 'ликвидировано', 'в работе'). "
+    "Do NOT lemmatize or normalize statuses.\n\n"
+    "FORBIDDEN:\n"
+    "- Full sentences or clauses\n"
+    "- Generic words like 'сводка' without specifics\n"
+    "- Values longer than 150 characters\n\n"
+    "For each entity provide: type, value, normalized_value, page, paragraph, evidence, confidence, handwritten.\n\n"
+    f"Schema:\n{_build_entity_type_descriptions()}\n\n"
+    'Return ONLY valid JSON: {"entities": [...]}\n'
+    "No explanations, no code fences, no thinking blocks, no reasoning."
+)
+
+SYSTEM_PROMPT_ENT_TEST = "Extract entities from the text. Return only JSON with an 'entities' array."
+
 
 async def reconstruct_markdown(images: list[Path]) -> str:
     if not images:
@@ -509,9 +713,10 @@ async def extract_entities_from_text(
     text: str,
     endpoint: str | None = None,
     model: str | None = None,
+    document_type: str = "other",
 ) -> list[dict]:
     model = model or settings.vl_model
-    sys_prompt = SYSTEM_PROMPT_ENT_TEST if settings.test_mode else SYSTEM_PROMPT_ENT
+    sys_prompt = get_entity_system_prompt(document_type)
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
     max_chars = 500 if settings.test_mode else 6000
     if len(text) > max_chars:
@@ -590,8 +795,9 @@ async def extract_entities_from_text(
     for entities in chunk_results:
         all_entities.extend(entities)
     final = _deduplicate_entities(all_entities)
-    print(f"ENT total: {len(final)} entities after dedup", file=sys.stderr)
-    return final
+    normalized = normalize_entities(final, document_type=document_type)
+    print(f"ENT total: {len(normalized)} entities after dedup+normalize", file=sys.stderr)
+    return normalized
 
 
 def _chunk_text(text: str, max_chars: int) -> list[str]:
@@ -686,6 +892,22 @@ def _strip_thinking_blocks(content: str) -> str:
     return result.strip()
 
 
+def _clean_ocr_artifacts(text: str) -> str:
+    cleaned = text
+    for pattern in _OCR_ARTIFACT_PATTERNS:
+        cleaned = pattern.sub(lambda m: _fix_ocr_match(m), cleaned)
+    return cleaned
+
+
+def _fix_ocr_match(m: re.Match) -> str:
+    full = m.group(0)
+    if full.startswith("8OO"):
+        return "800" + full[3:]
+    if full.startswith("O0"):
+        return "00" + full[2:]
+    return full.replace("-", " ")
+
+
 def _parse_vlm_json_response(content: str, context: str) -> dict:
     cleaned = _strip_code_fences(content)
     try:
@@ -728,7 +950,7 @@ def _write_trash(context: str, content: str) -> None:
         pass
 
 
-async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[dict]]:
+async def extract_markdown_and_entities(images: list[Path], document_type: str = "other") -> tuple[str, list[dict]]:
     if not images:
         return "", []
     sys_prompt = SYSTEM_PROMPT_COMBINED_TEST if settings.test_mode else SYSTEM_PROMPT_COMBINED
@@ -748,10 +970,17 @@ async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[d
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
                     })
+                entity_prompt = get_entity_system_prompt(document_type)
+                system_content = (
+                    sys_prompt
+                    + "\n\n"
+                    + "ENTITY EXTRACTION RULES:\n"
+                    + entity_prompt
+                )
                 payload = {
                     "model": settings.vl_model,
                     "messages": [
-                        {"role": "system", "content": sys_prompt},
+                        {"role": "system", "content": system_content},
                         {"role": "user", "content": user_content},
                     ],
                     "temperature": 0.0,
@@ -809,13 +1038,64 @@ async def extract_markdown_and_entities(images: list[Path]) -> tuple[str, list[d
         if isinstance(md, str) and md.strip():
             markdown_parts.append(f"<!-- page {i + 1} -->\n{md}")
         all_entities.extend(entities)
-    return "\n\n".join(markdown_parts), _deduplicate_entities(all_entities)
+    return "\n\n".join(markdown_parts), _deduplicate_entities(normalize_entities(all_entities, document_type=document_type))
 
 
-async def extract_entities_from_images(images: list[Path]) -> list[dict]:
+def get_entity_system_prompt(document_type: str = "other") -> str:
+    if settings.test_mode:
+        return SYSTEM_PROMPT_ENT_TEST
+    mapping = {
+        "directive": SYSTEM_PROMPT_ENT_DIRECTIVE,
+        "certificate": SYSTEM_PROMPT_ENT_CERTIFICATE,
+        "ttkh": SYSTEM_PROMPT_ENT_TTKH,
+        "ttz": SYSTEM_PROMPT_ENT_TTZ,
+        "summary": SYSTEM_PROMPT_ENT_SUMMARY,
+    }
+    return mapping.get(document_type, SYSTEM_PROMPT_ENT_BASE)
+
+
+def normalize_entities(entities: list[dict], document_type: str = "other") -> list[dict]:
+    normalized: list[dict] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        value = str(entity.get("value", "")).strip()
+        if not value:
+            continue
+        etype = str(entity.get("type", "")).lower()
+        norm_value = entity.get("normalized_value")
+        if document_type in {"ttz", "ttkh", "tech_doc"}:
+            if re.search(r"\b\d+(?:\.\d+)?\s*(?:мм|см|м|км|кг|г|с|мс|Гц|кГц|МГц|В|А|Вт|кВт)\b", value, re.IGNORECASE):
+                if etype in {"amount", "identifier", "other"}:
+                    entity = dict(entity)
+                    entity["type"] = "amount"
+                    if not norm_value:
+                        norm_value = "NUM UNIT"
+            if re.search(r"от\s+\d+(?:\.\d+)?\s*до\s+\d+(?:\.\d+)?", value, re.IGNORECASE):
+                entity = dict(entity)
+                if not norm_value:
+                    norm_value = "RANGE_NUM"
+            if re.search(r"[±\+]\s*\d+(?:\.\d+)?", value):
+                entity = dict(entity)
+                if not norm_value:
+                    norm_value = "TOLERANCE_NUM"
+        if etype == "date" and not norm_value:
+            m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", value)
+            if m:
+                entity = dict(entity)
+                norm_value = f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+        if norm_value:
+            entity["normalized_value"] = norm_value
+        normalized.append(entity)
+    return normalized
+
+
+async def extract_entities_from_images(images: list[Path], document_type: str = "other") -> list[dict]:
     if not images:
         return []
     sys_prompt = SYSTEM_PROMPT_ENT_VISUAL_TEST if settings.test_mode else SYSTEM_PROMPT_ENT_VISUAL
+    if document_type != "other" and not settings.test_mode:
+        sys_prompt = get_entity_system_prompt(document_type)
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
     chunks = _chunked(images, settings.vl_max_images)
     selector = get_endpoint_selector()
@@ -885,4 +1165,4 @@ async def extract_entities_from_images(images: list[Path]) -> list[dict]:
     all_entities: list[dict] = []
     for entities in chunk_results:
         all_entities.extend(entities)
-    return _deduplicate_entities(all_entities)
+    return _deduplicate_entities(normalize_entities(all_entities, document_type=document_type))

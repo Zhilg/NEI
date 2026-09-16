@@ -15,19 +15,23 @@ from pathlib import Path
 from tqdm import tqdm
 
 from idp.config import settings
+from idp.document_classifier import detect_document_type
 from idp.docx_converter import convert_docx_to_markdown
 from idp.html_converter import convert_html_folder_to_markdown, convert_html_to_markdown
+from idp.metadata_extractor import extract_metadata
 from idp.pptx_converter import convert_pptx_to_markdown
 from idp.renderer import extract_pdf_text_and_visual_pages
 from idp.entity_store import EntityStore
 from idp.result_writer import ResultWriter
 from idp.stats_writer import StatsWriter, FileTimer
 from idp.vlm_client import (
+    _clean_ocr_artifacts,
     extract_entities_from_text,
     extract_paragraphs,
     generate_document_annotation,
     reconstruct_markdown,
     update_entity_schema,
+    extract_entities_from_images,
 )
 
 
@@ -105,6 +109,39 @@ def _postprocess_markdown(markdown: str) -> str:
     return text.strip()
 
 
+def _normalize_typography(text: str) -> str:
+    text = text.replace("\u00A0", " ")
+    text = text.replace("\u200b", "")
+    text = text.replace("\u200c", "")
+    text = text.replace("\u200d", "")
+    text = text.replace("«", '"').replace("»", '"')
+    text = text.replace("„", '"').replace("“", '"').replace("”", '"')
+    text = text.replace("‘", "'").replace("’", "'")
+    text = text.replace("–", "-")
+    text = text.replace("—", "-")
+    text = text.replace("…", "...")
+    return text
+
+
+def _normalize_entities_and_formulas(text: str) -> str:
+    text = re.sub(r"от\s+(\d+(?:\.\d+)?)\s*до\s+(\d+(?:\.\d+)?)", lambda m: f" RANGE_NUM {m.group(1)}-{m.group(2)} ", text)
+    text = re.sub(r"[±\+]\s*(\d+(?:\.\d+)?)", lambda m: f" TOLERANCE_NUM {m.group(1)} ", text)
+    text = re.sub(r"\b\d+(?:\.\d+)?\s*(?:мм|см|м|км|кг|г|с|мс|Гц|кГц|МГц|В|А|Вт|кВт)\b", " NUM UNIT ", text)
+    text = re.sub(r"\$\$[^$]+\$\$", " FORMULA ", text)
+    text = re.sub(r"\$[^$]+\$", " FORMULA ", text)
+    return text
+
+
+def _normalize_markdown(markdown: str) -> str:
+    return _normalize_typography(
+        _normalize_entities_and_formulas(
+            _clean_ocr_artifacts(
+                _postprocess_markdown(markdown)
+            )
+        )
+    )
+
+
 def _aggregate_entities(entities: list[dict]) -> list[dict]:
     merged: dict[tuple, dict] = {}
     for entity in entities:
@@ -150,6 +187,7 @@ async def _process_file(
     paragraphs: list[dict] = []
     all_entities: list[dict] = []
     annotation = ""
+    document_type = "other"
     status = "error"
     error = None
 
@@ -166,16 +204,19 @@ async def _process_file(
                     "size_bytes": timer.size_bytes,
                     "pages": None,
                     "duration_sec": round(time.perf_counter() - timer.start, 3),
-                "status": status,
-                "error": error,
-                "paragraphs": [],
-                "entities": [],
-                "annotation": "",
-            }
+                    "status": status,
+                    "error": error,
+                    "paragraphs": [],
+                    "entities": [],
+                    "annotation": "",
+                    "document_type": document_type,
+                    "metadata": {},
+                }
+            document_type = detect_document_type(file_path, markdown)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, model=llm_model)
+            all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
             try:
                 annotation = await generate_document_annotation(text=markdown)
             except Exception as exc:  # noqa: BLE001
@@ -192,63 +233,66 @@ async def _process_file(
             rendered_dir.mkdir(parents=True, exist_ok=True)
             for png in pngs:
                 shutil.copy2(png, rendered_dir / png.name)
-            pbar.set_postfix(file=file_path.name, stage="vlm_markdown")
             vlm_markdown = await reconstruct_markdown(pngs)
+            document_type = detect_document_type(file_path, vlm_markdown)
             pbar.set_postfix(file=file_path.name, stage="text_entities")
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(vlm_markdown, model=llm_model)
+            all_entities = await extract_entities_from_text(vlm_markdown, model=llm_model, document_type=document_type)
             paragraphs = extract_paragraphs(vlm_markdown)
             try:
                 annotation = await generate_document_annotation(images=pngs[:2])
             except Exception as exc:  # noqa: BLE001
                 print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
-                output_md_tmp.write_text(_postprocess_markdown(vlm_markdown), encoding="utf-8")
+                output_md_tmp.write_text(_normalize_markdown(vlm_markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
             status = "ok"
         elif file_path.suffix.lower() == ".docx":
             pbar.set_postfix(file=file_path.name, stage="docx")
             markdown = convert_docx_to_markdown(file_path)
+            document_type = detect_document_type(file_path, markdown)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, model=llm_model)
+            all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
             try:
                 annotation = await generate_document_annotation(text=markdown)
             except Exception as exc:  # noqa: BLE001
                 print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
-                output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
+                output_md_tmp.write_text(_normalize_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
             status = "ok"
         elif file_path.suffix.lower() == ".pptx":
             pbar.set_postfix(file=file_path.name, stage="pptx")
             markdown = convert_pptx_to_markdown(file_path)
+            document_type = detect_document_type(file_path, markdown)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, model=llm_model)
+            all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
             try:
                 annotation = await generate_document_annotation(text=markdown)
             except Exception as exc:  # noqa: BLE001
                 print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
-                output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
+                output_md_tmp.write_text(_normalize_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
             status = "ok"
         elif file_path.suffix.lower() == ".html":
             pbar.set_postfix(file=file_path.name, stage="html")
             markdown = convert_html_to_markdown(file_path)
+            document_type = detect_document_type(file_path, markdown)
             pbar.set_postfix(file=file_path.name, stage="vlm_entities")
             paragraphs = extract_paragraphs(markdown)
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, model=llm_model)
+            all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
             try:
                 annotation = await generate_document_annotation(text=markdown)
             except Exception as exc:  # noqa: BLE001
                 print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
-                output_md_tmp.write_text(_postprocess_markdown(markdown), encoding="utf-8")
+                output_md_tmp.write_text(_normalize_markdown(markdown), encoding="utf-8")
                 os.replace(output_md_tmp, output_md)
             status = "ok"
         else:
@@ -265,6 +309,8 @@ async def _process_file(
                 "paragraphs": [],
                 "entities": [],
                 "annotation": "",
+                "document_type": document_type,
+                "metadata": {},
             }
         pbar.set_postfix(file=file_path.name, stage="done")
     except Exception as exc:  # noqa: BLE001
@@ -286,6 +332,7 @@ async def _process_file(
         error=error,
     )
 
+    metadata = extract_metadata(file_path) if file_path.is_file() else {}
     aggregated = _aggregate_entities(all_entities)
     result = {
         "file": str(relative),
@@ -298,6 +345,8 @@ async def _process_file(
         "paragraphs": paragraphs,
         "entities": aggregated,
         "annotation": annotation,
+        "document_type": document_type,
+        "metadata": metadata,
     }
     entity_store.append(str(relative), paragraphs, aggregated, annotation)
     result_writer.write(result)
