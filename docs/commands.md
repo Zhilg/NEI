@@ -45,7 +45,7 @@ SGLang может дать более высокий throughput при той ж
 docker compose -f infra/compose/local.yml -f infra/compose/sglang.yml up -d
 ```
 
-По умолчанию используется образ `${IDP_SGLANG_IMAGE:-lmsys/sglang:latest}`. Модель лежит в `transfer/models/new_vl/`, внутри контейнера это `/models/new_vl`.
+По умолчанию используется образ `${IDP_SGLANG_IMAGE:-lmsysorg/sglang:latest}`. Модель лежит в `transfer/models/new_vl/`, внутри контейнера это `/models/new_vl`.
 
 ### Проверка
 
