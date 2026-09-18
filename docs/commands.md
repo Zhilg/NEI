@@ -47,11 +47,13 @@ docker compose -f infra/compose/local.yml -f infra/compose/sglang.yml up -d
 
 По умолчанию используется образ `${IDP_SGLANG_IMAGE:-lmsysorg/sglang:latest}`. Модель лежит в `transfer/models/new_vl/`, внутри контейнера это `/models/new_vl`.
 
+Этот оверлей переключает существующие сервисы `vllm-vl-0` и `vllm-vl-1` на SGLang, не создавая дополнительных контейнеров. Порты остаются `8000` и `8001`.
+
 ### Проверка
 
 ```bash
-curl http://localhost:30000/v1/models
-curl http://localhost:30001/v1/models
+curl http://localhost:8000/v1/models
+curl http://localhost:8001/v1/models
 ```
 
 ## Модель
