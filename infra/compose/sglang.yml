@@ -43,7 +43,7 @@ services:
           - sglang-vl
 
   sglang-vl-0:
-    image: ${IDP_SGLANG_IMAGE:-lmsys/sglang:latest}
+    image: ${IDP_SGLANG_IMAGE:-sglang/sglang:latest}
     command:
       - python
       - -m
@@ -92,7 +92,7 @@ services:
           - sglang-vl
 
   sglang-vl-1:
-    image: ${IDP_SGLANG_IMAGE:-lmsys/sglang:latest}
+    image: ${IDP_SGLANG_IMAGE:-sglang/sglang:latest}
     command:
       - python
       - -m
