@@ -1,19 +1,28 @@
-name: idp-new
+name: idp-sglang
 
 services:
   worker:
-    volumes:
-      - ${IDP_SOURCE_ROOT:-../..}:/workspace
-      - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
-      - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
+    image: ${IDP_APP_IMAGE:-local/idp-app:latest}
+    pull_policy: never
+    build:
+      context: ${IDP_SOURCE_ROOT:-../../}
+      dockerfile: Dockerfile
+    command: ["idp"]
+
     environment:
       PYTHONPATH: /workspace/src
       IDP_INPUT_ROOT: /input
       IDP_OUTPUT_ROOT: /output
       IDP_MODELS_ROOT: /models
-      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
-      IDP_VL_MODEL: Qwen3.8-27B
+      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://sglang-vl-0:30000/v1,http://sglang-vl-1:30001/v1}
+      IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}
       IDP_VL_CONCURRENCY: ${IDP_VL_CONCURRENCY:-8}
+
+    volumes:
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+      - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
+      - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
+
     deploy:
       resources:
         reservations:
@@ -21,47 +30,42 @@ services:
             - driver: nvidia
               device_ids: ["${IDP_WORKER_GPU:-0}"]
               capabilities: [gpu]
+
     depends_on:
-      vllm-vl-0:
+      sglang-vl-0:
         condition: service_healthy
-      vllm-vl-1:
+      sglang-vl-1:
         condition: service_healthy
+
     networks:
       idp_internal:
         aliases:
-          - vllm-vl
+          - sglang-vl
 
-  vllm-vl-0:
+  sglang-vl-0:
+    image: ${IDP_SGLANG_IMAGE:-lmsys/sglang:latest}
+    pull_policy: never
     command:
-      - --model
+      - python
+      - -m
+      - sglang.launch_server
+      - --model-path
       - /models/new_vl
       - --served-model-name
-      - Qwen3.8-27B
+      - ${IDP_VL_MODEL:-Qwen3.8-27B}
       - --host
       - 0.0.0.0
       - --port
-      - "8000"
+      - "30000"
       - --quantization
       - compressed-tensors
       - --dtype
       - half
-      - --gpu-memory-utilization
-      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
-      - --max-model-len
+      - --mem-fraction-static
+      - ${IDP_SGLANG_MEM_FRACTION:-0.5}
+      - --context-length
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
-      - --limit-mm-per-prompt
-      - '{"vision": 3}'
-      - --default-chat-template-kwargs
-      - '{"enable_thinking": false}'
       - --trust-remote-code
-      - --kv-cache-memory
-      - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
-    image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
-    pull_policy: never
-    build:
-      context: ${IDP_SOURCE_ROOT:-../../}
-      dockerfile: infra/dockerfiles/vllm-vl/Dockerfile
-    restart: unless-stopped
     deploy:
       resources:
         reservations:
@@ -74,14 +78,10 @@ services:
       HF_HOME: /models/new_vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      VLLM_NO_USAGE_STATS: "1"
-      VLLM_IMAGE_MAX_PIXELS: "6000000"
-      VLLM_IMAGE_MIN_PIXELS: "1003520"
-      VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:30000/v1/models', timeout=2)\""]
       interval: 15s
       timeout: 5s
       retries: 40
@@ -89,40 +89,33 @@ services:
     networks:
       idp_internal:
         aliases:
-          - vllm-vl-0
-          - vllm-vl
+          - sglang-vl-0
+          - sglang-vl
 
-  vllm-vl-1:
+  sglang-vl-1:
+    image: ${IDP_SGLANG_IMAGE:-lmsys/sglang:latest}
+    pull_policy: never
     command:
-      - --model
+      - python
+      - -m
+      - sglang.launch_server
+      - --model-path
       - /models/new_vl
       - --served-model-name
-      - Qwen3.8-27B
+      - ${IDP_VL_MODEL:-Qwen3.8-27B}
       - --host
       - 0.0.0.0
       - --port
-      - "8001"
+      - "30001"
       - --quantization
       - compressed-tensors
       - --dtype
       - half
-      - --gpu-memory-utilization
-      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
-      - --max-model-len
+      - --mem-fraction-static
+      - ${IDP_SGLANG_MEM_FRACTION:-0.5}
+      - --context-length
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
-      - --limit-mm-per-prompt
-      - '{"vision": 3}'
-      - --default-chat-template-kwargs
-      - '{"enable_thinking": false}'
       - --trust-remote-code
-      - --kv-cache-memory
-      - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
-    image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
-    pull_policy: never
-    build:
-      context: ${IDP_SOURCE_ROOT:-../../}
-      dockerfile: infra/dockerfiles/vllm-vl/Dockerfile
-    restart: unless-stopped
     deploy:
       resources:
         reservations:
@@ -135,14 +128,10 @@ services:
       HF_HOME: /models/new_vl/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      VLLM_NO_USAGE_STATS: "1"
-      VLLM_IMAGE_MAX_PIXELS: "6000000"
-      VLLM_IMAGE_MIN_PIXELS: "1003520"
-      VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/v1/models', timeout=2)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:30001/v1/models', timeout=2)\""]
       interval: 15s
       timeout: 5s
       retries: 40
@@ -150,8 +139,8 @@ services:
     networks:
       idp_internal:
         aliases:
-          - vllm-vl-1
-          - vllm-vl
+          - sglang-vl-1
+          - sglang-vl
 
 networks:
   idp_internal:
