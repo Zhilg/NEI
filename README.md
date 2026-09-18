@@ -7,8 +7,9 @@ DOCX конвертируется в Markdown через `mammoth`.
 ## Архитектура
 
 | Сервис | Назначение | GPU |
-|---|---|---|
-| `vllm-vl` | Локальный vLLM с VL-моделью | GPU0 |
+|---|---|
+| `vllm-vl` | Локальный vLLM/vLLM-совместимый бэкенд с VL-моделью | GPU0 |
+| `sglang-vl` | Альтернативный SGLang-бэкенд для ускорения инференса | GPU0/GPU1 |
 | `worker` | Python-код, монтируемый в контейнер | CPU |
 
 ## Результаты
@@ -26,14 +27,14 @@ DOCX конвертируется в Markdown через `mammoth`.
 
 ```
 transfer/models/
-└── vl/    # VL-модель для реконструкции PDF → Markdown и извлечения сущностей
+└── new_vl/  # VL-модель для реконструкции PDF → Markdown и извлечения сущностей
 ```
 
 Каждая подпапка должна содержать полный набор файлов модели: `config.json`, `model.safetensors`, `tokenizer.json` и т.д.
 
 Внутри подпапки должен лежать полный набор файлов скачанной модели, а не сама скачанная папка. Например:
 ```
-transfer/models/vl/
+transfer/models/new_vl/
 ├── config.json
 ├── model.safetensors.index.json
 ├── model-00001-of-00008.safetensors
@@ -44,17 +45,15 @@ transfer/models/vl/
 
 **Рекомендации по моделям:**
 
-| GPU VRAM | VL-модель (в `vl/`) |
+| GPU VRAM | VL-модель (в `new_vl/`) |
 |---|---|
 | 8 GB | `Qwen/Qwen2-VL-2B-Instruct` |
 | 12 GB | `Qwen/Qwen3-VL-7B-Instruct` |
-| 24 GB | `cyankiwi/Qwen3.8-27B-AWQ-INT4` |
 | 24 GB | `cyankiwi/Qwen3.8-27B-AWQ-INT4` |
 transfer/models/
 ├── new_vl/  # VL-модель для реконструкции PDF → Markdown
 └── llm/     # LLM-модель для извлечения сущностей из текста (DOCX, HTML, PPTX)
 ```
-
 ## Деплой
 
 ### Windows (сборка и экспорт образов)
@@ -70,6 +69,7 @@ $env:HF_TOKEN = "hf_..."
 Скрипт собирает:
 - `local/idp-app:latest` — worker с кодом
 - `local/vllm-vl:latest` — vLLM VL с последней версией transformers
+- `local/sglang:latest` — SGLang VL для ускоренного инференса
 
 Все образы сохраняются в `transfer/idp-images-linux.tar`.
 
@@ -95,6 +95,7 @@ chmod +x scripts/import-images-linux.sh
 ```bash
 docker build -t local/idp-app:latest .
 docker build -t local/vllm-vl:latest ./infra/dockerfiles/vllm-vl
+docker build -t local/sglang:latest ./infra/dockerfiles/sglang
 docker compose -f infra/compose/local.yml up -d
 ```
 
@@ -105,6 +106,14 @@ docker compose -f infra/compose/local.yml up -d
 ```bash
 cp ~/Downloads/document.pdf data/input/
 docker compose -f infra/compose/local.yml up -d
+```
+
+## Запуск через SGLang
+
+Для ускорения инференса можно использовать SGLang вместо vLLM. Поднимите основной стек, а поверх него добавьте `infra/compose/sglang.yml`:
+
+```bash
+docker compose -f infra/compose/local.yml -f infra/compose/sglang.yml up -d
 ```
 
 ## Мониторинг
@@ -133,4 +142,4 @@ docker compose -f infra/compose/local.yml down
 - **Никаких SHA-256, версионирования, whl-файлов** — всё максимально просто
 - **Модели качаешь сам** — никакие скрипты это не делают
 - **Linux vLLM-образы собираются с последней версией transformers** — достаточно `docker build`
-- **RTX 5070 12GB** — модель Qwen3.8-27B-AWQ-INT4 требует AWQ-квантизацию и обрезку контекста до 32768 токенов
+- **RTX 5070 12GB** — модель Qwen3.8-27B-AWQ-INT4 требует обрезку контекста до 32768 токенов

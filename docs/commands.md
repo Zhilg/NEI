@@ -37,6 +37,23 @@ curl http://localhost:8001/v1/models
 
 Оба должны вернуть модель `Qwen3.8-27B`.
 
+## Запуск через SGLang
+
+SGLang может дать более высокий throughput при той же модели. Для этого используйте дополнительный compose-файл поверх `infra/compose/local.yml`:
+
+```bash
+docker compose -f infra/compose/local.yml -f infra/compose/sglang.yml up -d
+```
+
+По умолчанию используется образ `${IDP_SGLANG_IMAGE:-lmsys/sglang:latest}`. Модель лежит в `transfer/models/new_vl/`, внутри контейнера это `/models/new_vl`.
+
+### Проверка
+
+```bash
+curl http://localhost:30000/v1/models
+curl http://localhost:30001/v1/models
+```
+
 ## Модель
 
 Модель скачивается скриптом:
