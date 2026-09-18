@@ -44,7 +44,6 @@ services:
 
   sglang-vl-0:
     image: ${IDP_SGLANG_IMAGE:-lmsys/sglang:latest}
-    pull_policy: never
     command:
       - python
       - -m
@@ -94,7 +93,6 @@ services:
 
   sglang-vl-1:
     image: ${IDP_SGLANG_IMAGE:-lmsys/sglang:latest}
-    pull_policy: never
     command:
       - python
       - -m
