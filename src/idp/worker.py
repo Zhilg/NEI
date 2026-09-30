@@ -94,7 +94,8 @@ def _postprocess_markdown(markdown: str) -> str:
                     j += 1
                 else:
                     break
-            result.append("\n".join(table_block))
+            normalized_table = _normalize_table(table_block)
+            result.append("\n".join(normalized_table))
             i = j
             continue
         if not stripped:
@@ -107,6 +108,28 @@ def _postprocess_markdown(markdown: str) -> str:
     text = "\n".join(result)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _normalize_table(table_lines: list[str]) -> list[str]:
+    if len(table_lines) < 2:
+        return table_lines
+    parsed_rows: list[list[str]] = []
+    for line in table_lines:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        parsed_rows.append(cells)
+    if not parsed_rows:
+        return table_lines
+    max_cols = max(len(row) for row in parsed_rows)
+    normalized: list[str] = []
+    for row_idx, row in enumerate(parsed_rows):
+        while len(row) < max_cols:
+            row.append("")
+        normalized_row = "| " + " | ".join(row) + " |"
+        normalized.append(normalized_row)
+        if row_idx == 0:
+            separator = "| " + " | ".join(["---"] * max_cols) + " |"
+            normalized.append(separator)
+    return normalized
 
 
 def _normalize_typography(text: str) -> str:
@@ -383,12 +406,25 @@ async def _main() -> None:
 
     pbar = tqdm(files, desc="Files", unit="file")
     all_new_entities: list[dict] = []
+    file_semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+    async def _process_with_semaphore(file_path: Path) -> dict:
+        async with file_semaphore:
+            return await _process_file(file_path, result_writer, entity_store, pbar, settings.artifacts_mode)
+
+    pending = []
     for file_path in pbar:
         if _already_processed(file_path, processed):
             pbar.set_postfix(file=file_path.name, stage="skip")
             continue
-        result = await _process_file(file_path, result_writer, entity_store, pbar, settings.artifacts_mode)
-        all_new_entities.extend(result.get("entities", []))
+        pending.append(_process_with_semaphore(file_path))
+
+    results = []
+    if pending:
+        for coro in asyncio.as_completed(pending):
+            result = await coro
+            results.append(result)
+            all_new_entities.extend(result.get("entities", []))
 
     if all_new_entities:
         schema = _load_entity_schema()
