@@ -25,6 +25,8 @@ dev = []
 
 [project.scripts]
 idp = "idp.worker:main"
+idp-operator = "idp.operator_client:main"
+idp-finetune-dataset = "idp.finetune_dataset:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/idp"]

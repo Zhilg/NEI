@@ -15,6 +15,7 @@ import httpx
 
 from idp.config import settings
 from idp.document_classifier import detect_document_type
+from idp.feedback_store import build_feedback_block
 from idp.prompts import (
     annotation_system_prompt,
     combined_system_prompt,
@@ -149,6 +150,37 @@ def _chunked(images: list[Path], size: int) -> list[list[Path]]:
     return [images[i : i + size] for i in range(0, len(images), size)]
 
 
+_FEEDBACK_CACHE: dict[str, str] = {}
+
+
+def get_feedback_examples(force_refresh: bool = False) -> str:
+    """Return the operator feedback block to prepend to VLM system prompts."""
+    if not settings.finetune_feedback_enabled:
+        return ""
+    limit = settings.finetune_max_feedback_examples
+    if limit <= 0:
+        return ""
+    path = Path(settings.operator_corrections_path)
+    try:
+        stat = path.stat()
+        token = f"{stat.st_mtime_ns}:{stat.st_size}"
+    except OSError:
+        token = "empty"
+    if not force_refresh and _FEEDBACK_CACHE.get(token):
+        return _FEEDBACK_CACHE[token]
+    block = build_feedback_block(limit=limit)
+    _FEEDBACK_CACHE.clear()
+    _FEEDBACK_CACHE[token] = block
+    return block
+
+
+def with_feedback(system_prompt: str, force_refresh: bool = False) -> str:
+    block = get_feedback_examples(force_refresh=force_refresh)
+    if not block:
+        return system_prompt
+    return f"{system_prompt}\n\n{block}"
+
+
 def _repair_json(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = text.split("\n")
@@ -244,6 +276,23 @@ def _validate_entity(entity: dict, source_text: str = "") -> dict | None:
     return entity
 
 
+_LOW_CONFIDENCE_COMMENTS = (
+    (0.3, "Рукопись плохо читается, требуется проверка оператором"),
+    (0.5, "Рукопись частично нечёткая, рекомендуется проверить"),
+    (0.7, "Рукопись допускает неточности, рекомендуется уточнить"),
+)
+_DEFAULT_LOW_CONFIDENCE_COMMENT = "Низкая уверенность, требуется проверка оператором"
+
+
+def _low_confidence_comment(confidence: float, handwritten: bool) -> str:
+    if not handwritten:
+        return _DEFAULT_LOW_CONFIDENCE_COMMENT
+    for threshold, comment in _LOW_CONFIDENCE_COMMENTS:
+        if confidence < threshold:
+            return comment
+    return _DEFAULT_LOW_CONFIDENCE_COMMENT
+
+
 def _process_entity(entity: dict, source_text: str, index: int, test_mode: bool = False) -> dict | None:
     validated = _validate_entity(entity, source_text)
     if validated is None:
@@ -266,18 +315,74 @@ def _process_entity(entity: dict, source_text: str, index: int, test_mode: bool 
         "handwritten": bool(handwritten),
     }
     if test_mode and confidence < 0.5:
-        result["comment"] = "Низкая уверенность, требуется проверка оператором"
+        result["comment"] = _low_confidence_comment(confidence, bool(handwritten))
     return result
+
+
+_HANDWRITTEN_DEFAULT_LOW = 0.35
+_HANDWRITTEN_DEFAULT_HIGH = 0.70
+_HANDWRITTEN_MAX_EVIDENCE_LEN = 60
+_CONFUSABLE_CHARS = frozenset("0OoДЗ8BВ5Sбь9гqяРрPpCсТтАаЕеКкМмНнУуХх")
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+_HANDWRITTEN_MARKER_RE = re.compile(r"\[HANDWRITTEN:\s*([^\]]*)\]", re.IGNORECASE)
+
+
+def _strip_handwritten_marker(snippet: str) -> str:
+    return _HANDWRITTEN_MARKER_RE.sub(r"\1", snippet)
+
+
+def _ambiguity_factor(snippet: str) -> float:
+    ambiguous = 0
+    for token in _TOKEN_RE.findall(_strip_handwritten_marker(snippet)):
+        has_digit = any(ch.isdigit() for ch in token)
+        has_alpha = any(ch.isalpha() for ch in token)
+        if has_digit and has_alpha:
+            ambiguous += 1
+            continue
+        if has_alpha and len(token) >= 3:
+            confusables = sum(1 for ch in token if ch in _CONFUSABLE_CHARS)
+            if confusables / len(token) >= 0.6:
+                ambiguous += 1
+    return max(0.8, 1.0 - 0.08 * ambiguous)
+
+
+def _handwriting_penalty(value: str, evidence: str, source_text: str) -> float:
+    penalty = 1.0
+    snippet = _strip_handwritten_marker(evidence.strip() or value.strip())
+    if snippet:
+        length = len(snippet)
+        if length <= 4:
+            penalty *= 0.75
+        elif length <= 10:
+            penalty *= 0.85
+        elif length > _HANDWRITTEN_MAX_EVIDENCE_LEN:
+            penalty *= 0.9
+        penalty *= _ambiguity_factor(snippet)
+    if source_text:
+        marker_count = source_text.count("[HANDWRITTEN:")
+        if marker_count >= 2:
+            penalty *= 1.0 - min(0.15, 0.03 * (marker_count - 1))
+    return penalty
 
 
 def _adjust_confidence(entity: dict, source_text: str = "") -> dict:
     entity = dict(entity)
-    confidence = float(entity.get("confidence", 0.0))
+    raw_confidence = entity.get("confidence")
+    confidence = float(raw_confidence) if raw_confidence is not None else 0.0
     value = str(entity.get("value", "")).strip()
     evidence = str(entity.get("evidence", "")).strip()
     handwritten = bool(entity.get("handwritten", False))
+    if not handwritten and "[HANDWRITTEN:" in f"{value} {evidence}":
+        handwritten = True
 
     if handwritten:
+        uncalibrated = raw_confidence is None or confidence >= 1.0
+        if uncalibrated:
+            penalty = _handwriting_penalty(value, evidence, source_text)
+            confidence = (
+                _HANDWRITTEN_DEFAULT_HIGH
+                - (_HANDWRITTEN_DEFAULT_HIGH - _HANDWRITTEN_DEFAULT_LOW) * (1.0 - penalty)
+            )
         confidence *= 0.85
 
     if source_text and evidence and len(evidence) >= 3:
@@ -404,7 +509,7 @@ async def generate_document_annotation(
 async def reconstruct_markdown(images: list[Path]) -> str:
     if not images:
         return ""
-    sys_prompt = markdown_system_prompt(test=settings.test_mode)
+    sys_prompt = with_feedback(markdown_system_prompt(test=settings.test_mode))
     chunks = _chunked(images, settings.vl_max_images)
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
     selector = get_endpoint_selector()
@@ -453,7 +558,7 @@ async def extract_entities_from_text(
     document_type: str = "other",
 ) -> list[dict]:
     model = model or settings.vl_model
-    sys_prompt = entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode)
+    sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode))
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
     max_chars = 500 if settings.test_mode else 6000
     if len(text) > max_chars:
@@ -676,11 +781,16 @@ def _write_trash(context: str, content: str) -> None:
         pass
 
 
-async def extract_markdown_and_entities(images: list[Path], document_type: str = "other") -> tuple[str, list[dict]]:
+async def extract_markdown_and_entities(
+    images: list[Path],
+    document_type: str = "other",
+    max_tokens: int | None = None,
+) -> tuple[str, list[dict]]:
     if not images:
         return "", []
     chunks = _chunked(images, settings.vl_max_images)
-    max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+    if max_tokens is None:
+        max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
     selector = get_endpoint_selector()
     semaphore = asyncio.Semaphore(settings.vl_concurrency)
 
@@ -696,7 +806,7 @@ async def extract_markdown_and_entities(images: list[Path], document_type: str =
                         "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
                     })
                 entity_prompt = entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode)
-                system_content = (
+                system_content = with_feedback(
                     combined_system_prompt(document_type=document_type, test=settings.test_mode)
                     + "\n\n"
                     + "ENTITY EXTRACTION RULES:\n"
@@ -754,7 +864,7 @@ async def extract_markdown_and_entities(images: list[Path], document_type: str =
 
 
 def get_entity_system_prompt(document_type: str = "other") -> str:
-    return entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode)
+    return with_feedback(entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode))
 
 
 def normalize_entities(entities: list[dict], document_type: str = "other") -> list[dict]:
@@ -796,9 +906,9 @@ def normalize_entities(entities: list[dict], document_type: str = "other") -> li
 async def extract_entities_from_images(images: list[Path], document_type: str = "other") -> list[dict]:
     if not images:
         return []
-    sys_prompt = entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode)
+    sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode))
     if document_type != "other" and not settings.test_mode:
-        sys_prompt = entity_system_prompt(document_type=document_type, visual=True, test=False)
+        sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, test=False))
     max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
     chunks = _chunked(images, settings.vl_max_images)
     selector = get_endpoint_selector()

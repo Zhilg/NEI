@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from idp.vlm_client import _build_entity_type_descriptions
-
 
 def annotation_system_prompt() -> str:
     return (
@@ -76,6 +74,8 @@ def _entity_common_rules() -> str:
 
 
 def _entity_output_instruction() -> str:
+    from idp.vlm_client import _build_entity_type_descriptions
+
     return (
         f"Schema:\n{_build_entity_type_descriptions()}\n\n"
         'Return ONLY valid JSON: {"entities": [...]}\n'
@@ -91,6 +91,19 @@ def _visual_entity_intro() -> str:
     return "Extract atomic metadata entities from this document page image.\n\n"
 
 
+def _confidence_guidance() -> str:
+    return (
+        "CONFIDENCE ESTIMATION (CRITICAL): Estimate confidence (0.0-1.0) based on the actual visual quality "
+        "of the source: handwriting legibility, blur, contrast, character ambiguity, and stroke clarity. "
+        "Do NOT default to 1.0 for handwriting. "
+        "Use 0.9-1.0 only for perfectly crisp printed text that you can read with zero doubt. "
+        "Use 0.5-0.8 for clearly readable handwriting. "
+        "Use 0.3-0.5 for blurred, low-contrast, or ambiguous handwriting. "
+        "Use 0.0-0.3 for illegible handwriting or characters you had to guess. "
+        "Digits vs letters and Cyrillic vs Latin confusions in handwriting must lower confidence.\n"
+    )
+
+
 def entity_system_prompt(
     document_type: str = "other",
     visual: bool = False,
@@ -100,6 +113,8 @@ def entity_system_prompt(
         return (
             "Extract entities from the text. Return only JSON with an 'entities' array. "
             "For each entity, also include a 'comment' field with a brief explanation in Russian when confidence is below 0.5."
+            "\n\n"
+            + _confidence_guidance()
         )
     intro = _visual_entity_intro() if visual else _base_entity_intro()
     base = intro + _entity_common_rules() + _entity_output_instruction()
@@ -196,6 +211,8 @@ def combined_system_prompt(document_type: str = "other", test: bool = False) -> 
             "Process the document images. Reconstruct as Markdown and extract entities. "
             "Return a single JSON object with 'markdown' and 'entities' keys. "
             "For entities with confidence below 0.5, include a 'comment' field with a brief explanation in Russian. No extra text."
+            "\n\n"
+            + _confidence_guidance()
         )
     md = markdown_system_prompt(test=False)
     ent = entity_system_prompt(document_type=document_type, visual=True, test=False)

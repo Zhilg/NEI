@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     vllm_max_model_len: int = Field(default=32768, ge=1024)
     vllm_kv_cache_memory: str = Field(default="15000000000")
 
+    finetune_feedback_enabled: bool = Field(default=False)
+    finetune_feedback_dir: Path = Field(default=Path("/output/finetune"))
+    finetune_max_feedback_examples: int = Field(default=10, ge=0, le=100)
+    operator_corrections_path: Path = Field(default=Path("data/output/operator_corrections.jsonl"))
+    finetune_dataset_path: Path = Field(default=Path("data/output/finetune_data.jsonl"))
+
     @field_validator("input_root", "output_root", "models_root")
     @classmethod
     def require_absolute_path(cls, value: Path) -> Path:
