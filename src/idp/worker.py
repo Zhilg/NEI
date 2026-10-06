@@ -266,7 +266,7 @@ async def _process_file(
             all_entities = _aggregate_entities(text_entities + image_entities)
             paragraphs = extract_paragraphs(vlm_markdown)
             try:
-                annotation = await generate_document_annotation(images=pngs[:2])
+                annotation = await generate_document_annotation(text=vlm_markdown)
             except Exception as exc:  # noqa: BLE001
                 print(f"Annotation generation failed: {exc}", file=sys.stderr)
             if artifacts_mode:
