@@ -138,11 +138,9 @@ def _read_draft(draft_path: Path) -> tuple[str, list[dict]]:
 
 
 async def _run_vlm(image_path: Path, document_type: str) -> tuple[str, list[dict]]:
-    return await extract_markdown_and_entities(
-        [image_path],
-        document_type=document_type,
-        max_tokens=settings.vl_max_tokens,
-    )
+    markdown = await reconstruct_markdown([image_path])
+    entities = await extract_entities_from_images([image_path], document_type=document_type)
+    return markdown, entities
 
 
 def _already_reviewed(image_path: Path, reviewed: set[str]) -> bool:
@@ -266,12 +264,13 @@ async def _main() -> None:
             if draft_path.exists():
                 print(f"  [{index}/{len(pending)}] draft exists: {image_path.name}")
                 continue
-            print(f"  [{index}/{len(pending)}] processing: {image_path.name}")
+            print(f"  [{index}/{len(pending)}] processing: {image_path.name}", file=sys.stderr, flush=True)
             try:
                 markdown, entities = await _run_vlm(image_path, document_type)
+                print(f"  [{index}/{len(pending)}] VLM done: md_len={len(markdown)} entities={len(entities)}", file=sys.stderr, flush=True)
                 _write_draft(draft_path, image_path, markdown, entities)
             except Exception as exc:
-                print(f"  Failed: {exc}", file=sys.stderr)
+                print(f"  Failed: {exc}", file=sys.stderr, flush=True)
                 continue
 
     for index, image_path in enumerate(images, start=1):
