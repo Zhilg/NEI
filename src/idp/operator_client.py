@@ -146,6 +146,32 @@ def _already_reviewed(image_path: Path, reviewed: set[str]) -> bool:
     return str(image_path) in reviewed
 
 
+_CANDIDATE_EDITORS = ("nano", "vim", "vi", "micro", "emacs")
+
+
+def _launch_editor(path: Path) -> None:
+    configured = os.environ.get("IDP_EDITOR") or os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    candidates = [configured] if configured else []
+    candidates.extend(candidate for candidate in _CANDIDATE_EDITORS if candidate not in candidates)
+
+    last_error = None
+    for editor in candidates:
+        if not editor:
+            continue
+        try:
+            subprocess.run([editor, str(path)], check=False)
+            return
+        except FileNotFoundError as exc:
+            last_error = exc
+            continue
+
+    print(
+        f"No terminal editor found. Edit file manually, then press Enter: {path}",
+        file=sys.stderr,
+    )
+    input("Press Enter after editing...")
+
+
 async def _review_page(
     image_path: Path,
     document_type: str,
@@ -168,9 +194,14 @@ async def _review_page(
             print("Skipped (no correction saved).")
             return True
         if choice in {"e", "edit"}:
-            print(f"Edit '{draft_path}' (fields: markdown, operator_corrected_entities), then press Enter.")
-            input()
-            choice = "r"
+            _launch_editor(draft_path)
+            try:
+                markdown, entities = _read_draft(draft_path)
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"Cannot read draft after edit: {exc}", file=sys.stderr)
+                continue
+            _render_console(image_path, markdown, entities, draft_path)
+            continue
         if choice in {"r", "reread"}:
             try:
                 markdown, entities = _read_draft(draft_path)
