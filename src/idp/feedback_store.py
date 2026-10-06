@@ -101,15 +101,30 @@ def _format_entities(entities: Any, limit: int = 12) -> str:
     return "\n".join(lines)
 
 
+def _format_markdown(markdown: str, limit: int = 800) -> str:
+    text = str(markdown or "").strip()
+    if not text:
+        return "(empty)"
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n... [truncated]"
+
+
 def format_feedback_examples(records: list[dict]) -> str:
     blocks = []
     for i, record in enumerate(records, start=1):
-        blocks.append(
-            f"<EXAMPLE {i}>\n"
-            f"VLM output entities:\n{_format_entities(record.get('vlm_entities'))}\n"
-            f"Operator correction:\n{_format_entities(record.get('operator_corrected_entities'))}\n"
+        md = record.get("markdown", "")
+        vlm_entities = record.get("vlm_entities", [])
+        operator_entities = record.get("operator_corrected_entities", [])
+        block = f"<EXAMPLE {i}>\n"
+        if md:
+            block += f"Corrected markdown:\n{_format_markdown(md)}\n\n"
+        block += (
+            f"VLM output entities:\n{_format_entities(vlm_entities)}\n"
+            f"Operator correction:\n{_format_entities(operator_entities)}\n"
             f"</EXAMPLE {i}>"
         )
+        blocks.append(block)
     return "\n\n".join(blocks)
 
 
