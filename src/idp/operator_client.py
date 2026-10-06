@@ -59,6 +59,17 @@ def _open_image(path: Path) -> None:
         print(f"Could not open image viewer: {exc}", file=sys.stderr)
 
 
+def _confidence_marker(confidence: float) -> str:
+    if confidence < 0.3:
+        return "!!"
+    if confidence < 0.5:
+        return "! "
+    if confidence < 0.7:
+        return "~ "
+    return "  "
+
+
+
 def _render_console(image_path: Path, markdown: str, draft_path: Path) -> None:
     line = "=" * 78
     print(f"\n{line}")
@@ -87,10 +98,10 @@ def _write_draft(draft_path: Path, image_path: Path, markdown: str) -> None:
     draft_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _read_draft(draft_path: Path) -> tuple[str, list[dict]]:
+def _read_draft(draft_path: Path) -> str:
     data = json.loads(draft_path.read_text(encoding="utf-8"))
-    markdown = str(data.get("markdown", ""))
-    return markdown, []
+    return str(data.get("markdown", ""))
+
 
 
 async def _run_vlm(image_path: Path, document_type: str) -> str:
@@ -134,14 +145,12 @@ async def _review_page(
     open_image: bool,
 ) -> bool:
     draft_path = drafts_dir / f"{image_path.stem}.draft.json"
-    original_markdown, original_entities = await _run_vlm(image_path, document_type)
-    _write_draft(draft_path, image_path, original_markdown, original_entities)
+    markdown = await _run_vlm(image_path, document_type)
+    _write_draft(draft_path, image_path, markdown)
     if open_image:
         _open_image(image_path)
-    _render_console(image_path, original_markdown, original_entities, draft_path)
+    _render_console(image_path, markdown, draft_path)
 
-    markdown = original_markdown
-    entities = original_entities
 
     while True:
         print("\n[a] accept   [e] edit draft JSON   [r] re-read draft   [s] skip   [q] quit")
@@ -153,24 +162,19 @@ async def _review_page(
             return True
         if choice in {"e", "edit"}:
             _launch_editor(draft_path)
-            try:
-                markdown, entities = _read_draft(draft_path)
-            except (OSError, json.JSONDecodeError) as exc:
-                print(f"Cannot read draft after edit: {exc}", file=sys.stderr)
-                continue
-            _render_console(image_path, markdown, entities, draft_path)
-            continue
+            choice = "r"
+
         if choice in {"r", "reread"}:
             try:
-                markdown, entities = _read_draft(draft_path)
+                markdown = _read_draft(draft_path)
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
-            _render_console(image_path, markdown, entities, draft_path)
+            _render_console(image_path, markdown, draft_path)
             continue
         if choice in {"a", "accept"}:
             try:
-                saved_markdown, corrected = _read_draft(draft_path)
+                saved_markdown = _read_draft(draft_path)
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
@@ -188,8 +192,9 @@ async def _review_page(
             append_correction(
                 page_image=str(image_path),
                 markdown=saved_markdown,
-                vlm_entities=original_entities,
-                operator_corrected_entities=corrected,
+                vlm_entities=[],
+                operator_corrected_entities=[],
+
                 timestamp=time.time(),
             )
             print(f"Saved correction -> {corrections_path()}", file=sys.stderr)
@@ -228,9 +233,9 @@ async def _main() -> None:
                 continue
             print(f"  [{index}/{len(pending)}] processing: {image_path.name}", file=sys.stderr, flush=True)
             try:
-                markdown, entities = await _run_vlm(image_path, document_type)
-                print(f"  [{index}/{len(pending)}] VLM done: md_len={len(markdown)} entities={len(entities)}", file=sys.stderr, flush=True)
-                _write_draft(draft_path, image_path, markdown, entities)
+                markdown = await _run_vlm(image_path, document_type)
+                _write_draft(draft_path, image_path, markdown)
+
             except Exception as exc:
                 print(f"  Failed: {exc}", file=sys.stderr, flush=True)
                 continue
