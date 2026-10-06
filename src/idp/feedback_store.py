@@ -80,27 +80,6 @@ def append_correction(
     return record
 
 
-def _format_entities(entities: Any, limit: int = 12) -> str:
-    if not isinstance(entities, list) or not entities:
-        return "(none)"
-    lines = []
-    for entity in entities[:limit]:
-        if not isinstance(entity, dict):
-            continue
-        value = str(entity.get("value", "")).strip()
-        if not value:
-            continue
-        etype = str(entity.get("type", "other"))
-        confidence = entity.get("confidence")
-        confidence_text = f"{float(confidence):.2f}" if isinstance(confidence, (int, float)) else "n/a"
-        lines.append(f"- {etype}: {value} (confidence: {confidence_text})")
-    if not lines:
-        return "(none)"
-    if len(entities) > limit:
-        lines.append(f"- ... and {len(entities) - limit} more")
-    return "\n".join(lines)
-
-
 def _format_markdown(markdown: str, limit: int = 800) -> str:
     text = str(markdown or "").strip()
     if not text:
@@ -114,16 +93,10 @@ def format_feedback_examples(records: list[dict]) -> str:
     blocks = []
     for i, record in enumerate(records, start=1):
         md = record.get("markdown", "")
-        vlm_entities = record.get("vlm_entities", [])
-        operator_entities = record.get("operator_corrected_entities", [])
         block = f"<EXAMPLE {i}>\n"
         if md:
-            block += f"Corrected markdown:\n{_format_markdown(md)}\n\n"
-        block += (
-            f"VLM output entities:\n{_format_entities(vlm_entities)}\n"
-            f"Operator correction:\n{_format_entities(operator_entities)}\n"
-            f"</EXAMPLE {i}>"
-        )
+            block += f"Corrected markdown:\n{_format_markdown(md)}\n"
+        block += f"</EXAMPLE {i}>"
         blocks.append(block)
     return "\n\n".join(blocks)
 

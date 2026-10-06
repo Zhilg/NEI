@@ -178,7 +178,6 @@ def with_feedback(system_prompt: str, force_refresh: bool = False) -> str:
     block = get_feedback_examples(force_refresh=force_refresh)
     if not block:
         return system_prompt
-    print(f"FEEDBACK BLOCK ADDED ({len(block)} chars): {block[:200]}", file=sys.stderr)
     return f"{system_prompt}\n\n{block}"
 
 
@@ -610,14 +609,10 @@ async def extract_entities_from_text(
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 content = _strip_thinking_blocks(content)
-                print(f"ENT chunk {i+1} response length: {len(content) if content else 0}", file=sys.stderr)
-                print(f"ENT chunk {i+1} preview: {content[:300] if content else 'EMPTY'}", file=sys.stderr)
                 parsed = _parse_vlm_json_response(content, f"entities chunk {i + 1}")
                 if not parsed:
-                    print(f"ENT chunk {i+1} PARSE FAILED", file=sys.stderr)
                     return []
                 raw_entities = parsed.get("entities", parsed.get("result", []))
-                print(f"ENT chunk {i+1} raw entities: {len(raw_entities) if isinstance(raw_entities, list) else 'NOT A LIST'}", file=sys.stderr)
                 result: list[dict] = []
                 if isinstance(raw_entities, list):
                     for entity in raw_entities:
@@ -625,14 +620,12 @@ async def extract_entities_from_text(
                             continue
                         validated = _validate_entity(entity, chunk)
                         if validated is None:
-                            print(f"ENT chunk {i+1} FILTERED: {entity}", file=sys.stderr)
                             continue
                         processed = _process_entity(entity, chunk, i, test_mode=settings.test_mode)
                         if processed is None:
                             continue
                         confidence = float(processed.get("confidence", 0.0))
                         if not settings.test_mode and confidence < settings.min_entity_confidence:
-                            print(f"ENT chunk {i+1} LOW CONF ({confidence}): {entity}", file=sys.stderr)
                             continue
                         result.append(processed)
                 return result
@@ -645,7 +638,6 @@ async def extract_entities_from_text(
         all_entities.extend(entities)
     final = _deduplicate_entities(all_entities)
     normalized = normalize_entities(final, document_type=document_type)
-    print(f"ENT total: {len(normalized)} entities after dedup+normalize", file=sys.stderr)
     return normalized
 
 
@@ -961,14 +953,10 @@ async def extract_entities_from_images(images: list[Path], document_type: str = 
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 content = _strip_thinking_blocks(content)
-                print(f"IMG page {i+1} response length: {len(content) if content else 0}", file=sys.stderr)
-                print(f"IMG page {i+1} preview: {content[:300] if content else 'EMPTY'}", file=sys.stderr)
                 parsed = _parse_vlm_json_response(content, f"entities visual page {i + 1}")
                 if not parsed:
-                    print(f"IMG page {i+1} PARSE FAILED", file=sys.stderr)
                     return []
                 raw_entities = parsed.get("entities", [])
-                print(f"IMG page {i+1} raw entities: {len(raw_entities) if isinstance(raw_entities, list) else 'NOT A LIST'}", file=sys.stderr)
                 result: list[dict] = []
                 if isinstance(raw_entities, list):
                     for entity in raw_entities:
@@ -976,14 +964,11 @@ async def extract_entities_from_images(images: list[Path], document_type: str = 
                             continue
                         processed = _process_entity(entity, content, i, test_mode=settings.test_mode)
                         if processed is None:
-                            print(f"IMG page {i+1} FILTERED: {entity}", file=sys.stderr)
                             continue
                         confidence = float(processed.get("confidence", 0.0))
                         if not settings.test_mode and confidence < settings.min_entity_confidence:
-                            print(f"IMG page {i+1} LOW CONF ({confidence}): {entity}", file=sys.stderr)
                             continue
                         result.append(processed)
-                print(f"IMG page {i+1} accepted entities: {len(result)}", file=sys.stderr)
                 return result
 
         tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
