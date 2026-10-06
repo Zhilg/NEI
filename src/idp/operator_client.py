@@ -191,11 +191,14 @@ async def _review_page(
     open_image: bool,
 ) -> bool:
     draft_path = drafts_dir / f"{image_path.stem}.draft.json"
-    markdown, entities = await _run_vlm(image_path, document_type)
-    _write_draft(draft_path, image_path, markdown, entities)
+    original_markdown, original_entities = await _run_vlm(image_path, document_type)
+    _write_draft(draft_path, image_path, original_markdown, original_entities)
     if open_image:
         _open_image(image_path)
-    _render_console(image_path, markdown, entities, draft_path)
+    _render_console(image_path, original_markdown, original_entities, draft_path)
+
+    markdown = original_markdown
+    entities = original_entities
 
     while True:
         print("\n[a] accept   [e] edit draft JSON   [r] re-read draft   [s] skip   [q] quit")
@@ -228,15 +231,9 @@ async def _review_page(
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
-            original_md = str(markdown or "")
-            saved_md = str(saved_markdown or "")
-            md_changed = bool(saved_md.strip()) and saved_md.strip() != original_md.strip()
-            ent_changed = bool(corrected) and corrected != entities
+            md_changed = bool(saved_markdown.strip()) and saved_markdown.strip() != original_markdown.strip()
+            ent_changed = bool(corrected) and corrected != original_entities
             print(f"ACCEPT: md_changed={md_changed}, ent_changed={ent_changed}", file=sys.stderr)
-            if not md_changed:
-                print(f"  original md[:120]: {original_md[:120]!r}", file=sys.stderr)
-                print(f"  saved   md[:120]: {saved_md[:120]!r}", file=sys.stderr)
-                print(f"  original len={len(original_md)}, saved len={len(saved_md)}", file=sys.stderr)
             if md_changed and not ent_changed:
                 try:
                     text_entities = await extract_entities_from_text(saved_markdown, document_type=document_type)
@@ -248,7 +245,7 @@ async def _review_page(
             append_correction(
                 page_image=str(image_path),
                 markdown=saved_markdown,
-                vlm_entities=entities,
+                vlm_entities=original_entities,
                 operator_corrected_entities=corrected,
                 timestamp=time.time(),
             )
