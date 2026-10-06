@@ -20,7 +20,6 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 
 
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Operator review loop for VLM handwriting extraction",
@@ -81,7 +80,6 @@ def _launch_editor(path: Path) -> None:
     print(f"No terminal editor found. Edit file manually: {path}", file=sys.stderr)
 
 
-
 def _render_console(image_path: Path, markdown: str, draft_path: Path) -> None:
     line = "=" * 78
     print(f"\n{line}")
@@ -111,7 +109,6 @@ def _read_draft(draft_path: Path) -> str:
     return draft_path.read_text(encoding="utf-8")
 
 
-
 async def _run_vlm(image_path: Path, document_type: str) -> str:
     return await reconstruct_markdown([image_path])
 
@@ -122,7 +119,6 @@ def _already_reviewed(image_path: Path, reviewed: set[str], drafts_dir: Path | N
         if marker.exists():
             return True
     return False
-
 
 
 async def _review_page(
@@ -139,7 +135,6 @@ async def _review_page(
     _render_console(image_path, original_markdown, draft_path)
 
     markdown = original_markdown
-
 
     while True:
         print("\n[a] accept   [e] edit draft   [r] re-read draft   [s] skip   [q] quit")
@@ -158,7 +153,6 @@ async def _review_page(
                 continue
             _render_console(image_path, markdown, draft_path)
             continue
-
         if choice in {"r", "reread"}:
             try:
                 markdown = _read_draft(draft_path)
@@ -173,17 +167,6 @@ async def _review_page(
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
-            md_changed = bool(saved_markdown.strip()) and saved_markdown.strip() != original_markdown.strip()
-            ent_changed = bool(corrected) and corrected != original_entities
-            print(f"ACCEPT: md_changed={md_changed}, ent_changed={ent_changed}", file=sys.stderr)
-            if md_changed and not ent_changed:
-                try:
-                    text_entities = await extract_entities_from_text(saved_markdown, document_type=document_type)
-                    image_entities = await extract_entities_from_images([image_path], document_type=document_type)
-                    corrected = _aggregate_entities(text_entities + image_entities)
-                    print(f"Re-extracted {len(corrected)} entities from corrected markdown", file=sys.stderr)
-                except Exception as exc:
-                    print(f"Entity re-extraction failed: {exc}", file=sys.stderr)
             append_correction(
                 page_image=str(image_path),
                 markdown=saved_markdown,
@@ -194,7 +177,6 @@ async def _review_page(
             marker = drafts_dir / f"{image_path.stem}.reviewed"
             marker.write_text("reviewed", encoding="utf-8")
             print(f"Saved correction -> {corrections_path()}")
-
             return True
 
 
@@ -228,13 +210,12 @@ async def _main() -> None:
             if draft_path.exists():
                 print(f"  [{index}/{len(pending)}] draft exists: {image_path.name}")
                 continue
-            print(f"  [{index}/{len(pending)}] processing: {image_path.name}", file=sys.stderr, flush=True)
+            print(f"  [{index}/{len(pending)}] processing: {image_path.name}")
             try:
                 markdown = await _run_vlm(image_path, document_type)
                 _write_draft(draft_path, image_path, markdown)
-
             except Exception as exc:
-                print(f"  Failed: {exc}", file=sys.stderr, flush=True)
+                print(f"  Failed: {exc}", file=sys.stderr)
                 continue
 
     for index, image_path in enumerate(images, start=1):
