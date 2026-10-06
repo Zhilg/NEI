@@ -1,14 +1,4 @@
-"""Terminal operator tool: review VLM output for handwritten pages and record corrections.
-
-Workflow per page image:
-  1. VLM reconstructs Markdown and extracts entities (test-mode prompt: confidence + comments).
-  2. The draft is written to a JSON file next to the corrections store.
-  3. The operator reviews it in the terminal and/or edits the JSON file.
-  4. The reviewed result is appended to operator_corrections.jsonl.
-
-Corrections are later (a) injected as few-shot feedback into VLM prompts and
-(b) converted into a fine-tuning dataset by idp.finetune_dataset.
-"""
+"""Terminal operator tool: review VLM output for handwritten pages and correct Markdown."""
 
 from __future__ import annotations
 
@@ -24,12 +14,10 @@ from pathlib import Path
 from idp.config import settings
 from idp.feedback_store import append_correction, corrections_path, read_corrections
 from idp.renderer import render_pdf_to_pngs
-from idp.vlm_client import extract_markdown_and_entities
+from idp.vlm_client import reconstruct_markdown
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
-
-_LOW_CONFIDENCE_LIMIT = 0.5
 
 
 def _parse_args() -> argparse.Namespace:
@@ -39,7 +27,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, help="PDF, image, or directory of pages to review")
     parser.add_argument("--document-type", default="other", help="Document type hint passed to the VLM prompt")
     parser.add_argument("--limit", type=int, default=0, help="Max pages to process (0 = all)")
-    parser.add_argument("--drafts-dir", default="", help="Where to write editable draft JSON files")
+    parser.add_argument("--drafts-dir", default="", help="Where to write editable draft files")
     parser.add_argument("--open-image", action="store_true", help="Open each page image in the default viewer")
     parser.add_argument("--production-prompts", action="store_true", help="Use production prompts instead of test prompts")
     return parser.parse_args()
@@ -72,78 +60,69 @@ def _open_image(path: Path) -> None:
         print(f"Could not open image viewer: {exc}", file=sys.stderr)
 
 
-def _confidence_marker(confidence: float) -> str:
-    if confidence < 0.3:
-        return "!!"
-    if confidence < 0.5:
-        return "! "
-    if confidence < 0.7:
-        return "~ "
-    return "  "
+_CANDIDATE_EDITORS = ("nano", "vim", "vi", "micro", "emacs")
 
 
-def _render_console(image_path: Path, markdown: str, entities: list[dict], draft_path: Path) -> None:
+def _launch_editor(path: Path) -> None:
+    configured = os.environ.get("IDP_EDITOR") or os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    candidates = [configured] if configured else []
+    candidates.extend(candidate for candidate in _CANDIDATE_EDITORS if candidate not in candidates)
+
+    for editor in candidates:
+        if not editor:
+            continue
+        try:
+            subprocess.run([editor, str(path)], check=False)
+            return
+        except FileNotFoundError:
+            continue
+
+    print(f"No terminal editor found. Edit file manually: {path}", file=sys.stderr)
+
+
+def _render_console(image_path: Path, markdown: str, draft_path: Path) -> None:
     line = "=" * 78
     print(f"\n{line}")
     print(f"IMAGE : {image_path}")
     print(f"DRAFT : {draft_path}")
     print(line)
     print("\n--- Markdown ---")
-    print(markdown if markdown.strip() else "(empty)")
-    print("\n--- Entities (marker: !! <0.3, ! <0.5, ~ <0.7) ---")
-    if not entities:
-        print("(no entities)")
-        return
-    for i, entity in enumerate(entities, start=1):
-        try:
-            confidence = float(entity.get("confidence", 0.0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        marker = _confidence_marker(confidence)
-        handwritten = "H" if entity.get("handwritten") else " "
-        etype = str(entity.get("type", "other"))
-        value = str(entity.get("value", ""))
-        evidence = str(entity.get("evidence", ""))
-        comment = str(entity.get("comment", "") or "")
-        flag = " <-- REVIEW" if confidence < _LOW_CONFIDENCE_LIMIT else ""
-        print(f"{marker}[{confidence:>5.2f}] {handwritten} {i:>2}. {etype}: {value}{flag}")
-        if evidence:
-            print(f"          evidence: {evidence}")
-        if comment:
-            print(f"          comment : {comment}")
+    md = markdown.strip() if markdown else ""
+    if not md:
+        print("(empty)")
+    else:
+        lines = md.splitlines()
+        for idx, ln in enumerate(lines[:50], start=1):
+            print(f"  {idx:>2}: {ln}")
+        if len(lines) > 50:
+            print(f"  ... ({len(lines) - 50} more lines)")
 
 
-def _write_draft(draft_path: Path, image_path: Path, markdown: str, entities: list[dict]) -> None:
+def _write_draft(draft_path: Path, image_path: Path, markdown: str) -> None:
     draft_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "page_image": str(image_path),
-        "markdown": markdown,
-        "vlm_entities": entities,
-        "operator_corrected_entities": entities,
-        "timestamp": time.time(),
-    }
-    draft_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.replace("\\n", "\n")
+    draft_path.write_text(normalized, encoding="utf-8")
 
 
-def _read_draft(draft_path: Path) -> tuple[str, list[dict]]:
-    data = json.loads(draft_path.read_text(encoding="utf-8"))
-    markdown = str(data.get("markdown", ""))
-    entities = data.get("operator_corrected_entities")
-    if not isinstance(entities, list):
-        entities = data.get("vlm_entities") or []
-    return markdown, [e for e in entities if isinstance(e, dict)]
+def _read_draft(draft_path: Path) -> str:
+    return draft_path.read_text(encoding="utf-8")
 
 
-async def _run_vlm(image_path: Path, document_type: str) -> tuple[str, list[dict]]:
-    return await extract_markdown_and_entities(
-        [image_path],
-        document_type=document_type,
-        max_tokens=settings.vl_max_tokens,
-    )
+async def _run_vlm(image_path: Path, document_type: str) -> str:
+    return await reconstruct_markdown([image_path])
 
 
-def _already_reviewed(image_path: Path, reviewed: set[str]) -> bool:
-    return str(image_path) in reviewed
+def _already_reviewed(image_path: Path, reviewed: set[str], drafts_dir: Path | None = None) -> bool:
+    normalized_path = str(image_path.resolve())
+    for entry in reviewed:
+        if Path(entry).resolve() == image_path.resolve():
+            return True
+    if drafts_dir:
+        marker = drafts_dir / f"{image_path.stem}.reviewed"
+        if marker.exists():
+            return True
+    return False
 
 
 async def _review_page(
@@ -152,15 +131,17 @@ async def _review_page(
     drafts_dir: Path,
     open_image: bool,
 ) -> bool:
-    draft_path = drafts_dir / f"{image_path.stem}.draft.json"
-    markdown, entities = await _run_vlm(image_path, document_type)
-    _write_draft(draft_path, image_path, markdown, entities)
+    draft_path = drafts_dir / f"{image_path.stem}.md"
+    original_markdown = await _run_vlm(image_path, document_type)
+    _write_draft(draft_path, image_path, original_markdown)
     if open_image:
         _open_image(image_path)
-    _render_console(image_path, markdown, entities, draft_path)
+    _render_console(image_path, original_markdown, draft_path)
+
+    markdown = original_markdown
 
     while True:
-        print("\n[a] accept   [e] edit draft JSON   [r] re-read draft   [s] skip   [q] quit")
+        print("\n[a] accept   [e] edit draft   [r] re-read draft   [s] skip   [q] quit")
         choice = input("> ").strip().lower() or "a"
         if choice in {"q", "quit", "exit"}:
             return False
@@ -168,30 +149,37 @@ async def _review_page(
             print("Skipped (no correction saved).")
             return True
         if choice in {"e", "edit"}:
-            print(f"Edit '{draft_path}' (fields: markdown, operator_corrected_entities), then press Enter.")
-            input()
-            choice = "r"
+            _launch_editor(draft_path)
+            try:
+                markdown = _read_draft(draft_path)
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"Cannot read draft after edit: {exc}", file=sys.stderr)
+                continue
+            _render_console(image_path, markdown, draft_path)
+            continue
         if choice in {"r", "reread"}:
             try:
-                markdown, entities = _read_draft(draft_path)
+                markdown = _read_draft(draft_path)
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
-            _render_console(image_path, markdown, entities, draft_path)
+            _render_console(image_path, markdown, draft_path)
             continue
         if choice in {"a", "accept"}:
             try:
-                saved_markdown, corrected = _read_draft(draft_path)
+                saved_markdown = _read_draft(draft_path)
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
             append_correction(
                 page_image=str(image_path),
                 markdown=saved_markdown,
-                vlm_entities=entities,
-                operator_corrected_entities=corrected,
+                vlm_entities=[],
+                operator_corrected_entities=[],
                 timestamp=time.time(),
             )
+            marker = drafts_dir / f"{image_path.stem}.reviewed"
+            marker.write_text("reviewed", encoding="utf-8")
             print(f"Saved correction -> {corrections_path()}")
             return True
 
@@ -222,21 +210,21 @@ async def _main() -> None:
     if pending:
         print("Processing all pages with VLM first...")
         for index, image_path in enumerate(pending, start=1):
-            draft_path = drafts_dir / f"{image_path.stem}.draft.json"
+            draft_path = drafts_dir / f"{image_path.stem}.md"
             if draft_path.exists():
                 print(f"  [{index}/{len(pending)}] draft exists: {image_path.name}")
                 continue
             print(f"  [{index}/{len(pending)}] processing: {image_path.name}")
             try:
-                markdown, entities = await _run_vlm(image_path, document_type)
-                _write_draft(draft_path, image_path, markdown, entities)
+                markdown = await _run_vlm(image_path, document_type)
+                _write_draft(draft_path, image_path, markdown)
             except Exception as exc:
                 print(f"  Failed: {exc}", file=sys.stderr)
                 continue
 
     for index, image_path in enumerate(images, start=1):
         print(f"\n[{index}/{len(images)}] {image_path}")
-        if _already_reviewed(image_path, reviewed):
+        if _already_reviewed(image_path, reviewed, drafts_dir):
             print("Already reviewed — skipping.")
             continue
         try:
