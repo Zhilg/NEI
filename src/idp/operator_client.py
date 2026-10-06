@@ -220,7 +220,10 @@ async def _review_page(
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
-            if saved_markdown.strip() and saved_markdown != markdown:
+            md_changed = bool(saved_markdown.strip()) and saved_markdown != markdown
+            ent_changed = corrected != entities
+            print(f"ACCEPT: md_changed={md_changed}, ent_changed={ent_changed}", file=sys.stderr)
+            if md_changed:
                 try:
                     text_entities = await extract_entities_from_text(saved_markdown, document_type=document_type)
                     image_entities = await extract_entities_from_images([image_path], document_type=document_type)
@@ -235,7 +238,7 @@ async def _review_page(
                 operator_corrected_entities=corrected,
                 timestamp=time.time(),
             )
-            print(f"Saved correction -> {corrections_path()}")
+            print(f"Saved correction -> {corrections_path()}", file=sys.stderr)
             return True
 
 
