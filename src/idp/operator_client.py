@@ -24,7 +24,8 @@ from pathlib import Path
 from idp.config import settings
 from idp.feedback_store import append_correction, corrections_path, read_corrections
 from idp.renderer import render_pdf_to_pngs
-from idp.vlm_client import extract_markdown_and_entities
+from idp.vlm_client import extract_entities_from_images, extract_entities_from_text, reconstruct_markdown
+from idp.worker import _aggregate_entities
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
@@ -185,6 +186,14 @@ async def _review_page(
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
+            if saved_markdown.strip() and saved_markdown != markdown:
+                try:
+                    text_entities = await extract_entities_from_text(saved_markdown, document_type=document_type)
+                    image_entities = await extract_entities_from_images([image_path], document_type=document_type)
+                    corrected = _aggregate_entities(text_entities + image_entities)
+                    print(f"Re-extracted {len(corrected)} entities from corrected markdown", file=sys.stderr)
+                except Exception as exc:
+                    print(f"Entity re-extraction failed: {exc}", file=sys.stderr)
             append_correction(
                 page_image=str(image_path),
                 markdown=saved_markdown,
