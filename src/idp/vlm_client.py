@@ -178,6 +178,7 @@ def with_feedback(system_prompt: str, force_refresh: bool = False) -> str:
     block = get_feedback_examples(force_refresh=force_refresh)
     if not block:
         return system_prompt
+    print(f"FEEDBACK BLOCK ADDED ({len(block)} chars): {block[:200]}", file=sys.stderr)
     return f"{system_prompt}\n\n{block}"
 
 
