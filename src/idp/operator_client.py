@@ -24,7 +24,7 @@ from pathlib import Path
 from idp.config import settings
 from idp.feedback_store import append_correction, corrections_path, read_corrections
 from idp.renderer import render_pdf_to_pngs
-from idp.vlm_client import extract_markdown_and_entities
+from idp.vlm_client import extract_entities_from_images, reconstruct_markdown
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
