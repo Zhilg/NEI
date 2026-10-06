@@ -24,7 +24,7 @@ from pathlib import Path
 from idp.config import settings
 from idp.feedback_store import append_correction, corrections_path, read_corrections
 from idp.renderer import render_pdf_to_pngs
-from idp.vlm_client import extract_entities_from_images, reconstruct_markdown
+from idp.vlm_client import extract_entities_from_images, extract_entities_from_text, reconstruct_markdown
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
@@ -139,8 +139,10 @@ def _read_draft(draft_path: Path) -> tuple[str, list[dict]]:
 
 async def _run_vlm(image_path: Path, document_type: str) -> tuple[str, list[dict]]:
     markdown = await reconstruct_markdown([image_path])
-    entities = await extract_entities_from_images([image_path], document_type=document_type)
-    return markdown, entities
+    text_entities = await extract_entities_from_text(markdown, document_type=document_type)
+    image_entities = await extract_entities_from_images([image_path], document_type=document_type)
+    all_entities = text_entities + image_entities
+    return markdown, all_entities
 
 
 def _already_reviewed(image_path: Path, reviewed: set[str]) -> bool:
