@@ -223,7 +223,7 @@ async def _review_page(
             md_changed = bool(saved_markdown.strip()) and saved_markdown != markdown
             ent_changed = corrected != entities
             print(f"ACCEPT: md_changed={md_changed}, ent_changed={ent_changed}", file=sys.stderr)
-            if md_changed:
+            if md_changed and not ent_changed:
                 try:
                     text_entities = await extract_entities_from_text(saved_markdown, document_type=document_type)
                     image_entities = await extract_entities_from_images([image_path], document_type=document_type)
