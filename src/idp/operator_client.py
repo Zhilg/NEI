@@ -93,7 +93,15 @@ def _render_console(image_path: Path, markdown: str, entities: list[dict], draft
     print(f"DRAFT : {draft_path}")
     print(line)
     print("\n--- Markdown ---")
-    print(markdown if markdown.strip() else "(empty)")
+    md = markdown.strip() if markdown else ""
+    if not md:
+        print("(empty)")
+    else:
+        lines = md.splitlines()
+        for idx, ln in enumerate(lines[:40], start=1):
+            print(f"  {idx:>2}: {ln}")
+        if len(lines) > 40:
+            print(f"  ... ({len(lines) - 40} more lines)")
     print("\n--- Entities (marker: !! <0.3, ! <0.5, ~ <0.7) ---")
     if not entities:
         print("(no entities)")
@@ -220,9 +228,15 @@ async def _review_page(
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"Cannot read draft: {exc}", file=sys.stderr)
                 continue
-            md_changed = bool(saved_markdown.strip()) and saved_markdown != markdown
-            ent_changed = corrected != entities
+            original_md = str(markdown or "")
+            saved_md = str(saved_markdown or "")
+            md_changed = bool(saved_md.strip()) and saved_md.strip() != original_md.strip()
+            ent_changed = bool(corrected) and corrected != entities
             print(f"ACCEPT: md_changed={md_changed}, ent_changed={ent_changed}", file=sys.stderr)
+            if not md_changed:
+                print(f"  original md[:120]: {original_md[:120]!r}", file=sys.stderr)
+                print(f"  saved   md[:120]: {saved_md[:120]!r}", file=sys.stderr)
+                print(f"  original len={len(original_md)}, saved len={len(saved_md)}", file=sys.stderr)
             if md_changed and not ent_changed:
                 try:
                     text_entities = await extract_entities_from_text(saved_markdown, document_type=document_type)
