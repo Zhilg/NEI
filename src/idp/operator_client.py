@@ -59,14 +59,24 @@ def _open_image(path: Path) -> None:
         print(f"Could not open image viewer: {exc}", file=sys.stderr)
 
 
-def _confidence_marker(confidence: float) -> str:
-    if confidence < 0.3:
-        return "!!"
-    if confidence < 0.5:
-        return "! "
-    if confidence < 0.7:
-        return "~ "
-    return "  "
+_CANDIDATE_EDITORS = ("nano", "vim", "vi", "micro", "emacs")
+
+
+def _launch_editor(path: Path) -> None:
+    configured = os.environ.get("IDP_EDITOR") or os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    candidates = [configured] if configured else []
+    candidates.extend(candidate for candidate in _CANDIDATE_EDITORS if candidate not in candidates)
+
+    for editor in candidates:
+        if not editor:
+            continue
+        try:
+            subprocess.run([editor, str(path)], check=False)
+            return
+        except FileNotFoundError:
+            continue
+
+    print(f"No terminal editor found. Edit file manually: {path}", file=sys.stderr)
 
 
 
@@ -90,17 +100,13 @@ def _render_console(image_path: Path, markdown: str, draft_path: Path) -> None:
 
 def _write_draft(draft_path: Path, image_path: Path, markdown: str) -> None:
     draft_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "page_image": str(image_path),
-        "markdown": markdown,
-        "timestamp": time.time(),
-    }
-    draft_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.replace("\\n", "\n")
+    draft_path.write_text(normalized, encoding="utf-8")
 
 
 def _read_draft(draft_path: Path) -> str:
-    data = json.loads(draft_path.read_text(encoding="utf-8"))
-    return str(data.get("markdown", ""))
+    return draft_path.read_text(encoding="utf-8")
 
 
 
@@ -108,8 +114,13 @@ async def _run_vlm(image_path: Path, document_type: str) -> str:
     return await reconstruct_markdown([image_path])
 
 
-def _already_reviewed(image_path: Path, reviewed: set[str]) -> bool:
-    return str(image_path) in reviewed
+def _already_reviewed(image_path: Path, reviewed: set[str], drafts_dir: Path | None = None) -> bool:
+    if str(image_path) in reviewed:
+        return True
+    if drafts_dir:
+        draft_path = drafts_dir / f"{image_path.stem}.md"
+        return draft_path.exists()
+    return False
 
 
 _CANDIDATE_EDITORS = ("nano", "vim", "vi", "micro", "emacs")
@@ -144,16 +155,18 @@ async def _review_page(
     drafts_dir: Path,
     open_image: bool,
 ) -> bool:
-    draft_path = drafts_dir / f"{image_path.stem}.draft.json"
-    markdown = await _run_vlm(image_path, document_type)
-    _write_draft(draft_path, image_path, markdown)
+    draft_path = drafts_dir / f"{image_path.stem}.md"
+    original_markdown = await _run_vlm(image_path, document_type)
+    _write_draft(draft_path, image_path, original_markdown)
     if open_image:
         _open_image(image_path)
-    _render_console(image_path, markdown, draft_path)
+    _render_console(image_path, original_markdown, draft_path)
+
+    markdown = original_markdown
 
 
     while True:
-        print("\n[a] accept   [e] edit draft JSON   [r] re-read draft   [s] skip   [q] quit")
+        print("\n[a] accept   [e] edit draft   [r] re-read draft   [s] skip   [q] quit")
         choice = input("> ").strip().lower() or "a"
         if choice in {"q", "quit", "exit"}:
             return False
@@ -162,7 +175,13 @@ async def _review_page(
             return True
         if choice in {"e", "edit"}:
             _launch_editor(draft_path)
-            choice = "r"
+            try:
+                markdown = _read_draft(draft_path)
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"Cannot read draft after edit: {exc}", file=sys.stderr)
+                continue
+            _render_console(image_path, markdown, draft_path)
+            continue
 
         if choice in {"r", "reread"}:
             try:
@@ -227,7 +246,7 @@ async def _main() -> None:
     if pending:
         print("Processing all pages with VLM first...")
         for index, image_path in enumerate(pending, start=1):
-            draft_path = drafts_dir / f"{image_path.stem}.draft.json"
+            draft_path = drafts_dir / f"{image_path.stem}.md"
             if draft_path.exists():
                 print(f"  [{index}/{len(pending)}] draft exists: {image_path.name}")
                 continue
@@ -242,7 +261,7 @@ async def _main() -> None:
 
     for index, image_path in enumerate(images, start=1):
         print(f"\n[{index}/{len(images)}] {image_path}")
-        if _already_reviewed(image_path, reviewed):
+        if _already_reviewed(image_path, reviewed, drafts_dir):
             print("Already reviewed — skipping.")
             continue
         try:
