@@ -19,6 +19,8 @@ from idp.vlm_client import reconstruct_markdown
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
 
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Operator review loop for VLM handwriting extraction",
@@ -26,7 +28,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, help="PDF, image, or directory of pages to review")
     parser.add_argument("--document-type", default="other", help="Document type hint passed to the VLM prompt")
     parser.add_argument("--limit", type=int, default=0, help="Max pages to process (0 = all)")
-    parser.add_argument("--drafts-dir", default="", help="Where to write editable draft JSON files")
+    parser.add_argument("--drafts-dir", default="", help="Where to write editable draft files")
     parser.add_argument("--open-image", action="store_true", help="Open each page image in the default viewer")
     parser.add_argument("--production-prompts", action="store_true", help="Use production prompts instead of test prompts")
     return parser.parse_args()
@@ -115,38 +117,12 @@ async def _run_vlm(image_path: Path, document_type: str) -> str:
 
 
 def _already_reviewed(image_path: Path, reviewed: set[str], drafts_dir: Path | None = None) -> bool:
-    if str(image_path) in reviewed:
-        return True
     if drafts_dir:
-        draft_path = drafts_dir / f"{image_path.stem}.md"
-        return draft_path.exists()
+        marker = drafts_dir / f"{image_path.stem}.reviewed"
+        if marker.exists():
+            return True
     return False
 
-
-_CANDIDATE_EDITORS = ("nano", "vim", "vi", "micro", "emacs")
-
-
-def _launch_editor(path: Path) -> None:
-    configured = os.environ.get("IDP_EDITOR") or os.environ.get("EDITOR") or os.environ.get("VISUAL")
-    candidates = [configured] if configured else []
-    candidates.extend(candidate for candidate in _CANDIDATE_EDITORS if candidate not in candidates)
-
-    last_error = None
-    for editor in candidates:
-        if not editor:
-            continue
-        try:
-            subprocess.run([editor, str(path)], check=False)
-            return
-        except FileNotFoundError as exc:
-            last_error = exc
-            continue
-
-    print(
-        f"No terminal editor found. Edit file manually, then press Enter: {path}",
-        file=sys.stderr,
-    )
-    input("Press Enter after editing...")
 
 
 async def _review_page(
@@ -213,10 +189,12 @@ async def _review_page(
                 markdown=saved_markdown,
                 vlm_entities=[],
                 operator_corrected_entities=[],
-
                 timestamp=time.time(),
             )
-            print(f"Saved correction -> {corrections_path()}", file=sys.stderr)
+            marker = drafts_dir / f"{image_path.stem}.reviewed"
+            marker.write_text("reviewed", encoding="utf-8")
+            print(f"Saved correction -> {corrections_path()}")
+
             return True
 
 
@@ -240,7 +218,7 @@ async def _main() -> None:
     print(f"Pages to review: {len(images)} (document_type={document_type}, test_mode={settings.test_mode})")
 
     reviewed = {str(record.get("page_image", "")) for record in read_corrections()}
-    pending = [img for img in images if not _already_reviewed(img, reviewed)]
+    pending = [img for img in images if not _already_reviewed(img, set(), drafts_dir)]
     print(f"Pending pages: {len(pending)}")
 
     if pending:
