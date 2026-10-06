@@ -41,6 +41,7 @@ SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html"}
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="IDP pipeline: extract entities from documents")
     parser.add_argument("--artifacts", action="store_true", help="Save markdown artifacts to output directory")
+    parser.add_argument("--force", action="store_true", help="Ignore processed cache and reprocess all files")
     return parser.parse_args()
 
 
@@ -393,19 +394,20 @@ async def _main() -> None:
     entity_store = EntityStore(settings.output_root / "entities.json")
 
     processed: set[str] = set()
-    results_path = settings.output_root / "results.jsonl"
-    if results_path.exists():
-        with open(results_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                    if record.get("status") in ("ok", "skip"):
-                        processed.add(record["file"])
-                except json.JSONDecodeError:
-                    continue
+    if not args.force:
+        results_path = settings.output_root / "results.jsonl"
+        if results_path.exists():
+            with open(results_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        if record.get("status") in ("ok", "skip"):
+                            processed.add(record["file"])
+                    except json.JSONDecodeError:
+                        continue
 
     pbar = tqdm(files, desc="Files", unit="file")
     all_new_entities: list[dict] = []
