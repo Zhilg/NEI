@@ -44,10 +44,10 @@ class Settings(BaseSettings):
     finetune_feedback_enabled: bool = Field(default=False)
     finetune_feedback_dir: Path = Field(default=Path("/output/finetune"))
     finetune_max_feedback_examples: int = Field(default=10, ge=0, le=100)
-    operator_corrections_path: Path = Field(default=Path("data/output/operator_corrections.jsonl"))
-    finetune_dataset_path: Path = Field(default=Path("data/output/finetune_data.jsonl"))
+    operator_corrections_path: Path = Field(default=Path("/output/operator_corrections.jsonl"))
+    finetune_dataset_path: Path = Field(default=Path("/output/finetune_data.jsonl"))
 
-    @field_validator("input_root", "output_root", "models_root")
+    @field_validator("input_root", "output_root", "models_root", "operator_corrections_path", "finetune_dataset_path")
     @classmethod
     def require_absolute_path(cls, value: Path) -> Path:
         if not value.is_absolute():

@@ -39,8 +39,16 @@ def _prompt_text(document_type: str = "other", visual: bool = True) -> str:
 
 
 def _is_corrected(record: dict) -> bool:
-    corrected = record.get("operator_corrected_entities")
-    return isinstance(corrected, list) and bool(corrected)
+    md = str(record.get("markdown", ""))
+    corrected_entities = record.get("operator_corrected_entities")
+    vlm_entities = record.get("vlm_entities", [])
+    has_md_change = bool(md.strip())
+    has_entity_change = (
+        isinstance(corrected_entities, list)
+        and isinstance(vlm_entities, list)
+        and corrected_entities != vlm_entities
+    )
+    return has_md_change or has_entity_change
 
 
 def build_samples(

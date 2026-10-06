@@ -214,7 +214,26 @@ async def _main() -> None:
     document_type = args.document_type
 
     print(f"Pages to review: {len(images)} (document_type={document_type}, test_mode={settings.test_mode})")
+
     reviewed = {str(record.get("page_image", "")) for record in read_corrections()}
+    pending = [img for img in images if not _already_reviewed(img, reviewed)]
+    print(f"Pending pages: {len(pending)}")
+
+    if pending:
+        print("Processing all pages with VLM first...")
+        for index, image_path in enumerate(pending, start=1):
+            draft_path = drafts_dir / f"{image_path.stem}.draft.json"
+            if draft_path.exists():
+                print(f"  [{index}/{len(pending)}] draft exists: {image_path.name}")
+                continue
+            print(f"  [{index}/{len(pending)}] processing: {image_path.name}")
+            try:
+                markdown, entities = await _run_vlm(image_path, document_type)
+                _write_draft(draft_path, image_path, markdown, entities)
+            except Exception as exc:
+                print(f"  Failed: {exc}", file=sys.stderr)
+                continue
+
     for index, image_path in enumerate(images, start=1):
         print(f"\n[{index}/{len(images)}] {image_path}")
         if _already_reviewed(image_path, reviewed):

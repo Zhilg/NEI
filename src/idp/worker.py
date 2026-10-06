@@ -260,7 +260,10 @@ async def _process_file(
             document_type = detect_document_type(file_path, vlm_markdown)
             pbar.set_postfix(file=file_path.name, stage="text_entities")
             llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(vlm_markdown, model=llm_model, document_type=document_type)
+            text_entities = await extract_entities_from_text(vlm_markdown, model=llm_model, document_type=document_type)
+            pbar.set_postfix(file=file_path.name, stage="image_entities")
+            image_entities = await extract_entities_from_images(pngs, document_type=document_type)
+            all_entities = _aggregate_entities(text_entities + image_entities)
             paragraphs = extract_paragraphs(vlm_markdown)
             try:
                 annotation = await generate_document_annotation(images=pngs[:2])

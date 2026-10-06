@@ -368,7 +368,7 @@ def _handwriting_penalty(value: str, evidence: str, source_text: str) -> float:
 def _adjust_confidence(entity: dict, source_text: str = "") -> dict:
     entity = dict(entity)
     raw_confidence = entity.get("confidence")
-    confidence = float(raw_confidence) if raw_confidence is not None else 0.0
+    confidence = float(raw_confidence) if raw_confidence is not None else 0.5
     value = str(entity.get("value", "")).strip()
     evidence = str(entity.get("evidence", "")).strip()
     handwritten = bool(entity.get("handwritten", False))
