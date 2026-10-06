@@ -244,6 +244,23 @@ def _extract_entities_regex(text: str) -> list[dict]:
     return entities
 
 
+def _extract_entities_fallback(text: str) -> list[dict]:
+    entities: list[dict] = []
+    for match in re.finditer(r'"type"\s*:\s*"([^"]+)"', text):
+        etype = match.group(1)
+        after = text[match.end():match.end() + 300]
+        value_match = re.search(r'"value"\s*:\s*"((?:[^"\\]|\\.)*)"', after)
+        if not value_match:
+            value_match = re.search(r'"value"\s*:\s*\'((?:[^\'\\]|\\.)*)\'', after)
+        if not value_match:
+            value_match = re.search(r'"value"\s*:\s*([^,\}\n\r]+)', after)
+        if value_match:
+            value = value_match.group(1).strip().strip('"').strip("'")
+            if value:
+                entities.append({"type": etype, "value": value})
+    return entities
+
+
 _LONG_VALUE_TYPES = {
     "handwritten_text", "handwritten_note",
     "handwritten_amount", "payment_details",
@@ -758,6 +775,9 @@ def _parse_vlm_json_response(content: str, context: str) -> dict:
     entities = _extract_entities_regex(cleaned)
     if entities:
         return {"entities": entities}
+    fallback = _extract_entities_fallback(cleaned)
+    if fallback:
+        return {"entities": fallback}
     _write_trash(context, content)
     print(f"WARNING: VLM {context} JSON parse error", file=sys.stderr)
     print(f"  Raw response: {content[:300]}", file=sys.stderr)
