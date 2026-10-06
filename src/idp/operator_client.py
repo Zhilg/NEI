@@ -46,13 +46,16 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _collect_images(input_path: Path, drafts_dir: Path) -> list[Path]:
+    print(f"operator_client: _collect_images input={input_path}", file=sys.stderr, flush=True)
     if input_path.is_file():
         if input_path.suffix.lower() in PDF_EXTENSIONS:
+            print(f"operator_client: rendering PDF -> {input_path}", file=sys.stderr, flush=True)
             return render_pdf_to_pngs(input_path, drafts_dir / "rendered" / input_path.stem)
         return [input_path]
     if not input_path.is_dir():
         raise FileNotFoundError(f"input not found: {input_path}")
     images = sorted(p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    print(f"operator_client: images from dir={len(images)}", file=sys.stderr, flush=True)
     if not images:
         pdfs = sorted(p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() in PDF_EXTENSIONS)
         for pdf in pdfs:
@@ -197,12 +200,18 @@ async def _review_page(
 
 
 async def _main() -> None:
+    print("operator_client: _main() started", file=sys.stderr, flush=True)
     args = _parse_args()
+    print(f"operator_client: args={args}", file=sys.stderr, flush=True)
     settings.test_mode = not args.production_prompts
+    print(f"operator_client: test_mode={settings.test_mode}", file=sys.stderr, flush=True)
 
     input_path = Path(args.input)
+    print(f"operator_client: input_path={input_path} exists={input_path.exists()}", file=sys.stderr, flush=True)
     drafts_dir = Path(args.drafts_dir) if args.drafts_dir else corrections_path().parent / "operator_drafts"
+    print(f"operator_client: drafts_dir={drafts_dir}", file=sys.stderr, flush=True)
     drafts_dir.mkdir(parents=True, exist_ok=True)
+    print(f"operator_client: drafts_dir created", file=sys.stderr, flush=True)
 
     images = _collect_images(input_path, drafts_dir)
     if args.limit > 0:
@@ -252,8 +261,10 @@ async def _main() -> None:
 
 
 def main() -> None:
+    print("operator_client: main() starting", file=sys.stderr, flush=True)
     asyncio.run(_main())
 
 
 if __name__ == "__main__":
+    print("operator_client: __main__ starting", file=sys.stderr, flush=True)
     main()
