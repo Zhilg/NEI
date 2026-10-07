@@ -35,192 +35,285 @@ from idp.vlm_client import (
     extract_entities_from_images,
 )
 
-
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html"}
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="IDP pipeline: extract entities from documents")
-    parser.add_argument("--artifacts", action="store_true", help="Save markdown artifacts to output directory")
-    parser.add_argument("--force", action="store_true", help="Ignore processed cache and reprocess all files")
-    return parser.parse_args()
+class Worker:
+    def __init__(self, artifacts_mode: bool = False, force: bool = False) -> None:
+        self.artifacts_mode = artifacts_mode
+        self.force = force
 
+    def _find_files(self, input_root: Path) -> list[Path]:
+        files: list[Path] = []
+        dirs: set[Path] = set()
+        for path in sorted(input_root.rglob("*")):
+            if path.is_dir():
+                html_files = list(path.glob("*.html")) + list(path.glob("*.htm"))
+                if html_files:
+                    dirs.add(path)
+            elif path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                files.append(path)
+        filtered_files = [f for f in files if not any(f.is_relative_to(d) for d in dirs)]
+        return sorted(dirs) + sorted(filtered_files)
 
-def _find_files(input_root: Path) -> list[Path]:
-    files: list[Path] = []
-    dirs: set[Path] = set()
-    for path in sorted(input_root.rglob("*")):
-        if path.is_dir():
-            html_files = list(path.glob("*.html")) + list(path.glob("*.htm"))
-            if html_files:
-                dirs.add(path)
-        elif path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            files.append(path)
-    filtered_files = [f for f in files if not any(f.is_relative_to(d) for d in dirs)]
-    return sorted(dirs) + sorted(filtered_files)
+    def _already_processed(self, file_path: Path, processed: set[str]) -> bool:
+        relative = str(file_path.relative_to(settings.input_root))
+        return relative in processed
 
+    def _get_new_entity_types(self, entities: list[dict], schema: dict) -> list[dict]:
+        existing_names = {t["name"] for t in schema.get("entity_types", [])}
+        found_types: set[str] = set()
+        for entity in entities:
+            if isinstance(entity, dict):
+                etype = entity.get("type")
+                if etype and etype not in existing_names:
+                    found_types.add(etype)
+        new_types = []
+        for name in sorted(found_types):
+            new_types.append({"name": name, "description": f"Auto-detected entity type: {name}"})
+        return new_types
 
-def _already_processed(file_path: Path, processed: set[str]) -> bool:
-    relative = str(file_path.relative_to(settings.input_root))
-    return relative in processed
-
-
-def _get_new_entity_types(entities: list[dict], schema: dict) -> list[dict]:
-    existing_names = {t["name"] for t in schema.get("entity_types", [])}
-    found_types: set[str] = set()
-    for entity in entities:
-        if isinstance(entity, dict):
-            etype = entity.get("type")
-            if etype and etype not in existing_names:
-                found_types.add(etype)
-    new_types = []
-    for name in sorted(found_types):
-        new_types.append({"name": name, "description": f"Auto-detected entity type: {name}"})
-    return new_types
-
-
-def _postprocess_markdown(markdown: str) -> str:
-    lines = markdown.splitlines()
-    result: list[str] = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-        if "|" in stripped and (stripped.startswith("|") or re.match(r"^\s*\|", stripped)):
-            table_block = [stripped]
-            j = i + 1
-            while j < len(lines):
-                next_line = lines[j].strip()
-                if "|" in next_line and (next_line.startswith("|") or re.match(r"^\s*\|", next_line)):
-                    table_block.append(next_line)
-                    j += 1
-                else:
-                    break
-            normalized_table = _normalize_table(table_block)
-            result.append("\n".join(normalized_table))
-            i = j
-            continue
-        if not stripped:
-            result.append("")
+    def _postprocess_markdown(self, markdown: str) -> str:
+        lines = markdown.splitlines()
+        result: list[str] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            if "|" in stripped and (stripped.startswith("|") or re.match(r"^\s*\|", stripped)):
+                table_block = [stripped]
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j].strip()
+                    if "|" in next_line and (next_line.startswith("|") or re.match(r"^\s*\|", next_line)):
+                        table_block.append(next_line)
+                        j += 1
+                    else:
+                        break
+                normalized_table = self._normalize_table(table_block)
+                result.append("\n".join(normalized_table))
+                i = j
+                continue
+            if not stripped:
+                result.append("")
+                i += 1
+                continue
+            cleaned = re.sub(r"^\s*(?:\d+[\.\)]\s+|[-•]\s+)", "", stripped)
+            result.append(cleaned)
             i += 1
-            continue
-        cleaned = re.sub(r"^\s*(?:\d+[\.\)]\s+|[-•]\s+)", "", stripped)
-        result.append(cleaned)
-        i += 1
-    text = "\n".join(result)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+        text = "\n".join(result)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
+    @staticmethod
+    def _normalize_table(table_lines: list[str]) -> list[str]:
+        if len(table_lines) < 2:
+            return table_lines
+        parsed_rows: list[list[str]] = []
+        for line in table_lines:
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            parsed_rows.append(cells)
+        if not parsed_rows:
+            return table_lines
+        max_cols = max(len(row) for row in parsed_rows)
+        normalized: list[str] = []
+        for row_idx, row in enumerate(parsed_rows):
+            while len(row) < max_cols:
+                row.append("")
+            normalized_row = "| " + " | ".join(row) + " |"
+            normalized.append(normalized_row)
+            if row_idx == 0:
+                separator = "| " + " | ".join(["---"] * max_cols) + " |"
+                normalized.append(separator)
+        return normalized
 
-def _normalize_table(table_lines: list[str]) -> list[str]:
-    if len(table_lines) < 2:
-        return table_lines
-    parsed_rows: list[list[str]] = []
-    for line in table_lines:
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        parsed_rows.append(cells)
-    if not parsed_rows:
-        return table_lines
-    max_cols = max(len(row) for row in parsed_rows)
-    normalized: list[str] = []
-    for row_idx, row in enumerate(parsed_rows):
-        while len(row) < max_cols:
-            row.append("")
-        normalized_row = "| " + " | ".join(row) + " |"
-        normalized.append(normalized_row)
-        if row_idx == 0:
-            separator = "| " + " | ".join(["---"] * max_cols) + " |"
-            normalized.append(separator)
-    return normalized
+    @staticmethod
+    def _normalize_typography(text: str) -> str:
+        text = text.replace("\u00A0", " ")
+        text = text.replace("\u200b", "")
+        text = text.replace("\u200c", "")
+        text = text.replace("\u200d", "")
+        text = text.replace("«", '"').replace("»", '"')
+        text = text.replace("„", '"').replace("“", '"').replace("”", '"')
+        text = text.replace("‘", "'").replace("’", "'")
+        text = text.replace("–", "-")
+        text = text.replace("—", "-")
+        text = text.replace("…", "...")
+        return text
 
+    @staticmethod
+    def _normalize_entities_and_formulas(text: str) -> str:
+        text = re.sub(r"от\s+(\d+(?:\.\d+)?)\s*до\s+(\d+(?:\.\d+)?)", lambda m: f" RANGE_NUM {m.group(1)}-{m.group(2)} ", text)
+        text = re.sub(r"[±\+]\s*(\d+(?:\.\d+)?)", lambda m: f" TOLERANCE_NUM {m.group(1)} ", text)
+        text = re.sub(r"\b\d+(?:\.\d+)?\s*(?:мм|см|м|км|кг|г|с|мс|Гц|кГц|МГц|В|А|Вт|кВт)\b", " NUM UNIT ", text)
+        text = re.sub(r"\$\$[^$]+\$\$", " FORMULA ", text)
+        text = re.sub(r"\$[^$]+\$", " FORMULA ", text)
+        return text
 
-def _normalize_typography(text: str) -> str:
-    text = text.replace("\u00A0", " ")
-    text = text.replace("\u200b", "")
-    text = text.replace("\u200c", "")
-    text = text.replace("\u200d", "")
-    text = text.replace("«", '"').replace("»", '"')
-    text = text.replace("„", '"').replace("“", '"').replace("”", '"')
-    text = text.replace("‘", "'").replace("’", "'")
-    text = text.replace("–", "-")
-    text = text.replace("—", "-")
-    text = text.replace("…", "...")
-    return text
-
-
-def _normalize_entities_and_formulas(text: str) -> str:
-    text = re.sub(r"от\s+(\d+(?:\.\d+)?)\s*до\s+(\d+(?:\.\d+)?)", lambda m: f" RANGE_NUM {m.group(1)}-{m.group(2)} ", text)
-    text = re.sub(r"[±\+]\s*(\d+(?:\.\d+)?)", lambda m: f" TOLERANCE_NUM {m.group(1)} ", text)
-    text = re.sub(r"\b\d+(?:\.\d+)?\s*(?:мм|см|м|км|кг|г|с|мс|Гц|кГц|МГц|В|А|Вт|кВт)\b", " NUM UNIT ", text)
-    text = re.sub(r"\$\$[^$]+\$\$", " FORMULA ", text)
-    text = re.sub(r"\$[^$]+\$", " FORMULA ", text)
-    return text
-
-
-def _normalize_markdown(markdown: str) -> str:
-    return _normalize_typography(
-        _normalize_entities_and_formulas(
-            _clean_ocr_artifacts(
-                _postprocess_markdown(markdown)
+    def _normalize_markdown(self, markdown: str) -> str:
+        return self._normalize_typography(
+            self._normalize_entities_and_formulas(
+                _clean_ocr_artifacts(
+                    self._postprocess_markdown(markdown)
+                )
             )
         )
-    )
 
+    def _aggregate_entities(self, entities: list[dict]) -> list[dict]:
+        merged: dict[tuple, dict] = {}
+        for entity in entities:
+            key = (
+                str(entity.get("type", "")),
+                str(entity.get("value", "")).strip().lower(),
+            )
+            if key in merged:
+                existing = merged[key]
+                evidence = str(entity.get("evidence", "") or existing.get("evidence", ""))
+                if evidence and evidence not in existing.get("evidence", ""):
+                    if existing.get("evidence"):
+                        existing["evidence"] = existing["evidence"] + " | " + evidence
+                    else:
+                        existing["evidence"] = evidence
+            else:
+                merged[key] = dict(entity)
+        return list(merged.values())
 
-def _aggregate_entities(entities: list[dict]) -> list[dict]:
-    merged: dict[tuple, dict] = {}
-    for entity in entities:
-        key = (
-            str(entity.get("type", "")),
-            str(entity.get("value", "")).strip().lower(),
+    async def _process_file(
+        self,
+        file_path: Path,
+        result_writer: ResultWriter,
+        entity_store: EntityStore,
+        pbar: tqdm,
+    ) -> dict:
+        relative = file_path.relative_to(settings.input_root)
+        stem = file_path.stem if file_path.is_file() else file_path.name
+        output_md = settings.output_root / f"{stem}.md"
+        output_md_tmp = output_md.with_suffix(".md.tmp")
+        file_type = file_path.suffix.lower().lstrip(".") if file_path.is_file() else "html_folder"
+
+        timer = FileTimer(
+            stats_writer=None,
+            file_name=str(relative),
+            file_type=file_type,
+            size_bytes=file_path.stat().st_size if file_path.is_file() else 0,
+            pages=None,
         )
-        if key in merged:
-            existing = merged[key]
-            evidence = str(entity.get("evidence", "") or existing.get("evidence", ""))
-            if evidence and evidence not in existing.get("evidence", ""):
-                if existing.get("evidence"):
-                    existing["evidence"] = existing["evidence"] + " | " + evidence
-                else:
-                    existing["evidence"] = evidence
-        else:
-            merged[key] = dict(entity)
-    return list(merged.values())
 
+        markdown = ""
+        paragraphs: list[dict] = []
+        all_entities: list[dict] = []
+        annotation = ""
+        document_type = "other"
+        status = "error"
+        error = None
 
-async def _process_file(
-    file_path: Path,
-    result_writer: ResultWriter,
-    entity_store: EntityStore,
-    pbar: tqdm,
-    artifacts_mode: bool,
-) -> dict:
-    relative = file_path.relative_to(settings.input_root)
-    stem = file_path.stem if file_path.is_file() else file_path.name
-    output_md = settings.output_root / f"{stem}.md"
-    output_md_tmp = output_md.with_suffix(".md.tmp")
-    file_type = file_path.suffix.lower().lstrip(".") if file_path.is_file() else "html_folder"
-
-    timer = FileTimer(
-        stats_writer=None,
-        file_name=str(relative),
-        file_type=file_type,
-        size_bytes=file_path.stat().st_size if file_path.is_file() else 0,
-        pages=None,
-    )
-
-    markdown = ""
-    paragraphs: list[dict] = []
-    all_entities: list[dict] = []
-    annotation = ""
-    document_type = "other"
-    status = "error"
-    error = None
-
-    try:
-        if file_path.is_dir():
-            pbar.set_postfix(file=file_path.name, stage="html_folder")
-            markdown = convert_html_folder_to_markdown(file_path)
-            if not markdown.strip():
+        try:
+            if file_path.is_dir():
+                pbar.set_postfix(file=file_path.name, stage="html_folder")
+                markdown = convert_html_folder_to_markdown(file_path)
+                if not markdown.strip():
+                    status = "skip"
+                    pbar.set_postfix(file=file_path.name, stage="skip")
+                    return {
+                        "file": str(relative),
+                        "type": file_type,
+                        "size_bytes": timer.size_bytes,
+                        "pages": None,
+                        "duration_sec": round(time.perf_counter() - timer.start, 3),
+                        "status": status,
+                        "error": error,
+                        "paragraphs": [],
+                        "entities": [],
+                        "annotation": "",
+                        "document_type": document_type,
+                        "metadata": {},
+                    }
+                document_type = detect_document_type(file_path, markdown)
+                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
+                llm_model = settings.vl_model
+                all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
+                try:
+                    annotation = await generate_document_annotation(text=markdown)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
+                if self.artifacts_mode:
+                    output_md_tmp.write_text(markdown, encoding="utf-8")
+                    os.replace(output_md_tmp, output_md)
+                status = "ok"
+            elif file_path.suffix.lower() == ".pdf":
+                pbar.set_postfix(file=file_path.name, stage="render")
+                _, pngs, _ = extract_pdf_text_and_visual_pages(file_path)
+                timer.pages = len(pngs)
+                rendered_dir = settings.output_root / "rendered" / file_path.stem
+                rendered_dir.mkdir(parents=True, exist_ok=True)
+                for png in pngs:
+                    shutil.copy2(png, rendered_dir / png.name)
+                vlm_markdown = await reconstruct_markdown(pngs)
+                document_type = detect_document_type(file_path, vlm_markdown)
+                pbar.set_postfix(file=file_path.name, stage="text_entities")
+                llm_model = settings.vl_model
+                text_entities = await extract_entities_from_text(vlm_markdown, model=llm_model, document_type=document_type)
+                pbar.set_postfix(file=file_path.name, stage="image_entities")
+                image_entities = await extract_entities_from_images(pngs, document_type=document_type)
+                all_entities = self._aggregate_entities(text_entities + image_entities)
+                paragraphs = extract_paragraphs(vlm_markdown)
+                try:
+                    annotation = await generate_document_annotation(text=vlm_markdown)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
+                if self.artifacts_mode:
+                    output_md_tmp.write_text(self._normalize_markdown(vlm_markdown), encoding="utf-8")
+                    os.replace(output_md_tmp, output_md)
+                status = "ok"
+            elif file_path.suffix.lower() == ".docx":
+                pbar.set_postfix(file=file_path.name, stage="docx")
+                markdown = convert_docx_to_markdown(file_path)
+                document_type = detect_document_type(file_path, markdown)
+                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
+                paragraphs = extract_paragraphs(markdown)
+                llm_model = settings.vl_model
+                all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
+                try:
+                    annotation = await generate_document_annotation(text=markdown)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
+                if self.artifacts_mode:
+                    output_md_tmp.write_text(self._normalize_markdown(markdown), encoding="utf-8")
+                    os.replace(output_md_tmp, output_md)
+                status = "ok"
+            elif file_path.suffix.lower() == ".pptx":
+                pbar.set_postfix(file=file_path.name, stage="pptx")
+                markdown = convert_pptx_to_markdown(file_path)
+                document_type = detect_document_type(file_path, markdown)
+                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
+                paragraphs = extract_paragraphs(markdown)
+                llm_model = settings.vl_model
+                all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
+                try:
+                    annotation = await generate_document_annotation(text=markdown)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
+                if self.artifacts_mode:
+                    output_md_tmp.write_text(self._normalize_markdown(markdown), encoding="utf-8")
+                    os.replace(output_md_tmp, output_md)
+                status = "ok"
+            elif file_path.suffix.lower() == ".html":
+                pbar.set_postfix(file=file_path.name, stage="html")
+                markdown = convert_html_to_markdown(file_path)
+                document_type = detect_document_type(file_path, markdown)
+                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
+                paragraphs = extract_paragraphs(markdown)
+                llm_model = settings.vl_model
+                all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
+                try:
+                    annotation = await generate_document_annotation(text=markdown)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
+                if self.artifacts_mode:
+                    output_md_tmp.write_text(self._normalize_markdown(markdown), encoding="utf-8")
+                    os.replace(output_md_tmp, output_md)
+                status = "ok"
+            else:
                 status = "skip"
                 pbar.set_postfix(file=file_path.name, stage="skip")
                 return {
@@ -237,212 +330,116 @@ async def _process_file(
                     "document_type": document_type,
                     "metadata": {},
                 }
-            document_type = detect_document_type(file_path, markdown)
-            pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-            paragraphs = extract_paragraphs(markdown)
-            llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
-            try:
-                annotation = await generate_document_annotation(text=markdown)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Annotation generation failed: {exc}", file=sys.stderr)
-            if artifacts_mode:
-                output_md_tmp.write_text(markdown, encoding="utf-8")
-                os.replace(output_md_tmp, output_md)
-            status = "ok"
-        elif file_path.suffix.lower() == ".pdf":
-            pbar.set_postfix(file=file_path.name, stage="render")
-            _, pngs, _ = extract_pdf_text_and_visual_pages(file_path)
-            timer.pages = len(pngs)
-            rendered_dir = settings.output_root / "rendered" / file_path.stem
-            rendered_dir.mkdir(parents=True, exist_ok=True)
-            for png in pngs:
-                shutil.copy2(png, rendered_dir / png.name)
-            vlm_markdown = await reconstruct_markdown(pngs)
-            document_type = detect_document_type(file_path, vlm_markdown)
-            pbar.set_postfix(file=file_path.name, stage="text_entities")
-            llm_model = settings.vl_model
-            text_entities = await extract_entities_from_text(vlm_markdown, model=llm_model, document_type=document_type)
-            pbar.set_postfix(file=file_path.name, stage="image_entities")
-            image_entities = await extract_entities_from_images(pngs, document_type=document_type)
-            all_entities = _aggregate_entities(text_entities + image_entities)
-            paragraphs = extract_paragraphs(vlm_markdown)
-            try:
-                annotation = await generate_document_annotation(text=vlm_markdown)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Annotation generation failed: {exc}", file=sys.stderr)
-            if artifacts_mode:
-                output_md_tmp.write_text(_normalize_markdown(vlm_markdown), encoding="utf-8")
-                os.replace(output_md_tmp, output_md)
-            status = "ok"
-        elif file_path.suffix.lower() == ".docx":
-            pbar.set_postfix(file=file_path.name, stage="docx")
-            markdown = convert_docx_to_markdown(file_path)
-            document_type = detect_document_type(file_path, markdown)
-            pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-            paragraphs = extract_paragraphs(markdown)
-            llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
-            try:
-                annotation = await generate_document_annotation(text=markdown)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Annotation generation failed: {exc}", file=sys.stderr)
-            if artifacts_mode:
-                output_md_tmp.write_text(_normalize_markdown(markdown), encoding="utf-8")
-                os.replace(output_md_tmp, output_md)
-            status = "ok"
-        elif file_path.suffix.lower() == ".pptx":
-            pbar.set_postfix(file=file_path.name, stage="pptx")
-            markdown = convert_pptx_to_markdown(file_path)
-            document_type = detect_document_type(file_path, markdown)
-            pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-            paragraphs = extract_paragraphs(markdown)
-            llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
-            try:
-                annotation = await generate_document_annotation(text=markdown)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Annotation generation failed: {exc}", file=sys.stderr)
-            if artifacts_mode:
-                output_md_tmp.write_text(_normalize_markdown(markdown), encoding="utf-8")
-                os.replace(output_md_tmp, output_md)
-            status = "ok"
-        elif file_path.suffix.lower() == ".html":
-            pbar.set_postfix(file=file_path.name, stage="html")
-            markdown = convert_html_to_markdown(file_path)
-            document_type = detect_document_type(file_path, markdown)
-            pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-            paragraphs = extract_paragraphs(markdown)
-            llm_model = settings.vl_model
-            all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
-            try:
-                annotation = await generate_document_annotation(text=markdown)
-            except Exception as exc:  # noqa: BLE001
-                print(f"Annotation generation failed: {exc}", file=sys.stderr)
-            if artifacts_mode:
-                output_md_tmp.write_text(_normalize_markdown(markdown), encoding="utf-8")
-                os.replace(output_md_tmp, output_md)
-            status = "ok"
-        else:
-            status = "skip"
-            pbar.set_postfix(file=file_path.name, stage="skip")
-            return {
-                "file": str(relative),
-                "type": file_type,
-                "size_bytes": timer.size_bytes,
-                "pages": None,
-                "duration_sec": round(time.perf_counter() - timer.start, 3),
-                "status": status,
-                "error": error,
-                "paragraphs": [],
-                "entities": [],
-                "annotation": "",
-                "document_type": document_type,
-                "metadata": {},
-            }
-        pbar.set_postfix(file=file_path.name, stage="done")
-    except Exception as exc:  # noqa: BLE001
-        if output_md_tmp.exists():
-            output_md_tmp.unlink()
-        status = "error"
-        error = str(exc)
-        pbar.set_postfix(file=file_path.name, stage="error")
+            pbar.set_postfix(file=file_path.name, stage="done")
+        except Exception as exc:  # noqa: BLE001
+            if output_md_tmp.exists():
+                output_md_tmp.unlink()
+            status = "error"
+            error = str(exc)
+            pbar.set_postfix(file=file_path.name, stage="error")
 
-    duration = time.perf_counter() - timer.start
-    stats = StatsWriter(settings.output_root / "stats.jsonl")
-    stats.record(
-        file=str(relative),
-        type=file_type,
-        size_bytes=timer.size_bytes,
-        pages=timer.pages,
-        duration_sec=round(duration, 3),
-        status=status,
-        error=error,
-    )
+        duration = time.perf_counter() - timer.start
+        stats = StatsWriter(settings.output_root / "stats.jsonl")
+        stats.record(
+            file=str(relative),
+            type=file_type,
+            size_bytes=timer.size_bytes,
+            pages=timer.pages,
+            duration_sec=round(duration, 3),
+            status=status,
+            error=error,
+        )
 
-    metadata = extract_metadata(file_path) if file_path.is_file() else {}
-    aggregated = _aggregate_entities(all_entities)
-    result = {
-        "file": str(relative),
-        "type": file_type,
-        "size_bytes": timer.size_bytes,
-        "pages": timer.pages,
-        "duration_sec": round(duration, 3),
-        "status": status,
-        "error": error,
-        "paragraphs": paragraphs,
-        "entities": aggregated,
-        "annotation": annotation,
-        "document_type": document_type,
-        "metadata": metadata,
-    }
-    entity_store.append(str(relative), paragraphs, aggregated, annotation)
-    result_writer.write(result)
-    return result
+        metadata = extract_metadata(file_path) if file_path.is_file() else {}
+        aggregated = self._aggregate_entities(all_entities)
+        result = {
+            "file": str(relative),
+            "type": file_type,
+            "size_bytes": timer.size_bytes,
+            "pages": timer.pages,
+            "duration_sec": round(duration, 3),
+            "status": status,
+            "error": error,
+            "paragraphs": paragraphs,
+            "entities": aggregated,
+            "annotation": annotation,
+            "document_type": document_type,
+            "metadata": metadata,
+        }
+        entity_store.append(str(relative), paragraphs, aggregated, annotation)
+        result_writer.write(result)
+        return result
+
+    def _load_entity_schema(self) -> dict:
+        from idp.vlm_client import _load_entity_schema as _schema
+        return _schema()
+
+    async def run(self, input_root: Path | None = None) -> None:
+        root = input_root or settings.input_root
+        settings.output_root.mkdir(parents=True, exist_ok=True)
+        files = self._find_files(root)
+        result_writer = ResultWriter(
+            settings.output_root / "results.jsonl",
+            pretty_path=settings.output_root / "results_readable.json",
+        )
+        entity_store = EntityStore(settings.output_root / "entities.json")
+
+        processed: set[str] = set()
+        if not self.force:
+            results_path = settings.output_root / "results.jsonl"
+            if results_path.exists():
+                with open(results_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                            if record.get("status") in ("ok", "skip"):
+                                processed.add(record["file"])
+                        except json.JSONDecodeError:
+                            continue
+
+        pbar = tqdm(files, desc="Files", unit="file")
+        all_new_entities: list[dict] = []
+        file_semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+        async def _process_with_semaphore(file_path: Path) -> dict:
+            async with file_semaphore:
+                return await self._process_file(file_path, result_writer, entity_store, pbar)
+
+        pending = []
+        for file_path in pbar:
+            if self._already_processed(file_path, processed):
+                pbar.set_postfix(file=file_path.name, stage="skip")
+                continue
+            pending.append(_process_with_semaphore(file_path))
+
+        results = []
+        if pending:
+            for coro in asyncio.as_completed(pending):
+                result = await coro
+                results.append(result)
+                all_new_entities.extend(result.get("entities", []))
+
+        if all_new_entities:
+            schema = self._load_entity_schema()
+            new_types = self._get_new_entity_types(all_new_entities, schema)
+            if new_types:
+                update_entity_schema(new_types)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="IDP pipeline: extract entities from documents")
+    parser.add_argument("--artifacts", action="store_true", help="Save markdown artifacts to output directory")
+    parser.add_argument("--force", action="store_true", help="Ignore processed cache and reprocess all files")
+    return parser.parse_args()
 
 
 async def _main() -> None:
     args = _parse_args()
-    if args.artifacts:
-        settings.artifacts_mode = True
-
-    settings.output_root.mkdir(parents=True, exist_ok=True)
-    files = _find_files(settings.input_root)
-    result_writer = ResultWriter(
-        settings.output_root / "results.jsonl",
-        pretty_path=settings.output_root / "results_readable.json",
-    )
-    entity_store = EntityStore(settings.output_root / "entities.json")
-
-    processed: set[str] = set()
-    if not args.force:
-        results_path = settings.output_root / "results.jsonl"
-        if results_path.exists():
-            with open(results_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        record = json.loads(line)
-                        if record.get("status") in ("ok", "skip"):
-                            processed.add(record["file"])
-                    except json.JSONDecodeError:
-                        continue
-
-    pbar = tqdm(files, desc="Files", unit="file")
-    all_new_entities: list[dict] = []
-    file_semaphore = asyncio.Semaphore(settings.vl_concurrency)
-
-    async def _process_with_semaphore(file_path: Path) -> dict:
-        async with file_semaphore:
-            return await _process_file(file_path, result_writer, entity_store, pbar, settings.artifacts_mode)
-
-    pending = []
-    for file_path in pbar:
-        if _already_processed(file_path, processed):
-            pbar.set_postfix(file=file_path.name, stage="skip")
-            continue
-        pending.append(_process_with_semaphore(file_path))
-
-    results = []
-    if pending:
-        for coro in asyncio.as_completed(pending):
-            result = await coro
-            results.append(result)
-            all_new_entities.extend(result.get("entities", []))
-
-    if all_new_entities:
-        schema = _load_entity_schema()
-        new_types = _get_new_entity_types(all_new_entities, schema)
-        if new_types:
-            update_entity_schema(new_types)
-
-
-def _load_entity_schema() -> dict:
-    from idp.vlm_client import _load_entity_schema as _schema
-
-    return _schema()
+    worker = Worker(artifacts_mode=args.artifacts, force=args.force)
+    await worker.run()
 
 
 def main() -> None:
