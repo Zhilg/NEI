@@ -30,6 +30,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--drafts-dir", default="", help="Where to write editable draft files")
     parser.add_argument("--open-image", action="store_true", help="Open each page image in the default viewer")
     parser.add_argument("--production-prompts", action="store_true", help="Use production prompts instead of test prompts")
+    parser.add_argument("--force", action="store_true", help="Re-review pages even if they were already reviewed")
     return parser.parse_args()
 
 
@@ -113,7 +114,9 @@ async def _run_vlm(image_path: Path, document_type: str) -> str:
     return await reconstruct_markdown([image_path])
 
 
-def _already_reviewed(image_path: Path, reviewed: set[str], drafts_dir: Path | None = None) -> bool:
+def _already_reviewed(image_path: Path, reviewed: set[str], drafts_dir: Path | None = None, force: bool = False) -> bool:
+    if force:
+        return False
     if drafts_dir:
         marker = drafts_dir / f"{image_path.stem}.reviewed"
         if marker.exists():
@@ -200,7 +203,7 @@ async def _main() -> None:
     print(f"Pages to review: {len(images)} (document_type={document_type}, test_mode={settings.test_mode})")
 
     reviewed = {str(record.get("page_image", "")) for record in read_corrections()}
-    pending = [img for img in images if not _already_reviewed(img, set(), drafts_dir)]
+    pending = [img for img in images if not _already_reviewed(img, set(), drafts_dir, force=args.force)]
     print(f"Pending pages: {len(pending)}")
 
     if pending:
@@ -220,7 +223,7 @@ async def _main() -> None:
 
     for index, image_path in enumerate(images, start=1):
         print(f"\n[{index}/{len(images)}] {image_path}")
-        if _already_reviewed(image_path, reviewed, drafts_dir):
+        if _already_reviewed(image_path, reviewed, drafts_dir, force=args.force):
             print("Already reviewed — skipping.")
             continue
         try:
