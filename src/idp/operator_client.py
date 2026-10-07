@@ -30,6 +30,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--drafts-dir", default="", help="Where to write editable draft files")
     parser.add_argument("--open-image", action="store_true", help="Open each page image in the default viewer")
     parser.add_argument("--production-prompts", action="store_true", help="Use production prompts instead of test prompts")
+    parser.add_argument("--test-mode", action="store_true", help="Use minimal test prompts and reduced max_tokens")
     parser.add_argument("--force", action="store_true", help="Re-review pages even if they were already reviewed")
     return parser.parse_args()
 
@@ -185,7 +186,7 @@ async def _review_page(
 
 async def _main() -> None:
     args = _parse_args()
-    settings.test_mode = not args.production_prompts
+    settings.test_mode = args.test_mode
 
     input_path = Path(args.input)
     drafts_dir = Path(args.drafts_dir) if args.drafts_dir else corrections_path().parent / "operator_drafts"
