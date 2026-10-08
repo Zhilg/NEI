@@ -33,10 +33,6 @@ _OCR_ARTIFACT_PATTERNS = [
     re.compile(r"\b([1-9]\d*)0{3,}\b"),
 ]
 
-_VL_ENDPOINTS: list[str] = []
-_VL_ENDPOINT_INDEX = 0
-_VL_ENDPOINT_LOCK: asyncio.Lock | None = None
-
 
 class RoundRobinEndpointSelector:
     def __init__(self, endpoints: list[str]) -> None:
@@ -474,173 +470,6 @@ def extract_paragraphs(markdown: str) -> list[dict]:
     return result
 
 
-async def generate_document_annotation(
-    images: list[Path] | None = None,
-    text: str | None = None,
-    endpoint: str | None = None,
-    model: str | None = None,
-) -> str:
-    if not images and not text:
-        return ""
-    endpoint = endpoint or settings.vl_endpoint
-    model = model or settings.vl_model
-    url = f"{endpoint}/chat/completions"
-    selector = get_endpoint_selector()
-    semaphore = asyncio.Semaphore(settings.vl_concurrency)
-
-    async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
-        async def _process() -> str:
-            async with semaphore:
-                if text:
-                    user_content = [
-                        {"type": "text", "text": f"Document text:\n{text}\n\nGenerate a brief annotation (1-2 sentences)."},
-                    ]
-                else:
-                    user_content = [
-                        {"type": "text", "text": "Generate a brief annotation (1-2 sentences) for this document page."},
-                    ]
-                    for img in images[:2]:
-                        user_content.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
-                        })
-                payload = {
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": annotation_system_prompt()},
-                        {"role": "user", "content": user_content},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 200,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
-                }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                return _strip_code_fences(_strip_thinking_blocks(content)).strip()
-
-        return await _process()
-
-
-async def reconstruct_markdown(images: list[Path]) -> str:
-    if not images:
-        return ""
-    sys_prompt = with_feedback(markdown_system_prompt(test=settings.test_mode))
-    chunks = _chunked(images, settings.vl_max_images)
-    max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
-    selector = get_endpoint_selector()
-    semaphore = asyncio.Semaphore(settings.vl_concurrency)
-
-    async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
-        async def _process_chunk(i: int, chunk: list[Path]) -> str:
-            async with semaphore:
-                user_content = [
-                    {"type": "text", "text": "Reconstruct as Markdown."},
-                ]
-                for img in chunk:
-                    user_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
-                    })
-                payload = {
-                    "model": settings.vl_model,
-                    "messages": [
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
-                }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                return _strip_code_fences(_strip_thinking_blocks(content))
-
-        tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
-        parts = await asyncio.gather(*tasks)
-
-    marked = []
-    for i, part in enumerate(parts):
-        marked.append(f"<!-- page {i + 1} -->\n{part}")
-    return "\n\n".join(marked)
-
-
-async def extract_entities_from_text(
-    text: str,
-    endpoint: str | None = None,
-    model: str | None = None,
-    document_type: str = "other",
-) -> list[dict]:
-    model = model or settings.vl_model
-    sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode))
-    max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
-    max_chars = 500 if settings.test_mode else 6000
-    if len(text) > max_chars:
-        chunks = _chunk_text(text, max_chars)
-    else:
-        chunks = [text]
-    selector = RoundRobinEndpointSelector([endpoint] if endpoint else get_vl_endpoints())
-    semaphore = asyncio.Semaphore(settings.vl_concurrency)
-
-    async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
-        async def _process_chunk(i: int, chunk: str) -> list[dict]:
-            async with semaphore:
-                prompt = (
-                    "Text:\n"
-                    f"{chunk}\n\n"
-                    "Extract entities and return JSON only."
-                )
-                payload = {
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.0,
-                    "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
-                }
-                url = f"{selector.next()}/chat/completions"
-                response = await _post_with_retry(client, url, payload, selector=selector)
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                content = _strip_thinking_blocks(content)
-                parsed = _parse_vlm_json_response(content, f"entities chunk {i + 1}")
-                if not parsed:
-                    return []
-                raw_entities = parsed.get("entities", parsed.get("result", []))
-                result: list[dict] = []
-                if isinstance(raw_entities, list):
-                    for entity in raw_entities:
-                        if not isinstance(entity, dict):
-                            continue
-                        validated = _validate_entity(entity, chunk)
-                        if validated is None:
-                            continue
-                        processed = _process_entity(entity, chunk, i, test_mode=settings.test_mode)
-                        if processed is None:
-                            continue
-                        confidence = float(processed.get("confidence", 0.0))
-                        if not settings.test_mode and confidence < settings.min_entity_confidence:
-                            continue
-                        result.append(processed)
-                return result
-
-        tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
-        chunk_results = await asyncio.gather(*tasks)
-
-    all_entities: list[dict] = []
-    for entities in chunk_results:
-        all_entities.extend(entities)
-    final = _deduplicate_entities(all_entities)
-    normalized = normalize_entities(final, document_type=document_type)
-    return normalized
-
-
 def _chunk_text(text: str, max_chars: int) -> list[str]:
     if len(text) <= max_chars:
         return [text]
@@ -784,92 +613,6 @@ def _write_trash(context: str, content: str) -> None:
         pass
 
 
-async def extract_markdown_and_entities(
-    images: list[Path],
-    document_type: str = "other",
-    max_tokens: int | None = None,
-) -> tuple[str, list[dict]]:
-    if not images:
-        return "", []
-    chunks = _chunked(images, settings.vl_max_images)
-    if max_tokens is None:
-        max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
-    selector = get_endpoint_selector()
-    semaphore = asyncio.Semaphore(settings.vl_concurrency)
-
-    async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
-        async def _process_chunk(i: int, chunk: list[Path]) -> tuple[str, list[dict]]:
-            async with semaphore:
-                user_content = [
-                    {"type": "text", "text": "Process the document page: reconstruct Markdown and extract entities."},
-                ]
-                for img in chunk:
-                    user_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
-                    })
-                entity_prompt = entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode)
-                system_content = with_feedback(
-                    combined_system_prompt(document_type=document_type, test=settings.test_mode)
-                    + "\n\n"
-                    + "ENTITY EXTRACTION RULES:\n"
-                    + entity_prompt
-                )
-                payload = {
-                    "model": settings.vl_model,
-                    "messages": [
-                        {"role": "system", "content": system_content},
-                        {"role": "user", "content": user_content},
-                    ],
-                    "temperature": 0.0,
-                    "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
-                }
-                url = f"{selector.next()}/chat/completions"
-                print(f"VLM request to {url}, images: {len(chunk)}, model: {settings.vl_model}", file=sys.stderr)
-                response = await _post_with_retry(client, url, payload, selector=selector)
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                content = _strip_thinking_blocks(content)
-                print(f"VLM response length: {len(content) if content else 0}", file=sys.stderr)
-                print(f"VLM response preview: {content[:200] if content else 'EMPTY'}", file=sys.stderr)
-                parsed = _parse_vlm_json_response(content, f"combined page {i + 1}")
-                if not parsed:
-                    print(f"VLM parse failed for chunk {i + 1}", file=sys.stderr)
-                    return "", []
-                md = parsed.get("markdown", "")
-                raw_entities = parsed.get("entities", [])
-                entities: list[dict] = []
-                if isinstance(raw_entities, list):
-                    for entity in raw_entities:
-                        if not isinstance(entity, dict):
-                            continue
-                        processed = _process_entity(entity, md, i, test_mode=settings.test_mode)
-                        if processed is None:
-                            continue
-                        confidence = float(processed.get("confidence", 0.0))
-                        if not settings.test_mode and confidence < settings.min_entity_confidence:
-                            continue
-                        entities.append(processed)
-                return md, entities
-
-        tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
-        chunk_results = await asyncio.gather(*tasks)
-
-    markdown_parts: list[str] = []
-    all_entities: list[dict] = []
-    for i, (md, entities) in enumerate(chunk_results):
-        if isinstance(md, str) and md.strip():
-            markdown_parts.append(f"<!-- page {i + 1} -->\n{md}")
-        all_entities.extend(entities)
-    return "\n\n".join(markdown_parts), _deduplicate_entities(normalize_entities(all_entities, document_type=document_type))
-
-
-def get_entity_system_prompt(document_type: str = "other") -> str:
-    return with_feedback(entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode))
-
-
 def normalize_entities(entities: list[dict], document_type: str = "other") -> list[dict]:
     normalized: list[dict] = []
     for entity in entities:
@@ -906,65 +649,395 @@ def normalize_entities(entities: list[dict], document_type: str = "other") -> li
     return normalized
 
 
+class VlmClient:
+    def __init__(self) -> None:
+        self._endpoints = get_vl_endpoints()
+        self._endpoint_index = 0
+
+    def _next_endpoint(self) -> str:
+        selector = RoundRobinEndpointSelector(self._endpoints)
+        return selector.next()
+
+    async def _post_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        payload: dict,
+        *,
+        selector: RoundRobinEndpointSelector | None = None,
+    ) -> httpx.Response:
+        for attempt in range(3):
+            try:
+                response = await client.post(url, json=payload)
+            except (httpx.NetworkError, httpx.TimeoutException) as e:
+                print(f"VLM network error (attempt {attempt + 1}): {e}", file=sys.stderr)
+                if attempt < 2:
+                    if selector is not None:
+                        url = f"{selector.next()}/chat/completions"
+                    await asyncio.sleep(1)
+                    continue
+                raise
+            if response.status_code == 429:
+                await asyncio.sleep(1)
+                if selector is not None:
+                    url = f"{selector.next()}/chat/completions"
+                response = await client.post(url, json=payload)
+            if response.status_code != 200:
+                error_msg = f"VLM request failed: {response.status_code} {response.text[:500]}"
+                print(error_msg, file=sys.stderr)
+                raise RuntimeError(error_msg)
+            response.raise_for_status()
+            return response
+        raise RuntimeError("VLM request failed after retries")
+
+    async def generate_document_annotation(
+        self,
+        images: list[Path] | None = None,
+        text: str | None = None,
+        endpoint: str | None = None,
+        model: str | None = None,
+    ) -> str:
+        if not images and not text:
+            return ""
+        endpoint = endpoint or settings.vl_endpoint
+        model = model or settings.vl_model
+        url = f"{endpoint}/chat/completions"
+        selector = RoundRobinEndpointSelector(self._endpoints)
+        semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+        async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            async def _process() -> str:
+                async with semaphore:
+                    if text:
+                        user_content = [
+                            {"type": "text", "text": f"Document text:\n{text}\n\nGenerate a brief annotation (1-2 sentences)."},
+                        ]
+                    else:
+                        user_content = [
+                            {"type": "text", "text": "Generate a brief annotation (1-2 sentences) for this document page."},
+                        ]
+                        for img in images[:2]:
+                            user_content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                            })
+                    payload = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": annotation_system_prompt()},
+                            {"role": "user", "content": user_content},
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": 200,
+                        "include_reasoning": False,
+                        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    }
+                    response = await self._post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
+                    data = response.json()
+                    content = data["choices"][0]["message"]["content"]
+                    return _strip_code_fences(_strip_thinking_blocks(content)).strip()
+
+            return await _process()
+
+    async def reconstruct_markdown(self, images: list[Path]) -> str:
+        if not images:
+            return ""
+        sys_prompt = with_feedback(markdown_system_prompt(test=settings.test_mode))
+        chunks = _chunked(images, settings.vl_max_images)
+        max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+        selector = RoundRobinEndpointSelector(self._endpoints)
+        semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+        async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            async def _process_chunk(i: int, chunk: list[Path]) -> str:
+                async with semaphore:
+                    user_content = [
+                        {"type": "text", "text": "Reconstruct as Markdown."},
+                    ]
+                    for img in chunk:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                        })
+                    payload = {
+                        "model": settings.vl_model,
+                        "messages": [
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": max_tokens,
+                        "include_reasoning": False,
+                        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    }
+                    response = await self._post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
+                    data = response.json()
+                    content = data["choices"][0]["message"]["content"]
+                    return _strip_code_fences(_strip_thinking_blocks(content))
+
+            tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
+            parts = await asyncio.gather(*tasks)
+
+        marked = []
+        for i, part in enumerate(parts):
+            marked.append(f"<!-- page {i + 1} -->\n{part}")
+        return "\n\n".join(marked)
+
+    async def extract_entities_from_text(
+        self,
+        text: str,
+        endpoint: str | None = None,
+        model: str | None = None,
+        document_type: str = "other",
+    ) -> list[dict]:
+        model = model or settings.vl_model
+        sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode))
+        max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+        max_chars = 500 if settings.test_mode else 6000
+        if len(text) > max_chars:
+            chunks = _chunk_text(text, max_chars)
+        else:
+            chunks = [text]
+        selector = RoundRobinEndpointSelector([endpoint] if endpoint else self._endpoints)
+        semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+        async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            async def _process_chunk(i: int, chunk: str) -> list[dict]:
+                async with semaphore:
+                    prompt = (
+                        "Text:\n"
+                        f"{chunk}\n\n"
+                        "Extract entities and return JSON only."
+                    )
+                    payload = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "temperature": 0.0,
+                        "max_tokens": max_tokens,
+                        "include_reasoning": False,
+                        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    }
+                    url = f"{selector.next()}/chat/completions"
+                    response = await self._post_with_retry(client, url, payload, selector=selector)
+                    data = response.json()
+                    content = data["choices"][0]["message"]["content"]
+                    content = _strip_thinking_blocks(content)
+                    parsed = _parse_vlm_json_response(content, f"entities chunk {i + 1}")
+                    if not parsed:
+                        return []
+                    raw_entities = parsed.get("entities", parsed.get("result", []))
+                    result: list[dict] = []
+                    if isinstance(raw_entities, list):
+                        for entity in raw_entities:
+                            if not isinstance(entity, dict):
+                                continue
+                            validated = _validate_entity(entity, chunk)
+                            if validated is None:
+                                continue
+                            processed = _process_entity(entity, chunk, i, test_mode=settings.test_mode)
+                            if processed is None:
+                                continue
+                            confidence = float(processed.get("confidence", 0.0))
+                            if not settings.test_mode and confidence < settings.min_entity_confidence:
+                                continue
+                            result.append(processed)
+                    return result
+
+            tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
+            chunk_results = await asyncio.gather(*tasks)
+
+        all_entities: list[dict] = []
+        for entities in chunk_results:
+            all_entities.extend(entities)
+        final = _deduplicate_entities(all_entities)
+        normalized = normalize_entities(final, document_type=document_type)
+        return normalized
+
+    async def extract_entities_from_images(self, images: list[Path], document_type: str = "other") -> list[dict]:
+        if not images:
+            return []
+        sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode))
+        if document_type != "other" and not settings.test_mode:
+            sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, test=False))
+        max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+        chunks = _chunked(images, settings.vl_max_images)
+        selector = RoundRobinEndpointSelector(self._endpoints)
+        semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+        async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            async def _process_chunk(i: int, chunk: list[Path]) -> list[dict]:
+                async with semaphore:
+                    user_content = [
+                        {"type": "text", "text": "Extract all entities from this document page image."},
+                    ]
+                    for img in chunk:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                        })
+                    payload = {
+                        "model": settings.vl_model,
+                        "messages": [
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        "temperature": 0.0,
+                        "max_tokens": max_tokens,
+                        "include_reasoning": False,
+                        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    }
+                    response = await self._post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
+                    data = response.json()
+                    content = data["choices"][0]["message"]["content"]
+                    content = _strip_thinking_blocks(content)
+                    parsed = _parse_vlm_json_response(content, f"entities visual page {i + 1}")
+                    if not parsed:
+                        return []
+                    raw_entities = parsed.get("entities", [])
+                    result: list[dict] = []
+                    if isinstance(raw_entities, list):
+                        for entity in raw_entities:
+                            if not isinstance(entity, dict):
+                                continue
+                            processed = _process_entity(entity, content, i, test_mode=settings.test_mode)
+                            if processed is None:
+                                continue
+                            confidence = float(processed.get("confidence", 0.0))
+                            if not settings.test_mode and confidence < settings.min_entity_confidence:
+                                continue
+                            result.append(processed)
+                    return result
+
+            tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
+            chunk_results = await asyncio.gather(*tasks)
+
+        all_entities: list[dict] = []
+        for entities in chunk_results:
+            all_entities.extend(entities)
+        return _deduplicate_entities(normalize_entities(all_entities, document_type=document_type))
+
+    async def extract_markdown_and_entities(
+        self,
+        images: list[Path],
+        document_type: str = "other",
+        max_tokens: int | None = None,
+    ) -> tuple[str, list[dict]]:
+        if not images:
+            return "", []
+        chunks = _chunked(images, settings.vl_max_images)
+        if max_tokens is None:
+            max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+        selector = RoundRobinEndpointSelector(self._endpoints)
+        semaphore = asyncio.Semaphore(settings.vl_concurrency)
+
+        async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            async def _process_chunk(i: int, chunk: list[Path]) -> tuple[str, list[dict]]:
+                async with semaphore:
+                    user_content = [
+                        {"type": "text", "text": "Process the document page: reconstruct Markdown and extract entities."},
+                    ]
+                    for img in chunk:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                        })
+                    entity_prompt = entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode)
+                    system_content = with_feedback(
+                        combined_system_prompt(document_type=document_type, test=settings.test_mode)
+                        + "\n\n"
+                        + "ENTITY EXTRACTION RULES:\n"
+                        + entity_prompt
+                    )
+                    payload = {
+                        "model": settings.vl_model,
+                        "messages": [
+                            {"role": "system", "content": system_content},
+                            {"role": "user", "content": user_content},
+                        ],
+                        "temperature": 0.0,
+                        "max_tokens": max_tokens,
+                        "include_reasoning": False,
+                        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                    }
+                    url = f"{selector.next()}/chat/completions"
+                    print(f"VLM request to {url}, images: {len(chunk)}, model: {settings.vl_model}", file=sys.stderr)
+                    response = await self._post_with_retry(client, url, payload, selector=selector)
+                    data = response.json()
+                    content = data["choices"][0]["message"]["content"]
+                    content = _strip_thinking_blocks(content)
+                    print(f"VLM response length: {len(content) if content else 0}", file=sys.stderr)
+                    print(f"VLM response preview: {content[:200] if content else 'EMPTY'}", file=sys.stderr)
+                    parsed = _parse_vlm_json_response(content, f"combined page {i + 1}")
+                    if not parsed:
+                        print(f"VLM parse failed for chunk {i + 1}", file=sys.stderr)
+                        return "", []
+                    md = parsed.get("markdown", "")
+                    raw_entities = parsed.get("entities", [])
+                    entities: list[dict] = []
+                    if isinstance(raw_entities, list):
+                        for entity in raw_entities:
+                            if not isinstance(entity, dict):
+                                continue
+                            processed = _process_entity(entity, md, i, test_mode=settings.test_mode)
+                            if processed is None:
+                                continue
+                            confidence = float(processed.get("confidence", 0.0))
+                            if not settings.test_mode and confidence < settings.min_entity_confidence:
+                                continue
+                            entities.append(processed)
+                    return md, entities
+
+            tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
+            chunk_results = await asyncio.gather(*tasks)
+
+        markdown_parts: list[str] = []
+        all_entities: list[dict] = []
+        for i, (md, entities) in enumerate(chunk_results):
+            if isinstance(md, str) and md.strip():
+                markdown_parts.append(f"<!-- page {i + 1} -->\n{md}")
+            all_entities.extend(entities)
+        return "\n\n".join(markdown_parts), _deduplicate_entities(normalize_entities(all_entities, document_type=document_type))
+
+
+_default_vlm_client = VlmClient()
+
+
+async def generate_document_annotation(
+    images: list[Path] | None = None,
+    text: str | None = None,
+    endpoint: str | None = None,
+    model: str | None = None,
+) -> str:
+    return await _default_vlm_client.generate_document_annotation(images=images, text=text, endpoint=endpoint, model=model)
+
+
+async def reconstruct_markdown(images: list[Path]) -> str:
+    return await _default_vlm_client.reconstruct_markdown(images)
+
+
+async def extract_entities_from_text(
+    text: str,
+    endpoint: str | None = None,
+    model: str | None = None,
+    document_type: str = "other",
+) -> list[dict]:
+    return await _default_vlm_client.extract_entities_from_text(text=text, endpoint=endpoint, model=model, document_type=document_type)
+
+
 async def extract_entities_from_images(images: list[Path], document_type: str = "other") -> list[dict]:
-    if not images:
-        return []
-    sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode))
-    if document_type != "other" and not settings.test_mode:
-        sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, test=False))
-    max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
-    chunks = _chunked(images, settings.vl_max_images)
-    selector = get_endpoint_selector()
-    semaphore = asyncio.Semaphore(settings.vl_concurrency)
+    return await _default_vlm_client.extract_entities_from_images(images=images, document_type=document_type)
 
-    async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
-        async def _process_chunk(i: int, chunk: list[Path]) -> list[dict]:
-            async with semaphore:
-                user_content = [
-                    {"type": "text", "text": "Extract all entities from this document page image."},
-                ]
-                for img in chunk:
-                    user_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
-                    })
-                payload = {
-                    "model": settings.vl_model,
-                    "messages": [
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    "temperature": 0.0,
-                    "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
-                }
-                response = await _post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                content = _strip_thinking_blocks(content)
-                parsed = _parse_vlm_json_response(content, f"entities visual page {i + 1}")
-                if not parsed:
-                    return []
-                raw_entities = parsed.get("entities", [])
-                result: list[dict] = []
-                if isinstance(raw_entities, list):
-                    for entity in raw_entities:
-                        if not isinstance(entity, dict):
-                            continue
-                        processed = _process_entity(entity, content, i, test_mode=settings.test_mode)
-                        if processed is None:
-                            continue
-                        confidence = float(processed.get("confidence", 0.0))
-                        if not settings.test_mode and confidence < settings.min_entity_confidence:
-                            continue
-                        result.append(processed)
-                return result
 
-        tasks = [_process_chunk(i, chunk) for i, chunk in enumerate(chunks)]
-        chunk_results = await asyncio.gather(*tasks)
+async def extract_markdown_and_entities(
+    images: list[Path],
+    document_type: str = "other",
+    max_tokens: int | None = None,
+) -> tuple[str, list[dict]]:
+    return await _default_vlm_client.extract_markdown_and_entities(images=images, document_type=document_type, max_tokens=max_tokens)
 
-    all_entities: list[dict] = []
-    for entities in chunk_results:
-        all_entities.extend(entities)
-    return _deduplicate_entities(normalize_entities(all_entities, document_type=document_type))
+
+def get_entity_system_prompt(document_type: str = "other") -> str:
+    return with_feedback(entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode))
