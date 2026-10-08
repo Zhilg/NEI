@@ -9,8 +9,8 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from tqdm import tqdm
@@ -36,6 +36,38 @@ from idp.vlm_client import (
 )
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html"}
+
+
+@dataclass
+class FileResult:
+    file: str
+    type: str
+    size_bytes: int
+    pages: int | None
+    duration_sec: float
+    status: str
+    error: str | None
+    paragraphs: list[dict]
+    entities: list[dict]
+    annotation: str
+    document_type: str
+    metadata: dict
+
+    def to_dict(self) -> dict:
+        return {
+            "file": self.file,
+            "type": self.type,
+            "size_bytes": self.size_bytes,
+            "pages": self.pages,
+            "duration_sec": self.duration_sec,
+            "status": self.status,
+            "error": self.error,
+            "paragraphs": self.paragraphs,
+            "entities": self.entities,
+            "annotation": self.annotation,
+            "document_type": self.document_type,
+            "metadata": self.metadata,
+        }
 
 
 class Worker:
@@ -199,176 +231,170 @@ class Worker:
             pages=None,
         )
 
-        markdown = ""
-        paragraphs: list[dict] = []
-        all_entities: list[dict] = []
-        annotation = ""
-        document_type = "other"
-        status = "error"
-        error = None
-
         try:
             if file_path.is_dir():
-                pbar.set_postfix(file=file_path.name, stage="html_folder")
-                markdown = convert_html_folder_to_markdown(file_path)
-                if not markdown.strip():
-                    status = "skip"
-                    pbar.set_postfix(file=file_path.name, stage="skip")
-                    return {
-                        "file": str(relative),
-                        "type": file_type,
-                        "size_bytes": timer.size_bytes,
-                        "pages": None,
-                        "duration_sec": round(time.perf_counter() - timer.start, 3),
-                        "status": status,
-                        "error": error,
-                        "paragraphs": [],
-                        "entities": [],
-                        "annotation": "",
-                        "document_type": document_type,
-                        "metadata": {},
-                    }
-                document_type = detect_document_type(file_path, markdown)
-                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-                llm_model = settings.vl_model
-                all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
-                try:
-                    annotation = await generate_document_annotation(text=markdown)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
-                if self.artifacts_mode:
-                    output_md_tmp.write_text(markdown, encoding="utf-8")
-                    os.replace(output_md_tmp, output_md)
-                status = "ok"
+                result = await self._process_html_folder(file_path, output_md_tmp, output_md, timer)
             elif file_path.suffix.lower() == ".pdf":
-                pbar.set_postfix(file=file_path.name, stage="render")
-                _, pngs, _ = extract_pdf_text_and_visual_pages(file_path)
-                timer.pages = len(pngs)
-                rendered_dir = settings.output_root / "rendered" / file_path.stem
-                rendered_dir.mkdir(parents=True, exist_ok=True)
-                for png in pngs:
-                    shutil.copy2(png, rendered_dir / png.name)
-                vlm_markdown = await reconstruct_markdown(pngs)
-                document_type = detect_document_type(file_path, vlm_markdown)
-                pbar.set_postfix(file=file_path.name, stage="text_entities")
-                llm_model = settings.vl_model
-                text_entities = await extract_entities_from_text(vlm_markdown, model=llm_model, document_type=document_type)
-                pbar.set_postfix(file=file_path.name, stage="image_entities")
-                image_entities = await extract_entities_from_images(pngs, document_type=document_type)
-                all_entities = self._aggregate_entities(text_entities + image_entities)
-                paragraphs = extract_paragraphs(vlm_markdown)
-                try:
-                    annotation = await generate_document_annotation(text=vlm_markdown)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
-                if self.artifacts_mode:
-                    output_md_tmp.write_text(self._normalize_markdown(vlm_markdown), encoding="utf-8")
-                    os.replace(output_md_tmp, output_md)
-                status = "ok"
+                result = await self._process_pdf(file_path, output_md_tmp, output_md, timer)
             elif file_path.suffix.lower() == ".docx":
-                pbar.set_postfix(file=file_path.name, stage="docx")
-                markdown = convert_docx_to_markdown(file_path)
-                document_type = detect_document_type(file_path, markdown)
-                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-                paragraphs = extract_paragraphs(markdown)
-                llm_model = settings.vl_model
-                all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
-                try:
-                    annotation = await generate_document_annotation(text=markdown)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
-                if self.artifacts_mode:
-                    output_md_tmp.write_text(self._normalize_markdown(markdown), encoding="utf-8")
-                    os.replace(output_md_tmp, output_md)
-                status = "ok"
+                result = await self._process_docx(file_path, output_md_tmp, output_md, timer)
             elif file_path.suffix.lower() == ".pptx":
-                pbar.set_postfix(file=file_path.name, stage="pptx")
-                markdown = convert_pptx_to_markdown(file_path)
-                document_type = detect_document_type(file_path, markdown)
-                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-                paragraphs = extract_paragraphs(markdown)
-                llm_model = settings.vl_model
-                all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
-                try:
-                    annotation = await generate_document_annotation(text=markdown)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
-                if self.artifacts_mode:
-                    output_md_tmp.write_text(self._normalize_markdown(markdown), encoding="utf-8")
-                    os.replace(output_md_tmp, output_md)
-                status = "ok"
+                result = await self._process_pptx(file_path, output_md_tmp, output_md, timer)
             elif file_path.suffix.lower() == ".html":
-                pbar.set_postfix(file=file_path.name, stage="html")
-                markdown = convert_html_to_markdown(file_path)
-                document_type = detect_document_type(file_path, markdown)
-                pbar.set_postfix(file=file_path.name, stage="vlm_entities")
-                paragraphs = extract_paragraphs(markdown)
-                llm_model = settings.vl_model
-                all_entities = await extract_entities_from_text(markdown, model=llm_model, document_type=document_type)
-                try:
-                    annotation = await generate_document_annotation(text=markdown)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"Annotation generation failed: {exc}", file=sys.stderr)
-                if self.artifacts_mode:
-                    output_md_tmp.write_text(self._normalize_markdown(markdown), encoding="utf-8")
-                    os.replace(output_md_tmp, output_md)
-                status = "ok"
+                result = await self._process_html(file_path, output_md_tmp, output_md, timer)
             else:
-                status = "skip"
+                result = self._skip_result(file_path, timer, file_type)
                 pbar.set_postfix(file=file_path.name, stage="skip")
-                return {
-                    "file": str(relative),
-                    "type": file_type,
-                    "size_bytes": timer.size_bytes,
-                    "pages": None,
-                    "duration_sec": round(time.perf_counter() - timer.start, 3),
-                    "status": status,
-                    "error": error,
-                    "paragraphs": [],
-                    "entities": [],
-                    "annotation": "",
-                    "document_type": document_type,
-                    "metadata": {},
-                }
+                return result.to_dict()
             pbar.set_postfix(file=file_path.name, stage="done")
+            return result.to_dict()
         except Exception as exc:  # noqa: BLE001
             if output_md_tmp.exists():
                 output_md_tmp.unlink()
-            status = "error"
-            error = str(exc)
             pbar.set_postfix(file=file_path.name, stage="error")
+            result = self._error_result(file_path, timer, file_type, exc)
+            return result.to_dict()
+        finally:
+            self._record_stats(file_path, timer, result if 'result' in dir() else None)
 
-        duration = time.perf_counter() - timer.start
-        stats = StatsWriter(settings.output_root / "stats.jsonl")
-        stats.record(
-            file=str(relative),
+    async def _process_html_folder(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
+        pbar = None  # Will be set by caller
+        markdown = convert_html_folder_to_markdown(file_path)
+        if not markdown.strip():
+            return self._skip_result_from_data(file_path, timer, "html_folder", markdown)
+        document_type = detect_document_type(file_path, markdown)
+        pbar.set_postfix(file=file_path.name, stage="vlm_entities")
+        all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
+        annotation = await self._safe_annotation(text=markdown)
+        self._write_artifact(output_md_tmp, output_md, markdown)
+        paragraphs = extract_paragraphs(markdown)
+        return self._ok_result(file_path, timer, "html_folder", markdown, paragraphs, all_entities, annotation, document_type)
+
+    async def _process_pdf(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
+        _, pngs, _ = extract_pdf_text_and_visual_pages(file_path)
+        timer.pages = len(pngs)
+        rendered_dir = settings.output_root / "rendered" / file_path.stem
+        rendered_dir.mkdir(parents=True, exist_ok=True)
+        for png in pngs:
+            shutil.copy2(png, rendered_dir / png.name)
+        vlm_markdown = await reconstruct_markdown(pngs)
+        document_type = detect_document_type(file_path, vlm_markdown)
+        text_entities = await extract_entities_from_text(vlm_markdown, model=settings.vl_model, document_type=document_type)
+        image_entities = await extract_entities_from_images(pngs, document_type=document_type)
+        all_entities = self._aggregate_entities(text_entities + image_entities)
+        paragraphs = extract_paragraphs(vlm_markdown)
+        annotation = await self._safe_annotation(text=vlm_markdown)
+        self._write_artifact(output_md_tmp, output_md, self._normalize_markdown(vlm_markdown))
+        return self._ok_result(file_path, timer, "pdf", vlm_markdown, paragraphs, all_entities, annotation, document_type)
+
+    async def _process_docx(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
+        markdown = convert_docx_to_markdown(file_path)
+        document_type = detect_document_type(file_path, markdown)
+        paragraphs = extract_paragraphs(markdown)
+        all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
+        annotation = await self._safe_annotation(text=markdown)
+        self._write_artifact(output_md_tmp, output_md, self._normalize_markdown(markdown))
+        return self._ok_result(file_path, timer, "docx", markdown, paragraphs, all_entities, annotation, document_type)
+
+    async def _process_pptx(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
+        markdown = convert_pptx_to_markdown(file_path)
+        document_type = detect_document_type(file_path, markdown)
+        paragraphs = extract_paragraphs(markdown)
+        all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
+        annotation = await self._safe_annotation(text=markdown)
+        self._write_artifact(output_md_tmp, output_md, self._normalize_markdown(markdown))
+        return self._ok_result(file_path, timer, "pptx", markdown, paragraphs, all_entities, annotation, document_type)
+
+    async def _process_html(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
+        markdown = convert_html_to_markdown(file_path)
+        document_type = detect_document_type(file_path, markdown)
+        paragraphs = extract_paragraphs(markdown)
+        all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
+        annotation = await self._safe_annotation(text=markdown)
+        self._write_artifact(output_md_tmp, output_md, self._normalize_markdown(markdown))
+        return self._ok_result(file_path, timer, "html", markdown, paragraphs, all_entities, annotation, document_type)
+
+    def _write_artifact(self, tmp: Path, final: Path, content: str) -> None:
+        if self.artifacts_mode:
+            tmp.write_text(content, encoding="utf-8")
+            os.replace(tmp, final)
+
+    async def _safe_annotation(self, text: str | None = None, images: list[Path] | None = None) -> str:
+        try:
+            return await generate_document_annotation(text=text, images=images)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Annotation generation failed: {exc}", file=sys.stderr)
+            return ""
+
+    def _ok_result(self, file_path: Path, timer: FileTimer, file_type: str, markdown: str, paragraphs: list[dict], entities: list[dict], annotation: str, document_type: str) -> FileResult:
+        return FileResult(
+            file=str(file_path.relative_to(settings.input_root)),
             type=file_type,
             size_bytes=timer.size_bytes,
             pages=timer.pages,
-            duration_sec=round(duration, 3),
-            status=status,
-            error=error,
+            duration_sec=round(time.perf_counter() - timer.start, 3),
+            status="ok",
+            error=None,
+            paragraphs=paragraphs,
+            entities=entities,
+            annotation=annotation,
+            document_type=document_type,
+            metadata=extract_metadata(file_path) if file_path.is_file() else {},
         )
 
-        metadata = extract_metadata(file_path) if file_path.is_file() else {}
-        aggregated = self._aggregate_entities(all_entities)
-        result = {
-            "file": str(relative),
-            "type": file_type,
-            "size_bytes": timer.size_bytes,
-            "pages": timer.pages,
-            "duration_sec": round(duration, 3),
-            "status": status,
-            "error": error,
-            "paragraphs": paragraphs,
-            "entities": aggregated,
-            "annotation": annotation,
-            "document_type": document_type,
-            "metadata": metadata,
-        }
-        entity_store.append(str(relative), paragraphs, aggregated, annotation)
-        result_writer.write(result)
-        return result
+    def _skip_result(self, file_path: Path, timer: FileTimer, file_type: str) -> FileResult:
+        return self._skip_result_from_data(file_path, timer, file_type, "")
+
+    def _skip_result_from_data(self, file_path: Path, timer: FileTimer, file_type: str, markdown: str) -> FileResult:
+        return FileResult(
+            file=str(file_path.relative_to(settings.input_root)),
+            type=file_type,
+            size_bytes=timer.size_bytes,
+            pages=timer.pages,
+            duration_sec=round(time.perf_counter() - timer.start, 3),
+            status="skip",
+            error=None,
+            paragraphs=[],
+            entities=[],
+            annotation="",
+            document_type="other",
+            metadata={},
+        )
+
+    def _error_result(self, file_path: Path, timer: FileTimer, file_type: str, exc: Exception) -> FileResult:
+        return FileResult(
+            file=str(file_path.relative_to(settings.input_root)),
+            type=file_type,
+            size_bytes=timer.size_bytes,
+            pages=timer.pages,
+            duration_sec=round(time.perf_counter() - timer.start, 3),
+            status="error",
+            error=str(exc),
+            paragraphs=[],
+            entities=[],
+            annotation="",
+            document_type="other",
+            metadata={},
+        )
+
+    def _record_stats(self, file_path: Path, timer: FileTimer, result: FileResult | None) -> None:
+        duration = time.perf_counter() - timer.start
+        stats = StatsWriter(settings.output_root / "stats.jsonl")
+        stats.record(
+            file=str(file_path.relative_to(settings.input_root)),
+            type=timer.file_type,
+            size_bytes=timer.size_bytes,
+            pages=timer.pages,
+            duration_sec=round(duration, 3),
+            status=result.status if result else "error",
+            error=result.error if result else "unknown",
+        )
+        if result:
+            aggregated = self._aggregate_entities(result.entities)
+            result.entities = aggregated
+            from idp.entity_store import EntityStore
+            entity_store = EntityStore(settings.output_root / "entities.json")
+            entity_store.append(result.file, result.paragraphs, aggregated, result.annotation)
 
     def _load_entity_schema(self) -> dict:
         from idp.vlm_client import _load_entity_schema as _schema

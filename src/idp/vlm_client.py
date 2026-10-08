@@ -15,8 +15,9 @@ import httpx
 
 from idp.config import settings
 from idp.document_classifier import detect_document_type
-from idp.feedback_store import build_feedback_block
+from idp.feedback_store import build_feedback_block, FeedbackStore
 from idp.prompts import (
+    PromptBuilder,
     annotation_system_prompt,
     combined_system_prompt,
     entity_system_prompt,
@@ -59,36 +60,67 @@ def get_endpoint_selector() -> RoundRobinEndpointSelector:
     return RoundRobinEndpointSelector(get_vl_endpoints())
 
 
-async def _post_with_retry(
-    client: httpx.AsyncClient,
-    url: str,
-    payload: dict,
-    *,
-    selector: RoundRobinEndpointSelector | None = None,
-) -> httpx.Response:
-    for attempt in range(3):
-        try:
-            response = await client.post(url, json=payload)
-        except (httpx.NetworkError, httpx.TimeoutException) as e:
-            print(f"VLM network error (attempt {attempt + 1}): {e}", file=sys.stderr)
-            if attempt < 2:
-                if selector is not None:
-                    url = f"{selector.next()}/chat/completions"
+class _HttpClient:
+    def __init__(self, client: httpx.AsyncClient, selector: RoundRobinEndpointSelector) -> None:
+        self._client = client
+        self._selector = selector
+
+    async def post(self, url: str, payload: dict) -> httpx.Response:
+        for attempt in range(3):
+            try:
+                response = await self._client.post(url, json=payload)
+            except (httpx.NetworkError, httpx.TimeoutException) as e:
+                print(f"VLM network error (attempt {attempt + 1}): {e}", file=sys.stderr)
+                if attempt < 2:
+                    url = f"{self._selector.next()}/chat/completions"
+                    await asyncio.sleep(1)
+                    continue
+                raise
+            if response.status_code == 429:
                 await asyncio.sleep(1)
-                continue
-            raise
-        if response.status_code == 429:
-            await asyncio.sleep(1)
-            if selector is not None:
-                url = f"{selector.next()}/chat/completions"
-            response = await client.post(url, json=payload)
-        if response.status_code != 200:
-            error_msg = f"VLM request failed: {response.status_code} {response.text[:500]}"
-            print(error_msg, file=sys.stderr)
-            raise RuntimeError(error_msg)
-        response.raise_for_status()
-        return response
-    raise RuntimeError("VLM request failed after retries")
+                url = f"{self._selector.next()}/chat/completions"
+                response = await self._client.post(url, json=payload)
+            if response.status_code != 200:
+                error_msg = f"VLM request failed: {response.status_code} {response.text[:500]}"
+                print(error_msg, file=sys.stderr)
+                raise RuntimeError(error_msg)
+            response.raise_for_status()
+            return response
+        raise RuntimeError("VLM request failed after retries")
+
+
+@lru_cache(maxsize=1)
+def _load_entity_schema() -> dict:
+    try:
+        with open(_ENTITY_SCHEMA_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {
+            "version": "entity-v1",
+            "entity_types": [
+                {"name": "person", "description": "ФИО физического лица"},
+                {"name": "organization", "description": "Название организации"},
+                {"name": "date", "description": "Дата"},
+                {"name": "address", "description": "Адрес"},
+                {"name": "identifier", "description": "Идентификатор, номер документа"},
+                {"name": "amount", "description": "Сумма, число с единицами"},
+                {"name": "sender", "description": "Отправитель"},
+                {"name": "recipient", "description": "Получатель, адресат"},
+            ],
+        }
+
+
+def update_entity_schema(new_types: list[dict]) -> None:
+    schema = _load_entity_schema_raw()
+    existing_names = {t["name"] for t in schema.get("entity_types", [])}
+    for new_type in new_types:
+        if new_type.get("name") and new_type["name"] not in existing_names:
+            schema.setdefault("entity_types", []).append(new_type)
+            existing_names.add(new_type["name"])
+    with open(_ENTITY_SCHEMA_PATH, "w", encoding="utf-8") as f:
+        json.dump(schema, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    _load_entity_schema.cache_clear()
 
 
 def _load_entity_schema_raw() -> dict:
@@ -111,31 +143,9 @@ def _load_entity_schema_raw() -> dict:
         }
 
 
-@lru_cache(maxsize=1)
-def _load_entity_schema() -> dict:
-    return _load_entity_schema_raw()
-
-
-def _get_entity_types() -> list[dict]:
-    return _load_entity_schema().get("entity_types", [])
-
-
 def _build_entity_type_descriptions() -> str:
-    types = _get_entity_types()
+    types = _load_entity_schema().get("entity_types", [])
     return "\n".join(f"- {t['name']}: {t['description']}" for t in types)
-
-
-def update_entity_schema(new_types: list[dict]) -> None:
-    schema = _load_entity_schema_raw()
-    existing_names = {t["name"] for t in schema.get("entity_types", [])}
-    for new_type in new_types:
-        if new_type.get("name") and new_type["name"] not in existing_names:
-            schema.setdefault("entity_types", []).append(new_type)
-            existing_names.add(new_type["name"])
-    with open(_ENTITY_SCHEMA_PATH, "w", encoding="utf-8") as f:
-        json.dump(schema, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-    _load_entity_schema.cache_clear()
 
 
 def _encode_image(image_path: Path) -> str:
@@ -146,32 +156,36 @@ def _chunked(images: list[Path], size: int) -> list[list[Path]]:
     return [images[i : i + size] for i in range(0, len(images), size)]
 
 
-_FEEDBACK_CACHE: dict[str, str] = {}
+class FeedbackCache:
+    def __init__(self) -> None:
+        self._store = FeedbackStore()
+        self._cache: dict[str, str] = {}
+
+    def get_block(self, force_refresh: bool = False) -> str:
+        if not settings.finetune_feedback_enabled:
+            return ""
+        limit = settings.finetune_max_feedback_examples
+        if limit <= 0:
+            return ""
+        path = Path(settings.operator_corrections_path)
+        try:
+            stat = path.stat()
+            token = f"{stat.st_mtime_ns}:{stat.st_size}"
+        except OSError:
+            token = "empty"
+        if not force_refresh and self._cache.get(token):
+            return self._cache[token]
+        block = self._store.build_feedback_block(limit=limit)
+        self._cache.clear()
+        self._cache[token] = block
+        return block
 
 
-def get_feedback_examples(force_refresh: bool = False) -> str:
-    """Return the operator feedback block to prepend to VLM system prompts."""
-    if not settings.finetune_feedback_enabled:
-        return ""
-    limit = settings.finetune_max_feedback_examples
-    if limit <= 0:
-        return ""
-    path = Path(settings.operator_corrections_path)
-    try:
-        stat = path.stat()
-        token = f"{stat.st_mtime_ns}:{stat.st_size}"
-    except OSError:
-        token = "empty"
-    if not force_refresh and _FEEDBACK_CACHE.get(token):
-        return _FEEDBACK_CACHE[token]
-    block = build_feedback_block(limit=limit)
-    _FEEDBACK_CACHE.clear()
-    _FEEDBACK_CACHE[token] = block
-    return block
+_feedback_cache = FeedbackCache()
 
 
 def with_feedback(system_prompt: str, force_refresh: bool = False) -> str:
-    block = get_feedback_examples(force_refresh=force_refresh)
+    block = _feedback_cache.get_block(force_refresh=force_refresh)
     if not block:
         return system_prompt
     return f"{system_prompt}\n\n{block}"
@@ -536,7 +550,6 @@ def _strip_code_fences(content: str) -> str:
 
 
 def _strip_thinking_blocks(content: str) -> str:
-    import re
     patterns = [
         re.compile(r'<thinking>\s*.*?\s*</thinking>\s*', re.DOTALL | re.IGNORECASE),
         re.compile(r'\[THINKING\][^\[]*\[/THINKING\]', re.DOTALL | re.IGNORECASE),
@@ -652,43 +665,29 @@ def normalize_entities(entities: list[dict], document_type: str = "other") -> li
 class VlmClient:
     def __init__(self) -> None:
         self._endpoints = get_vl_endpoints()
-        self._endpoint_index = 0
 
-    def _next_endpoint(self) -> str:
+    def _http(self) -> _HttpClient:
         selector = RoundRobinEndpointSelector(self._endpoints)
-        return selector.next()
+        client = httpx.AsyncClient(timeout=settings.vl_timeout_seconds)
+        return _HttpClient(client, selector)
 
-    async def _post_with_retry(
-        self,
-        client: httpx.AsyncClient,
-        url: str,
-        payload: dict,
-        *,
-        selector: RoundRobinEndpointSelector | None = None,
-    ) -> httpx.Response:
-        for attempt in range(3):
-            try:
-                response = await client.post(url, json=payload)
-            except (httpx.NetworkError, httpx.TimeoutException) as e:
-                print(f"VLM network error (attempt {attempt + 1}): {e}", file=sys.stderr)
-                if attempt < 2:
-                    if selector is not None:
-                        url = f"{selector.next()}/chat/completions"
-                    await asyncio.sleep(1)
-                    continue
-                raise
-            if response.status_code == 429:
-                await asyncio.sleep(1)
-                if selector is not None:
-                    url = f"{selector.next()}/chat/completions"
-                response = await client.post(url, json=payload)
-            if response.status_code != 200:
-                error_msg = f"VLM request failed: {response.status_code} {response.text[:500]}"
-                print(error_msg, file=sys.stderr)
-                raise RuntimeError(error_msg)
-            response.raise_for_status()
-            return response
-        raise RuntimeError("VLM request failed after retries")
+    def _semaphore(self) -> asyncio.Semaphore:
+        return asyncio.Semaphore(settings.vl_concurrency)
+
+    def _chunked(self, images: list[Path]) -> list[list[Path]]:
+        return _chunked(images, settings.vl_max_images)
+
+    def _test_max_tokens(self) -> int:
+        return 256 if settings.test_mode else settings.vl_max_tokens
+
+    def _model(self, override: str | None = None) -> str:
+        return override or settings.vl_model
+
+    def _endpoint(self, override: str | None = None) -> str:
+        return override or settings.vl_endpoint
+
+    def _prompt_kwargs(self) -> dict:
+        return {"test": settings.test_mode}
 
     async def generate_document_annotation(
         self,
@@ -699,58 +698,56 @@ class VlmClient:
     ) -> str:
         if not images and not text:
             return ""
-        endpoint = endpoint or settings.vl_endpoint
-        model = model or settings.vl_model
-        url = f"{endpoint}/chat/completions"
+        endpoint = self._endpoint(endpoint)
+        model = self._model(model)
         selector = RoundRobinEndpointSelector(self._endpoints)
-        semaphore = asyncio.Semaphore(settings.vl_concurrency)
 
         async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
-            async def _process() -> str:
-                async with semaphore:
-                    if text:
-                        user_content = [
-                            {"type": "text", "text": f"Document text:\n{text}\n\nGenerate a brief annotation (1-2 sentences)."},
-                        ]
-                    else:
-                        user_content = [
-                            {"type": "text", "text": "Generate a brief annotation (1-2 sentences) for this document page."},
-                        ]
-                        for img in images[:2]:
-                            user_content.append({
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
-                            })
-                    payload = {
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": annotation_system_prompt()},
-                            {"role": "user", "content": user_content},
-                        ],
-                        "temperature": 0.1,
-                        "max_tokens": 200,
-                        "include_reasoning": False,
-                        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
-                    }
-                    response = await self._post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
-                    data = response.json()
-                    content = data["choices"][0]["message"]["content"]
-                    return _strip_code_fences(_strip_thinking_blocks(content)).strip()
-
-            return await _process()
+            http = _HttpClient(client, selector)
+            async with self._semaphore():
+                if text:
+                    user_content = [
+                        {"type": "text", "text": f"Document text:\n{text}\n\nGenerate a brief annotation (1-2 sentences)."},
+                    ]
+                else:
+                    user_content = [
+                        {"type": "text", "text": "Generate a brief annotation (1-2 sentences) for this document page."},
+                    ]
+                    for img in images[:2]:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                        })
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": annotation_system_prompt()},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 200,
+                    "include_reasoning": False,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                }
+                response = await http.post(f"{selector.next()}/chat/completions", payload)
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                return _strip_code_fences(_strip_thinking_blocks(content)).strip()
 
     async def reconstruct_markdown(self, images: list[Path]) -> str:
         if not images:
             return ""
-        sys_prompt = with_feedback(markdown_system_prompt(test=settings.test_mode))
-        chunks = _chunked(images, settings.vl_max_images)
-        max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+        sys_prompt = with_feedback(markdown_system_prompt(**self._prompt_kwargs()))
+        chunks = self._chunked(images)
+        max_tokens = self._test_max_tokens()
         selector = RoundRobinEndpointSelector(self._endpoints)
-        semaphore = asyncio.Semaphore(settings.vl_concurrency)
 
         async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            http = _HttpClient(client, selector)
+            sem = self._semaphore()
+
             async def _process_chunk(i: int, chunk: list[Path]) -> str:
-                async with semaphore:
+                async with sem:
                     user_content = [
                         {"type": "text", "text": "Reconstruct as Markdown."},
                     ]
@@ -770,7 +767,7 @@ class VlmClient:
                         "include_reasoning": False,
                         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                     }
-                    response = await self._post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
+                    response = await http.post(f"{selector.next()}/chat/completions", payload)
                     data = response.json()
                     content = data["choices"][0]["message"]["content"]
                     return _strip_code_fences(_strip_thinking_blocks(content))
@@ -790,25 +787,20 @@ class VlmClient:
         model: str | None = None,
         document_type: str = "other",
     ) -> list[dict]:
-        model = model or settings.vl_model
-        sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode))
-        max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+        model = self._model(model)
+        sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=False, **self._prompt_kwargs()))
+        max_tokens = self._test_max_tokens()
         max_chars = 500 if settings.test_mode else 6000
-        if len(text) > max_chars:
-            chunks = _chunk_text(text, max_chars)
-        else:
-            chunks = [text]
+        chunks = _chunk_text(text, max_chars) if len(text) > max_chars else [text]
         selector = RoundRobinEndpointSelector([endpoint] if endpoint else self._endpoints)
-        semaphore = asyncio.Semaphore(settings.vl_concurrency)
 
         async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            http = _HttpClient(client, selector)
+            sem = self._semaphore()
+
             async def _process_chunk(i: int, chunk: str) -> list[dict]:
-                async with semaphore:
-                    prompt = (
-                        "Text:\n"
-                        f"{chunk}\n\n"
-                        "Extract entities and return JSON only."
-                    )
+                async with sem:
+                    prompt = f"Text:\n{chunk}\n\nExtract entities and return JSON only."
                     payload = {
                         "model": model,
                         "messages": [
@@ -821,7 +813,7 @@ class VlmClient:
                         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                     }
                     url = f"{selector.next()}/chat/completions"
-                    response = await self._post_with_retry(client, url, payload, selector=selector)
+                    response = await http.post(url, payload)
                     data = response.json()
                     content = data["choices"][0]["message"]["content"]
                     content = _strip_thinking_blocks(content)
@@ -859,17 +851,20 @@ class VlmClient:
     async def extract_entities_from_images(self, images: list[Path], document_type: str = "other") -> list[dict]:
         if not images:
             return []
-        sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode))
+        test_kwargs = self._prompt_kwargs()
         if document_type != "other" and not settings.test_mode:
-            sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, test=False))
-        max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
-        chunks = _chunked(images, settings.vl_max_images)
+            test_kwargs = {"test": False}
+        sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, **test_kwargs))
+        max_tokens = self._test_max_tokens()
+        chunks = self._chunked(images)
         selector = RoundRobinEndpointSelector(self._endpoints)
-        semaphore = asyncio.Semaphore(settings.vl_concurrency)
 
         async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            http = _HttpClient(client, selector)
+            sem = self._semaphore()
+
             async def _process_chunk(i: int, chunk: list[Path]) -> list[dict]:
-                async with semaphore:
+                async with sem:
                     user_content = [
                         {"type": "text", "text": "Extract all entities from this document page image."},
                     ]
@@ -889,7 +884,7 @@ class VlmClient:
                         "include_reasoning": False,
                         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                     }
-                    response = await self._post_with_retry(client, f"{selector.next()}/chat/completions", payload, selector=selector)
+                    response = await http.post(f"{selector.next()}/chat/completions", payload)
                     data = response.json()
                     content = data["choices"][0]["message"]["content"]
                     content = _strip_thinking_blocks(content)
@@ -927,15 +922,17 @@ class VlmClient:
     ) -> tuple[str, list[dict]]:
         if not images:
             return "", []
-        chunks = _chunked(images, settings.vl_max_images)
+        chunks = self._chunked(images)
         if max_tokens is None:
-            max_tokens = 256 if settings.test_mode else settings.vl_max_tokens
+            max_tokens = self._test_max_tokens()
         selector = RoundRobinEndpointSelector(self._endpoints)
-        semaphore = asyncio.Semaphore(settings.vl_concurrency)
 
         async with httpx.AsyncClient(timeout=settings.vl_timeout_seconds) as client:
+            http = _HttpClient(client, selector)
+            sem = self._semaphore()
+
             async def _process_chunk(i: int, chunk: list[Path]) -> tuple[str, list[dict]]:
-                async with semaphore:
+                async with sem:
                     user_content = [
                         {"type": "text", "text": "Process the document page: reconstruct Markdown and extract entities."},
                     ]
@@ -944,9 +941,9 @@ class VlmClient:
                             "type": "image_url",
                             "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
                         })
-                    entity_prompt = entity_system_prompt(document_type=document_type, visual=True, test=settings.test_mode)
+                    entity_prompt = entity_system_prompt(document_type=document_type, visual=True, **self._prompt_kwargs())
                     system_content = with_feedback(
-                        combined_system_prompt(document_type=document_type, test=settings.test_mode)
+                        combined_system_prompt(document_type=document_type, **self._prompt_kwargs())
                         + "\n\n"
                         + "ENTITY EXTRACTION RULES:\n"
                         + entity_prompt
@@ -964,7 +961,7 @@ class VlmClient:
                     }
                     url = f"{selector.next()}/chat/completions"
                     print(f"VLM request to {url}, images: {len(chunk)}, model: {settings.vl_model}", file=sys.stderr)
-                    response = await self._post_with_retry(client, url, payload, selector=selector)
+                    response = await http.post(url, payload)
                     data = response.json()
                     content = data["choices"][0]["message"]["content"]
                     content = _strip_thinking_blocks(content)
@@ -1040,4 +1037,4 @@ async def extract_markdown_and_entities(
 
 
 def get_entity_system_prompt(document_type: str = "other") -> str:
-    return with_feedback(entity_system_prompt(document_type=document_type, visual=False, test=settings.test_mode))
+    return with_feedback(entity_system_prompt(document_type=document_type, visual=False, **{"test": settings.test_mode}))

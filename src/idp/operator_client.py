@@ -254,7 +254,6 @@ async def _main() -> None:
         open_image=args.open_image,
         force=args.force,
     )
-    client._test_mode = args.test_mode
     await client.run()
 
 

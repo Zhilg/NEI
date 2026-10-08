@@ -1,6 +1,125 @@
-"""System prompts for VLM interactions."""
+"""Declarative prompt templates for VLM interactions."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+
+from idp.vlm_client import _build_entity_type_descriptions
+
+
+@dataclass(frozen=True)
+class PromptTemplate:
+    name: str
+    content: str
+
+
+@dataclass
+class PromptBuilder:
+    test: bool = False
+    document_type: str = "other"
+    visual: bool = False
+
+    def markdown(self) -> PromptTemplate:
+        if self.test:
+            return PromptTemplate(
+                name="markdown_test",
+                content="Convert the document images to Markdown. Output only Markdown.",
+            )
+        return PromptTemplate(
+            name="markdown",
+            content=(
+                "Reconstruct the document page as clean Markdown.\n\n"
+                "STRICTLY EXCLUDE the following noise elements:\n"
+                "- Page numbers\n"
+                "- Running headers and footers\n"
+                "- Journal names, magazine titles, publication names at page bottom or top\n"
+                "- Watermarks\n"
+                "- Copyright notices\n"
+                "- URLs and email addresses not part of the main content\n"
+                "- Any decorative or boilerplate text outside the main content area\n\n"
+                "Preserve the actual document content in reading order.\n"
+                "Split text into paragraphs. Separate paragraphs with a blank line.\n"
+                "Preserve tables as Markdown tables.\n"
+                "When a table has many columns, read ALL columns — do not truncate to the first column.\n"
+                "If a horizontal table is too wide to read in full, note: 'Table too wide, truncated at <column name>'.\n"
+                "Describe every image, chart, diagram, or figure inline with [Image: detailed description of what is shown]. "
+                "If a page contains no images, do not add any image placeholder.\n"
+                "For each image, include what type of visual it is (photo, chart, diagram, screenshot, table, etc.) "
+                "and describe its content in detail.\n\n"
+                "HANDWRITING DETECTION:\n"
+                "If any text is handwritten (cursive, ink, marker, different from printed text), wrap it in [HANDWRITTEN: ...]. "
+                "Example: 'The price is [HANDWRITTEN: 5000] rubles.'\n\n"
+                "Output ONLY the Markdown text. No explanations. No thinking blocks. No reasoning."
+            ),
+        )
+
+    def entity(self) -> PromptTemplate:
+        if self.test:
+            return PromptTemplate(
+                name="entity_test",
+                content=(
+                    "Extract entities from the text. Return only JSON with an 'entities' array. "
+                    "For each entity, also include a 'comment' field with a brief explanation in Russian when confidence is below 0.5."
+                    "\n\n"
+                    + _confidence_guidance()
+                ),
+            )
+
+        intro = (
+            "Extract atomic metadata entities from this document page image.\n\n"
+            if self.visual
+            else "Extract atomic metadata entities from the provided text.\n\n"
+        )
+        rules = _entity_common_rules()
+        output = _entity_output_instruction()
+        focus = _document_type_focus(self.document_type)
+
+        if focus:
+            return PromptTemplate(
+                name=f"entity_{self.document_type}",
+                content=intro + focus + rules + output,
+            )
+        return PromptTemplate(
+            name="entity_generic",
+            content=intro + rules + output,
+        )
+
+    def combined(self) -> PromptTemplate:
+        if self.test:
+            return PromptTemplate(
+                name="combined_test",
+                content=(
+                    "Process the document images. Reconstruct as Markdown and extract entities. "
+                    "Return a single JSON object with 'markdown' and 'entities' keys. "
+                    "For entities with confidence below 0.5, include a 'comment' field with a brief explanation in Russian. No extra text."
+                    "\n\n"
+                    + _confidence_guidance()
+                ),
+            )
+        md = self.markdown().content
+        ent = self.entity().content
+        return PromptTemplate(
+            name="combined",
+            content=(
+                "You are a document analysis assistant. Process the document images and do BOTH tasks:\n\n"
+                "1. Reconstruct the document page as clean Markdown.\n"
+                "2. Extract all entities from the document.\n\n"
+                "For task 1, follow these rules:\n"
+                "- Exclude page numbers, headers, footers, watermarks, copyright notices, decorative text\n"
+                "- Preserve tables as Markdown tables\n"
+                "- Read ALL columns of every table — never truncate to only the first column\n"
+                "- Describe every image, chart, diagram, or figure inline with [Image: detailed description]\n"
+                "- Wrap handwritten text in [HANDWRITTEN: ...]\n"
+                "- Output ONLY the Markdown text\n\n"
+                "For task 2, extract ONLY atomic metadata entities.\n"
+                "ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value. "
+                "FORBIDDEN: full sentences, generic words like 'приказ' without number/date, boilerplate phrases, values > 150 chars.\n\n"
+                "For each entity provide: type, value, normalized_value (if applicable), page, paragraph, evidence, confidence (0.0-1.0), handwritten (true/false).\n\n"
+                "Return a single JSON object with TWO keys:\n"
+                '{"markdown": "<reconstructed markdown>", "entities": [<entity objects>]}\n'
+                "No explanations, no code fences, no extra text, no thinking blocks, no reasoning."
+            ),
+        )
 
 
 def annotation_system_prompt() -> str:
@@ -12,31 +131,31 @@ def annotation_system_prompt() -> str:
 
 
 def markdown_system_prompt(test: bool = False) -> str:
-    if test:
-        return "Convert the document images to Markdown. Output only Markdown."
+    return PromptBuilder(test=test).markdown().content
+
+
+def entity_system_prompt(
+    document_type: str = "other",
+    visual: bool = False,
+    test: bool = False,
+) -> str:
+    return PromptBuilder(test=test, document_type=document_type, visual=visual).entity().content
+
+
+def combined_system_prompt(document_type: str = "other", test: bool = False) -> str:
+    return PromptBuilder(test=test, document_type=document_type, visual=True).combined().content
+
+
+def _confidence_guidance() -> str:
     return (
-        "Reconstruct the document page as clean Markdown.\n\n"
-        "STRICTLY EXCLUDE the following noise elements:\n"
-        "- Page numbers\n"
-        "- Running headers and footers\n"
-        "- Journal names, magazine titles, publication names at page bottom or top\n"
-        "- Watermarks\n"
-        "- Copyright notices\n"
-        "- URLs and email addresses not part of the main content\n"
-        "- Any decorative or boilerplate text outside the main content area\n\n"
-        "Preserve the actual document content in reading order.\n"
-        "Split text into paragraphs. Separate paragraphs with a blank line.\n"
-        "Preserve tables as Markdown tables.\n"
-        "When a table has many columns, read ALL columns — do not truncate to the first column.\n"
-        "If a horizontal table is too wide to read in full, note: 'Table too wide, truncated at <column name>'.\n"
-        "Describe every image, chart, diagram, or figure inline with [Image: detailed description of what is shown]. "
-        "If a page contains no images, do not add any image placeholder.\n"
-        "For each image, include what type of visual it is (photo, chart, diagram, screenshot, table, etc.) "
-        "and describe its content in detail.\n\n"
-        "HANDWRITING DETECTION:\n"
-        "If any text is handwritten (cursive, ink, marker, different from printed text), wrap it in [HANDWRITTEN: ...]. "
-        "Example: 'The price is [HANDWRITTEN: 5000] rubles.'\n\n"
-        "Output ONLY the Markdown text. No explanations. No thinking blocks. No reasoning."
+        "CONFIDENCE ESTIMATION (CRITICAL): Estimate confidence (0.0-1.0) based on the actual visual quality "
+        "of the source: handwriting legibility, blur, contrast, character ambiguity, and stroke clarity. "
+        "Do NOT default to 1.0 for handwriting. "
+        "Use 0.9-1.0 only for perfectly crisp printed text that you can read with zero doubt. "
+        "Use 0.5-0.8 for clearly readable handwriting. "
+        "Use 0.3-0.5 for blurred, low-contrast, or ambiguous handwriting. "
+        "Use 0.0-0.3 for illegible handwriting or characters you had to guess. "
+        "Digits vs letters and Cyrillic vs Latin confusions in handwriting must lower confidence.\n"
     )
 
 
@@ -74,8 +193,6 @@ def _entity_common_rules() -> str:
 
 
 def _entity_output_instruction() -> str:
-    from idp.vlm_client import _build_entity_type_descriptions
-
     return (
         f"Schema:\n{_build_entity_type_descriptions()}\n\n"
         'Return ONLY valid JSON: {"entities": [...]}\n'
@@ -83,43 +200,9 @@ def _entity_output_instruction() -> str:
     )
 
 
-def _base_entity_intro() -> str:
-    return "Extract atomic metadata entities from the provided text.\n\n"
-
-
-def _visual_entity_intro() -> str:
-    return "Extract atomic metadata entities from this document page image.\n\n"
-
-
-def _confidence_guidance() -> str:
-    return (
-        "CONFIDENCE ESTIMATION (CRITICAL): Estimate confidence (0.0-1.0) based on the actual visual quality "
-        "of the source: handwriting legibility, blur, contrast, character ambiguity, and stroke clarity. "
-        "Do NOT default to 1.0 for handwriting. "
-        "Use 0.9-1.0 only for perfectly crisp printed text that you can read with zero doubt. "
-        "Use 0.5-0.8 for clearly readable handwriting. "
-        "Use 0.3-0.5 for blurred, low-contrast, or ambiguous handwriting. "
-        "Use 0.0-0.3 for illegible handwriting or characters you had to guess. "
-        "Digits vs letters and Cyrillic vs Latin confusions in handwriting must lower confidence.\n"
-    )
-
-
-def entity_system_prompt(
-    document_type: str = "other",
-    visual: bool = False,
-    test: bool = False,
-) -> str:
-    if test:
-        return (
-            "Extract entities from the text. Return only JSON with an 'entities' array. "
-            "For each entity, also include a 'comment' field with a brief explanation in Russian when confidence is below 0.5."
-            "\n\n"
-            + _confidence_guidance()
-        )
-    intro = _visual_entity_intro() if visual else _base_entity_intro()
-    base = intro + _entity_common_rules() + _entity_output_instruction()
-    if document_type == "directive":
-        return (
+def _document_type_focus(document_type: str) -> str | None:
+    focus_map = {
+        "directive": (
             "Extract atomic metadata entities from this directive document (order/instruction/recommendation).\n\n"
             "Focus on:\n"
             "- Directive type and number\n"
@@ -130,11 +213,8 @@ def entity_system_prompt(
             "- Item numbers and task descriptions\n"
             "- Deadlines/dates\n"
             "- Control officer\n\n"
-            + _entity_common_rules()
-            + _entity_output_instruction()
-        )
-    if document_type == "certificate":
-        return (
+        ),
+        "certificate": (
             "Extract atomic metadata entities from this certificate/statement document.\n\n"
             "Focus on:\n"
             "- Certificate type, number, issue date\n"
@@ -144,11 +224,8 @@ def entity_system_prompt(
             "- Status facts (has/does not have, working/studying, etc.)\n"
             "- Periods and dates (pay attention to AS_OF vs FOR_PERIOD)\n"
             "- Amounts, rates, codes\n\n"
-            + _entity_common_rules()
-            + _entity_output_instruction()
-        )
-    if document_type == "ttkh":
-        return (
+        ),
+        "ttkh": (
             "Extract atomic metadata entities from this tactical-technical characteristics (ТТХ) document.\n\n"
             "Focus on:\n"
             "- Object/equipment name and model\n"
@@ -166,11 +243,8 @@ def entity_system_prompt(
             "- Full sentences or clauses\n"
             "- Generic words like 'характеристики' without value\n"
             "- Values longer than 150 characters\n\n"
-            + _entity_common_rules()
-            + _entity_output_instruction()
-        )
-    if document_type == "ttz":
-        return (
+        ),
+        "ttz": (
             "Extract atomic metadata entities from this technical specification (ТТЗ) document.\n\n"
             "Focus on:\n"
             "- Requirement numbers (e.g., 3.2.1)\n"
@@ -179,11 +253,8 @@ def entity_system_prompt(
             "- Standards (ГОСТ, ISO, IEEE, ТУ)\n"
             "- Deadline/dates\n"
             "- Executors/responsible persons\n\n"
-            + _entity_common_rules()
-            + _entity_output_instruction()
-        )
-    if document_type == "summary":
-        return (
+        ),
+        "summary": (
             "Extract atomic metadata entities from this operational/financial/epidemiological summary.\n\n"
             "Focus on:\n"
             "- Summary type and period\n"
@@ -199,39 +270,6 @@ def entity_system_prompt(
             "- Full sentences or clauses\n"
             "- Generic words like 'сводка' without specifics\n"
             "- Values longer than 150 characters\n\n"
-            + _entity_common_rules()
-            + _entity_output_instruction()
-        )
-    return base
-
-
-def combined_system_prompt(document_type: str = "other", test: bool = False) -> str:
-    if test:
-        return (
-            "Process the document images. Reconstruct as Markdown and extract entities. "
-            "Return a single JSON object with 'markdown' and 'entities' keys. "
-            "For entities with confidence below 0.5, include a 'comment' field with a brief explanation in Russian. No extra text."
-            "\n\n"
-            + _confidence_guidance()
-        )
-    md = markdown_system_prompt(test=False)
-    ent = entity_system_prompt(document_type=document_type, visual=True, test=False)
-    return (
-        "You are a document analysis assistant. Process the document images and do BOTH tasks:\n\n"
-        "1. Reconstruct the document page as clean Markdown.\n"
-        "2. Extract all entities from the document.\n\n"
-        "For task 1, follow these rules:\n"
-        "- Exclude page numbers, headers, footers, watermarks, copyright notices, decorative text\n"
-        "- Preserve tables as Markdown tables\n"
-        "- Read ALL columns of every table — never truncate to only the first column\n"
-        "- Describe every image, chart, diagram, or figure inline with [Image: detailed description]\n"
-        "- Wrap handwritten text in [HANDWRITTEN: ...]\n"
-        "- Output ONLY the Markdown text\n\n"
-        "For task 2, extract ONLY atomic metadata entities.\n"
-        "ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value. "
-        "FORBIDDEN: full sentences, generic words like 'приказ' without number/date, boilerplate phrases, values > 150 chars.\n\n"
-        "For each entity provide: type, value, normalized_value (if applicable), page, paragraph, evidence, confidence (0.0-1.0), handwritten (true/false).\n\n"
-        "Return a single JSON object with TWO keys:\n"
-        '{"markdown": "<reconstructed markdown>", "entities": [<entity objects>]}\n'
-        "No explanations, no code fences, no extra text, no thinking blocks, no reasoning."
-    )
+        ),
+    }
+    return focus_map.get(document_type)
