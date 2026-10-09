@@ -203,6 +203,7 @@ IDP_MIN_ENTITY_CONFIDENCE=0.3
 - `data/output/results_readable.json` — массив с pretty-print, для человека
 - `data/output/entities.json` — все сущности сгруппированные по файлу
 - `data/output/stats.jsonl` — статистика по обработке
+- `data/output/txts/<имя файла>/` — бандл для восстановления DOCX/PDF: `text.md` (текст + гиперссылки на картинки), `images/` (рендеры страниц и встроенные изображения), `tables.json`, `meta.json`
 
 ## Проблемы
 

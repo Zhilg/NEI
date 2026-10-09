@@ -68,6 +68,12 @@ class _TextExtractor(HTMLParser):
             self._skip_depth += 1
         if tag in ("button", "input", "select", "textarea", "option", "label", "form", "nav", "aside", "header", "footer"):
             self._skip_depth += 1
+        if tag == "img" and self._skip_depth == 0:
+            attributes = dict(attrs)
+            src = html.unescape((attributes.get("src") or "").strip())
+            if src:
+                alt = html.unescape((attributes.get("alt") or "").strip())
+                self._parts.append(f"\n![{alt}]({src})\n")
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             self._maybe_emit_heading()
             self._heading_level = int(tag[1])

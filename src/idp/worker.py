@@ -25,6 +25,7 @@ from idp.renderer import extract_pdf_text_and_visual_pages
 from idp.entity_store import EntityStore
 from idp.result_writer import ResultWriter
 from idp.stats_writer import StatsWriter, FileTimer
+from idp.txt_export import TxtExporter
 from idp.vlm_client import (
     _clean_ocr_artifacts,
     extract_entities_from_text,
@@ -52,6 +53,7 @@ class FileResult:
     annotation: str
     document_type: str
     metadata: dict
+    text: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -216,6 +218,7 @@ class Worker:
         result_writer: ResultWriter,
         entity_store: EntityStore,
         pbar: tqdm,
+        txt_exporter: TxtExporter,
     ) -> dict:
         relative = file_path.relative_to(settings.input_root)
         stem = file_path.stem if file_path.is_file() else file_path.name
@@ -246,6 +249,7 @@ class Worker:
                 result = self._skip_result(file_path, timer, file_type)
                 pbar.set_postfix(file=file_path.name, stage="skip")
                 return result.to_dict()
+            self._export_txt_bundle(file_path, result, txt_exporter)
             pbar.set_postfix(file=file_path.name, stage="done")
             return result.to_dict()
         except Exception as exc:  # noqa: BLE001
@@ -258,17 +262,15 @@ class Worker:
             self._record_stats(file_path, timer, result if 'result' in dir() else None)
 
     async def _process_html_folder(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
-        pbar = None  # Will be set by caller
         markdown = convert_html_folder_to_markdown(file_path)
         if not markdown.strip():
             return self._skip_result_from_data(file_path, timer, "html_folder", markdown)
         document_type = detect_document_type(file_path, markdown)
-        pbar.set_postfix(file=file_path.name, stage="vlm_entities")
         all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
         annotation = await self._safe_annotation(text=markdown)
         self._write_artifact(output_md_tmp, output_md, markdown)
         paragraphs = extract_paragraphs(markdown)
-        return self._ok_result(file_path, timer, "html_folder", markdown, paragraphs, all_entities, annotation, document_type)
+        return self._ok_result(file_path, timer, "html_folder", markdown, paragraphs, all_entities, annotation, document_type, text=markdown)
 
     async def _process_pdf(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
         _, pngs, _ = extract_pdf_text_and_visual_pages(file_path)
@@ -284,8 +286,9 @@ class Worker:
         all_entities = self._aggregate_entities(text_entities + image_entities)
         paragraphs = extract_paragraphs(vlm_markdown)
         annotation = await self._safe_annotation(text=vlm_markdown)
-        self._write_artifact(output_md_tmp, output_md, self._normalize_markdown(vlm_markdown))
-        return self._ok_result(file_path, timer, "pdf", vlm_markdown, paragraphs, all_entities, annotation, document_type)
+        final_markdown = self._normalize_markdown(vlm_markdown)
+        self._write_artifact(output_md_tmp, output_md, final_markdown)
+        return self._ok_result(file_path, timer, "pdf", vlm_markdown, paragraphs, all_entities, annotation, document_type, text=final_markdown)
 
     async def _process_docx(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
         markdown = convert_docx_to_markdown(file_path)
@@ -293,8 +296,9 @@ class Worker:
         paragraphs = extract_paragraphs(markdown)
         all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
         annotation = await self._safe_annotation(text=markdown)
-        self._write_artifact(output_md_tmp, output_md, self._normalize_markdown(markdown))
-        return self._ok_result(file_path, timer, "docx", markdown, paragraphs, all_entities, annotation, document_type)
+        final_markdown = self._normalize_markdown(markdown)
+        self._write_artifact(output_md_tmp, output_md, final_markdown)
+        return self._ok_result(file_path, timer, "docx", markdown, paragraphs, all_entities, annotation, document_type, text=final_markdown)
 
     async def _process_pptx(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
         markdown = convert_pptx_to_markdown(file_path)
@@ -302,8 +306,9 @@ class Worker:
         paragraphs = extract_paragraphs(markdown)
         all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
         annotation = await self._safe_annotation(text=markdown)
-        self._write_artifact(output_md_tmp, output_md, self._normalize_markdown(markdown))
-        return self._ok_result(file_path, timer, "pptx", markdown, paragraphs, all_entities, annotation, document_type)
+        final_markdown = self._normalize_markdown(markdown)
+        self._write_artifact(output_md_tmp, output_md, final_markdown)
+        return self._ok_result(file_path, timer, "pptx", markdown, paragraphs, all_entities, annotation, document_type, text=final_markdown)
 
     async def _process_html(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
         markdown = convert_html_to_markdown(file_path)
@@ -311,8 +316,9 @@ class Worker:
         paragraphs = extract_paragraphs(markdown)
         all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
         annotation = await self._safe_annotation(text=markdown)
-        self._write_artifact(output_md_tmp, output_md, self._normalize_markdown(markdown))
-        return self._ok_result(file_path, timer, "html", markdown, paragraphs, all_entities, annotation, document_type)
+        final_markdown = self._normalize_markdown(markdown)
+        self._write_artifact(output_md_tmp, output_md, final_markdown)
+        return self._ok_result(file_path, timer, "html", markdown, paragraphs, all_entities, annotation, document_type, text=final_markdown)
 
     def _write_artifact(self, tmp: Path, final: Path, content: str) -> None:
         if self.artifacts_mode:
@@ -326,7 +332,7 @@ class Worker:
             print(f"Annotation generation failed: {exc}", file=sys.stderr)
             return ""
 
-    def _ok_result(self, file_path: Path, timer: FileTimer, file_type: str, markdown: str, paragraphs: list[dict], entities: list[dict], annotation: str, document_type: str) -> FileResult:
+    def _ok_result(self, file_path: Path, timer: FileTimer, file_type: str, markdown: str, paragraphs: list[dict], entities: list[dict], annotation: str, document_type: str, text: str = "") -> FileResult:
         return FileResult(
             file=str(file_path.relative_to(settings.input_root)),
             type=file_type,
@@ -340,7 +346,22 @@ class Worker:
             annotation=annotation,
             document_type=document_type,
             metadata=extract_metadata(file_path) if file_path.is_file() else {},
+            text=text,
         )
+
+    def _export_txt_bundle(self, file_path: Path, result: FileResult, txt_exporter: TxtExporter) -> None:
+        try:
+            txt_exporter.export(
+                file_path,
+                file_type=result.type,
+                text=result.text,
+                pages=result.pages,
+                document_type=result.document_type,
+                annotation=result.annotation,
+                metadata=result.metadata,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Txt export failed for {file_path.name}: {exc}", file=sys.stderr)
 
     def _skip_result(self, file_path: Path, timer: FileTimer, file_type: str) -> FileResult:
         return self._skip_result_from_data(file_path, timer, file_type, "")
@@ -409,6 +430,7 @@ class Worker:
             pretty_path=settings.output_root / "results_readable.json",
         )
         entity_store = EntityStore(settings.output_root / "entities.json")
+        txt_exporter = TxtExporter()
 
         processed: set[str] = set()
         if not self.force:
@@ -432,7 +454,7 @@ class Worker:
 
         async def _process_with_semaphore(file_path: Path) -> dict:
             async with file_semaphore:
-                return await self._process_file(file_path, result_writer, entity_store, pbar)
+                return await self._process_file(file_path, result_writer, entity_store, pbar, txt_exporter)
 
         pending = []
         for file_path in pbar:
