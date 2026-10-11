@@ -104,7 +104,6 @@ def convert_pptx_to_markdown(pptx_path: Path) -> str:
             block_parts.append("\n".join(texts))
         if table_blocks:
             block_parts.append("\n".join(table_blocks))
-        if block_parts:
-            parts.append(f"<!-- slide {i} -->\n" + "\n\n".join(block_parts))
+        parts.append(f"<!-- slide {i} -->\n" + "\n\n".join(block_parts))
     text = "\n\n".join(parts)
     return _clean_noise(text)

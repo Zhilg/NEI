@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from idp.vlm_client import _build_entity_type_descriptions
-
 
 @dataclass(frozen=True)
 class PromptTemplate:
@@ -193,6 +191,8 @@ def _entity_common_rules() -> str:
 
 
 def _entity_output_instruction() -> str:
+    from idp.vlm_client import _build_entity_type_descriptions
+
     return (
         f"Schema:\n{_build_entity_type_descriptions()}\n\n"
         'Return ONLY valid JSON: {"entities": [...]}\n'

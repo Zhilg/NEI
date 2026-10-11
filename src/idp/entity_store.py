@@ -11,8 +11,16 @@ class EntityStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._data: dict[str, dict[str, Any]] = {}
+        self._data: dict[str, dict[str, Any]] = self._load()
         self._dirty = False
+
+    def _load(self) -> dict[str, dict[str, Any]]:
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
 
     def append(self, source_file: str, paragraphs: list[dict[str, Any]], entities: list[dict[str, Any]], annotation: str = "") -> None:
         seen: set[tuple] = set()

@@ -146,6 +146,8 @@ class Worker:
         parsed_rows: list[list[str]] = []
         for line in table_lines:
             cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if all(re.fullmatch(r":?-+:?", cell) for cell in cells if cell):
+                continue
             parsed_rows.append(cells)
         if not parsed_rows:
             return table_lines
@@ -259,7 +261,7 @@ class Worker:
             result = self._error_result(file_path, timer, file_type, exc)
             return result.to_dict()
         finally:
-            self._record_stats(file_path, timer, result if 'result' in dir() else None)
+            self._record_stats(file_path, timer, result if 'result' in dir() else None, entity_store)
 
     async def _process_html_folder(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
         markdown = convert_html_folder_to_markdown(file_path)
@@ -398,7 +400,7 @@ class Worker:
             metadata={},
         )
 
-    def _record_stats(self, file_path: Path, timer: FileTimer, result: FileResult | None) -> None:
+    def _record_stats(self, file_path: Path, timer: FileTimer, result: FileResult | None, entity_store: EntityStore | None = None) -> None:
         duration = time.perf_counter() - timer.start
         stats = StatsWriter(settings.output_root / "stats.jsonl")
         stats.record(
@@ -413,9 +415,8 @@ class Worker:
         if result:
             aggregated = self._aggregate_entities(result.entities)
             result.entities = aggregated
-            from idp.entity_store import EntityStore
-            entity_store = EntityStore(settings.output_root / "entities.json")
-            entity_store.append(result.file, result.paragraphs, aggregated, result.annotation)
+            store = entity_store if entity_store is not None else EntityStore(settings.output_root / "entities.json")
+            store.append(result.file, result.paragraphs, aggregated, result.annotation)
 
     def _load_entity_schema(self) -> dict:
         from idp.vlm_client import _load_entity_schema as _schema
@@ -469,6 +470,7 @@ class Worker:
                 result = await coro
                 results.append(result)
                 all_new_entities.extend(result.get("entities", []))
+                result_writer.write(result)
 
         if all_new_entities:
             schema = self._load_entity_schema()
