@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     entity_schema_path: Path = Field(default=Path(__file__).parent / "entity_schema.json")
     trash_path: str = Field(default="")
     min_entity_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
+    reconstruct_formats: Union[str, list[str]] = Field(default="docx,pdf")
 
     vllm_quantization: str = Field(default="awq")
     vllm_dtype: str = Field(default="half")
@@ -84,6 +85,20 @@ class Settings(BaseSettings):
     @classmethod
     def parse_kv_cache_memory(cls, value: str) -> str:
         return str(value).strip()
+
+    @field_validator("reconstruct_formats", mode="before")
+    @classmethod
+    def parse_reconstruct_formats(cls, value: str | list[str]) -> list[str]:
+        if isinstance(value, list):
+            return [v.strip().lower().lstrip(".") for v in value if v and v.strip()]
+        if not value:
+            return []
+        if isinstance(value, str):
+            value = value.strip('"').strip("'")
+            if not value:
+                return []
+            return [v.strip().lower().lstrip(".") for v in value.split(",") if v.strip()]
+        return []
         
 
 

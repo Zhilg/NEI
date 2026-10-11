@@ -203,7 +203,7 @@ IDP_MIN_ENTITY_CONFIDENCE=0.3
 - `data/output/results_readable.json` — массив с pretty-print, для человека
 - `data/output/entities.json` — все сущности сгруппированные по файлу
 - `data/output/stats.jsonl` — статистика по обработке
-- `data/output/txts/<имя файла>/` — бандл для восстановления DOCX/PDF: `text.txt` (текст + гиперссылки на картинки), `images/` (рендеры страниц и встроенные изображения), `tables.json`, `meta.json`
+- `data/output/txts/<имя файла>/` — бандл для восстановления DOCX/PDF: `text.txt` (текст + гиперссылки на картинки), `images/` (рендеры страниц и встроенные изображения), `tables.json`, `meta.json`, `reconstruct.docx`, `reconstruct.pdf`
 
 ## Проблемы
 
@@ -233,6 +233,24 @@ IDP_MIN_ENTITY_CONFIDENCE=0.3
 - Увеличь `IDP_MIN_ENTITY_CONFIDENCE` до 0.5-0.7
 - Проверь `trash_path` — туда пишутся сырые ответы VLM для анализа
 
+## Восстановление DOCX/PDF из бандлов
+
+Каждый бандл `txts/<имя файла>/` после обработки автоматически собирается обратно в документы:
+
+```bash
+docker compose exec worker idp-reconstruct                     # все бандлы в data/output/txts
+docker compose exec worker idp-reconstruct --bundle data/output/txts/scan.pdf
+docker compose exec worker idp-reconstruct --format pdf        # только PDF (или docx)
+```
+
+В бандле появятся `reconstruct.docx` и `reconstruct.pdf` с картинками по местам, заголовками, списками, таблицами (с повторением шапки при переносе) и разрывами страниц по маркерам `<!-- page N -->`.
+
+Отключить авто-сборку в воркере:
+
+```env
+IDP_RECONSTRUCT_FORMATS=
+```
+
 ## Структура проекта
 
 ```
@@ -246,6 +264,8 @@ src/idp/           # Код пайплайна
   pptx_converter.py # PPTX → текст
   result_writer.py # Запись результатов
   entity_store.py  # Хранилище сущностей
+  txt_export.py    # Экспорт txts-бандлов с гиперссылками на картинки
+  reconstructor.py # Сборка DOCX/PDF из бандлов
 
 infra/compose/
   local.yml        # Docker Compose для production

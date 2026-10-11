@@ -23,6 +23,7 @@ from idp.metadata_extractor import extract_metadata
 from idp.pptx_converter import convert_pptx_to_markdown
 from idp.renderer import extract_pdf_text_and_visual_pages
 from idp.entity_store import EntityStore
+from idp.reconstructor import reconstruct_bundle
 from idp.result_writer import ResultWriter
 from idp.stats_writer import StatsWriter, FileTimer
 from idp.txt_export import TxtExporter
@@ -353,7 +354,7 @@ class Worker:
 
     def _export_txt_bundle(self, file_path: Path, result: FileResult, txt_exporter: TxtExporter) -> None:
         try:
-            txt_exporter.export(
+            bundle_dir = txt_exporter.export(
                 file_path,
                 file_type=result.type,
                 text=result.text,
@@ -364,6 +365,11 @@ class Worker:
             )
         except Exception as exc:  # noqa: BLE001
             print(f"Txt export failed for {file_path.name}: {exc}", file=sys.stderr)
+            return
+        try:
+            reconstruct_bundle(bundle_dir)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Docx/pdf reconstruction failed for {file_path.name}: {exc}", file=sys.stderr)
 
     def _skip_result(self, file_path: Path, timer: FileTimer, file_type: str) -> FileResult:
         return self._skip_result_from_data(file_path, timer, file_type, "")
