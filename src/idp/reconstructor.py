@@ -141,7 +141,7 @@ def _image_size_cm(image_path: Path) -> tuple[float, float] | None:
         return None
     width_cm = width_px / 150.0 * 2.54
     height_cm = height_px / 150.0 * 2.54
-    scale = min(_MAX_IMAGE_WIDTH_CM / width_cm, _MAX_IMAGE_HEIGHT_CM / height_cm)
+    scale = min(_MAX_IMAGE_WIDTH_CM / width_cm, _MAX_IMAGE_HEIGHT_CM / height_cm, 1.0)
     return width_cm * scale, height_cm * scale
 
 
@@ -191,8 +191,20 @@ def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path
                 if segment.kind == "text":
                     paragraph.add_run(_unescape(segment.text))
                 elif segment.kind == "handwritten":
-                    run = paragraph.add_run(_unescape(segment.text))
-                    run.italic = True
+                    image_path = bundle_dir / segment.path
+                    if image_path.is_file():
+                        run = paragraph.add_run()
+                        size = _image_size_cm(image_path)
+                        if size is not None:
+                            run.add_picture(str(image_path), width=Cm(size[0]), height=Cm(size[1]))
+                        else:
+                            run.add_picture(str(image_path))
+                        if segment.text:
+                            caption = paragraph.add_run(_unescape(segment.text))
+                            caption.italic = True
+                    else:
+                        run = paragraph.add_run(_unescape(segment.text))
+                        run.italic = True
                 else:
                     image_path = bundle_dir / segment.path
                     if not image_path.is_file():
@@ -353,6 +365,16 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
                     write_text(pending)
                     pending = ""
                     write_image(bundle_dir / segment.path)
+                elif segment.kind == "handwritten":
+                    image_path = bundle_dir / segment.path
+                    if image_path.is_file():
+                        write_text(pending)
+                        pending = ""
+                        write_image(image_path)
+                        if segment.text:
+                            write_text(_unescape(segment.text))
+                    else:
+                        pending += _unescape(segment.text)
                 else:
                     pending += _unescape(segment.text)
             write_text(pending)

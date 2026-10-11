@@ -33,6 +33,9 @@ _SLIDE_MARKER_RE = re.compile(r"<!--\s*slide\s+(\d+)\s*-->")
 _FILE_MARKER_RE = re.compile(r"<!--\s*file:\s*(.+?)\s*-->")
 _IMAGE_PLACEHOLDER_RE = re.compile(r"\[Image:\s*([^\]]*)\]")
 _HANDWRITTEN_RE = re.compile(r"\[HANDWRITTEN:\s*([^\]]*)\]")
+_REGION_RE = re.compile(r"\s*\|\s*bbox:\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)", re.IGNORECASE)
+_IMG_INDEX_RE = re.compile(r"\s*\|\s*img:\s*(\d+)", re.IGNORECASE)
+_MIN_REGION_PX = 12
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
 _DATA_URI_RE = re.compile(r"!\[([^\]]*)\]\(data:image/([A-Za-z0-9.+-]+);base64,([^)\s]+)\)")
 _TABLE_SEPARATOR_RE = re.compile(r"^:?-+:?$")
@@ -122,16 +125,17 @@ def _rewrite_local_image_refs(
     return _MD_IMAGE_RE.sub(_replace, text), counter
 
 
-def _extract_pdf_embedded_images(pdf_path: Path, images_dir: Path) -> dict[int, list[str]]:
+def _extract_pdf_embedded_images(pdf_path: Path, images_dir: Path) -> tuple[dict[int, list[str]], dict[str, list[float]]]:
     result: dict[int, list[str]] = {}
+    rects: dict[str, list[float]] = {}
     try:
         import fitz
     except ImportError:
-        return result
+        return result, rects
     try:
         doc = fitz.open(pdf_path)
     except Exception:
-        return result
+        return result, rects
     by_xref: dict[int, str] = {}
     try:
         for page_index in range(len(doc)):
@@ -140,14 +144,20 @@ def _extract_pdf_embedded_images(pdf_path: Path, images_dir: Path) -> dict[int, 
             except Exception:
                 continue
             names: list[str] = []
+            page = doc.load_page(page_index)
             for info in infos:
                 xref = info[0] if info else 0
                 if not xref:
                     continue
+                placements = _image_placements(page, xref)
                 if xref in by_xref:
                     names.append(by_xref[xref])
+                    if placements and by_xref[xref] not in rects:
+                        rects[by_xref[xref]] = placements[0]
                     continue
                 if len(by_xref) >= _MAX_EMBEDDED_IMAGES:
+                    continue
+                if _page_covering_rect(page, xref) is not None:
                     continue
                 try:
                     extracted = doc.extract_image(xref)
@@ -160,11 +170,41 @@ def _extract_pdf_embedded_images(pdf_path: Path, images_dir: Path) -> dict[int, 
                 (images_dir / name).write_bytes(data)
                 by_xref[xref] = name
                 names.append(name)
+                if placements:
+                    rects[name] = placements[0]
             if names:
                 result[page_index + 1] = names
     finally:
         doc.close()
-    return result
+    return result, rects
+
+
+def _image_placements(page, xref: int) -> list[list[float]]:
+    if not xref:
+        return []
+    try:
+        placements = page.get_image_rects(xref)
+    except Exception:
+        return []
+    if page.rect.width <= 0 or page.rect.height <= 0:
+        return []
+    return [
+        [
+            round(max(0.0, rect.x0 / page.rect.width), 4),
+            round(max(0.0, rect.y0 / page.rect.height), 4),
+            round(min(1.0, rect.x1 / page.rect.width), 4),
+            round(min(1.0, rect.y1 / page.rect.height), 4),
+        ]
+        for rect in placements or []
+    ]
+
+
+def _page_covering_rect(page, xref: int) -> list[float] | None:
+    """Rect of an embedded image that covers the whole page (a page scan)."""
+    for rect in _image_placements(page, xref):
+        if rect[2] - rect[0] >= 0.9 and rect[3] - rect[1] >= 0.9:
+            return rect
+    return None
 
 
 def _iter_pptx_shapes(shapes):
@@ -239,12 +279,42 @@ def parse_markdown_tables(text: str) -> list[dict]:
     return tables
 
 
+def _crop_region(render_path: Path, bbox: list[float], target: Path) -> bool:
+    """Cut a normalized [x1, y1, x2, y2] region out of a page render."""
+    try:
+        from PIL import Image
+
+        with Image.open(render_path) as image:
+            width, height = image.size
+            x1 = max(0.0, min(1.0, bbox[0]))
+            y1 = max(0.0, min(1.0, bbox[1]))
+            x2 = max(0.0, min(1.0, bbox[2]))
+            y2 = max(0.0, min(1.0, bbox[3]))
+            if x2 <= x1 or y2 <= y1:
+                return False
+            pad_x = (x2 - x1) * 0.02
+            pad_y = (y2 - y1) * 0.02
+            box = (
+                int(max(0, (x1 - pad_x) * width)),
+                int(max(0, (y1 - pad_y) * height)),
+                int(min(width, (x2 + pad_x) * width)),
+                int(min(height, (y2 + pad_y) * height)),
+            )
+            if box[2] - box[0] < _MIN_REGION_PX or box[3] - box[1] < _MIN_REGION_PX:
+                return False
+            image.crop(box).save(target)
+        return True
+    except Exception:
+        return False
+
+
 class TxtExporter:
     """Writes one ``txts/<file name>/`` bundle per processed document."""
 
     def __init__(self, output_root: Path | None = None) -> None:
         self.root = (output_root or settings.output_root) / "txts"
         self._used: set[str] = set()
+        self._regions: list[dict] = []
 
     def export(
         self,
@@ -259,6 +329,7 @@ class TxtExporter:
     ) -> Path:
         bundle_dir = self._bundle_dir(source)
         images_dir = bundle_dir / "images"
+        self._reset_regions()
         shutil.rmtree(bundle_dir, ignore_errors=True)
         images_dir.mkdir(parents=True, exist_ok=True)
 
@@ -285,6 +356,9 @@ class TxtExporter:
         self._write_meta(bundle_dir, source, file_type, pages, document_type, annotation, metadata or {}, images_dir)
         return bundle_dir
 
+    def _reset_regions(self) -> None:
+        self._regions = []
+
     def _bundle_dir(self, source: Path) -> Path:
         base = _sanitize_name(source.name)
         candidate = base
@@ -304,7 +378,7 @@ class TxtExporter:
 
     def _bundle_pdf(self, pdf_path: Path, images_dir: Path, text: str) -> str:
         page_images = self._copy_page_images(pdf_path, images_dir)
-        embedded = _extract_pdf_embedded_images(pdf_path, images_dir)
+        embedded, embedded_rects = _extract_pdf_embedded_images(pdf_path, images_dir)
         if not page_images and not embedded:
             return text
 
@@ -334,31 +408,36 @@ class TxtExporter:
         if current_lines is not None:
             sections.append((current_lines, current_pages))
 
+        regions: list[dict] = []
+        for page in sorted(page_images):
+            regions.append({"name": page_images[page], "kind": "page", "page": page, "bbox": [0.0, 0.0, 1.0, 1.0]})
+
         consumed: set[str] = set()
-        covered: set[int] = set()
+        counter = {"figure": 0, "handwritten": 0}
         out: list[str] = list(preamble)
         for lines, pages in sections:
-            covered.update(pages)
             out.extend(lines[:1])
-            for page in pages:
-                name = page_images.get(page)
-                if name is not None:
-                    out.append(f"![Page {page}](images/{name})")
             if len(lines) > 1:
-                out.extend(self._link_placeholders("\n".join(lines[1:]), pages, embedded, page_images, consumed).split("\n"))
+                out.extend(
+                    self._link_placeholders(
+                        "\n".join(lines[1:]), pages, embedded, page_images, consumed, images_dir, regions, counter
+                    ).split("\n")
+                )
             for page in pages:
                 for name in embedded.get(page, []):
                     if name not in consumed:
                         consumed.add(name)
                         out.append(f"![Image on page {page}](images/{name})")
 
-        uncovered = [page for page in sorted(page_images) if page not in covered]
-        if uncovered:
-            if out and out[-1].strip():
-                out.append("")
-            out.append("## Pages")
-            for page in uncovered:
-                out.append(f"![Page {page}](images/{page_images[page]})")
+        for page in sorted(embedded):
+            for name in embedded[page]:
+                regions.append({
+                    "name": name,
+                    "kind": "embedded",
+                    "page": page,
+                    "bbox": embedded_rects.get(name, [0.0, 0.0, 1.0, 1.0]),
+                })
+        self._regions = regions
         return "\n".join(out)
 
     @staticmethod
@@ -369,16 +448,47 @@ class TxtExporter:
             end = start
         return list(range(start, end + 1))
 
-    @staticmethod
     def _link_placeholders(
+        self,
         block: str,
         pages: list[int],
         embedded: dict[int, list[str]],
         page_images: dict[int, str],
         consumed: set[str],
+        images_dir: Path,
+        regions: list[dict],
+        counter: dict[str, int],
     ) -> str:
+        def _target_page(match: re.Match) -> int | None:
+            index_match = _IMG_INDEX_RE.search(match.group(1))
+            if index_match is not None and pages:
+                offset = int(index_match.group(1)) - 1
+                return pages[offset] if 0 <= offset < len(pages) else pages[0]
+            return pages[0] if pages else None
+
+        def _crop(kind: str, description: str, bbox: list[float], page: int) -> str | None:
+            render = page_images.get(page)
+            if render is None:
+                return None
+            counter[kind] += 1
+            name = f"{kind}_{counter[kind]:04d}.png"
+            if not _crop_region(images_dir / render, bbox, images_dir / name):
+                return None
+            regions.append({"name": name, "kind": kind, "page": page, "bbox": bbox})
+            return name
+
         def _image_sub(match: re.Match) -> str:
-            description = match.group(1).strip() or "Image"
+            raw = match.group(1)
+            bbox_match = _REGION_RE.search(raw)
+            description = _REGION_RE.sub("", raw)
+            description = _IMG_INDEX_RE.sub("", description).strip(" |") or "Image"
+            if bbox_match is not None:
+                page = _target_page(match)
+                bbox = [float(value) / 1000.0 for value in bbox_match.groups()]
+                if page is not None:
+                    name = _crop("figure", description, bbox, page)
+                    if name is not None:
+                        return f"![{description}](images/{name})"
             for page in pages:
                 for name in embedded.get(page, []):
                     if name not in consumed:
@@ -387,10 +497,20 @@ class TxtExporter:
             return match.group(0)
 
         def _handwritten_sub(match: re.Match) -> str:
-            fragment = match.group(1).strip()
-            name = page_images.get(pages[0]) if pages else None
-            if name is not None:
-                return f"[HANDWRITTEN: {fragment}](images/{name})"
+            raw = match.group(1)
+            bbox_match = _REGION_RE.search(raw)
+            fragment = _REGION_RE.sub("", raw)
+            fragment = _IMG_INDEX_RE.sub("", fragment).strip(" |")
+            if bbox_match is not None:
+                page = _target_page(match)
+                bbox = [float(value) / 1000.0 for value in bbox_match.groups()]
+                if page is not None:
+                    name = _crop("handwritten", fragment, bbox, page)
+                    if name is not None:
+                        return f"[HANDWRITTEN: {fragment}](images/{name})"
+            render = page_images.get(pages[0]) if pages else None
+            if render is not None:
+                return f"[HANDWRITTEN: {fragment}](images/{render})"
             return match.group(0)
 
         block = _IMAGE_PLACEHOLDER_RE.sub(_image_sub, block)
@@ -523,6 +643,7 @@ class TxtExporter:
             "text_file": "text.txt",
             "images_dir": "images",
             "images": images,
+            "regions": self._regions,
             "tables_file": "tables.json",
         }
         (bundle_dir / "meta.json").write_text(

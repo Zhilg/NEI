@@ -29,6 +29,7 @@ from idp.stats_writer import StatsWriter, FileTimer
 from idp.txt_export import TxtExporter
 from idp.vlm_client import (
     _clean_ocr_artifacts,
+    strip_bbox_annotations,
     extract_entities_from_text,
     extract_paragraphs,
     generate_document_annotation,
@@ -283,15 +284,17 @@ class Worker:
         for png in pngs:
             shutil.copy2(png, rendered_dir / png.name)
         vlm_markdown = await reconstruct_markdown(pngs)
-        document_type = detect_document_type(file_path, vlm_markdown)
-        text_entities = await extract_entities_from_text(vlm_markdown, model=settings.vl_model, document_type=document_type)
+        clean_markdown = strip_bbox_annotations(vlm_markdown)
+        document_type = detect_document_type(file_path, clean_markdown)
+        text_entities = await extract_entities_from_text(clean_markdown, model=settings.vl_model, document_type=document_type)
         image_entities = await extract_entities_from_images(pngs, document_type=document_type)
         all_entities = self._aggregate_entities(text_entities + image_entities)
-        paragraphs = extract_paragraphs(vlm_markdown)
-        annotation = await self._safe_annotation(text=vlm_markdown)
-        final_markdown = self._normalize_markdown(vlm_markdown)
+        paragraphs = extract_paragraphs(clean_markdown)
+        annotation = await self._safe_annotation(text=clean_markdown)
+        final_markdown = self._normalize_markdown(clean_markdown)
+        annotated_markdown = self._normalize_markdown(vlm_markdown)
         self._write_artifact(output_md_tmp, output_md, final_markdown)
-        return self._ok_result(file_path, timer, "pdf", vlm_markdown, paragraphs, all_entities, annotation, document_type, text=final_markdown)
+        return self._ok_result(file_path, timer, "pdf", annotated_markdown, paragraphs, all_entities, annotation, document_type, text=annotated_markdown)
 
     async def _process_docx(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
         markdown = convert_docx_to_markdown(file_path)

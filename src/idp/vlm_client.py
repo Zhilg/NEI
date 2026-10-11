@@ -184,6 +184,21 @@ class FeedbackCache:
 _feedback_cache = FeedbackCache()
 
 
+_BBOX_SUFFIX_RE = re.compile(
+    r"\s*(?:\|\s*(?:bbox:\s*[\d.\s]+?|img:\s*\d+)\s*)+(?=\]|$)",
+    re.IGNORECASE,
+)
+
+
+def strip_bbox_annotations(text: str) -> str:
+    """Remove region annotations (bbox/img) that the VLM adds for image extraction.
+
+    Keeps markdown clean for paragraphs, entities and the .md artifact while the
+    annotated version is used to cut image regions out of page renders.
+    """
+    return _BBOX_SUFFIX_RE.sub("", text)
+
+
 def with_feedback(system_prompt: str, force_refresh: bool = False) -> str:
     block = _feedback_cache.get_block(force_refresh=force_refresh)
     if not block:
