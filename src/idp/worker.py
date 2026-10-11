@@ -134,8 +134,7 @@ class Worker:
                 result.append("")
                 i += 1
                 continue
-            cleaned = re.sub(r"^\s*(?:\d+[\.\)]\s+|[-•]\s+)", "", stripped)
-            result.append(cleaned)
+            result.append(stripped)
             i += 1
         text = "\n".join(result)
         text = re.sub(r"\n{3,}", "\n\n", text)

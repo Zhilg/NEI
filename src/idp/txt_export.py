@@ -279,6 +279,16 @@ def parse_markdown_tables(text: str) -> list[dict]:
     return tables
 
 
+def _image_dimensions(path: Path) -> tuple[int, int] | None:
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            return image.size
+    except Exception:
+        return None
+
+
 def _crop_region(render_path: Path, bbox: list[float], target: Path) -> bool:
     """Cut a normalized [x1, y1, x2, y2] region out of a page render."""
     try:
@@ -405,7 +415,16 @@ class TxtExporter:
 
         regions: list[dict] = []
         for page in sorted(page_images):
-            regions.append({"name": page_images[page], "kind": "page", "page": page, "bbox": [0.0, 0.0, 1.0, 1.0]})
+            render_name = page_images[page]
+            size = _image_dimensions(images_dir / render_name)
+            regions.append({
+                "name": render_name,
+                "kind": "page",
+                "page": page,
+                "bbox": [0.0, 0.0, 1.0, 1.0],
+                "width": size[0] if size else None,
+                "height": size[1] if size else None,
+            })
 
         consumed: set[str] = set()
         counter = {"figure": 0, "handwritten": 0}
@@ -426,11 +445,14 @@ class TxtExporter:
 
         for page in sorted(embedded):
             for name in embedded[page]:
+                size = _image_dimensions(images_dir / name)
                 regions.append({
                     "name": name,
                     "kind": "embedded",
                     "page": page,
                     "bbox": embedded_rects.get(name, [0.0, 0.0, 1.0, 1.0]),
+                    "width": size[0] if size else None,
+                    "height": size[1] if size else None,
                 })
         self._regions = regions
         return "\n".join(out)
@@ -469,7 +491,15 @@ class TxtExporter:
             name = f"{kind}_{counter[kind]:04d}.png"
             if not _crop_region(images_dir / render, bbox, images_dir / name):
                 return None
-            regions.append({"name": name, "kind": kind, "page": page, "bbox": bbox})
+            size = _image_dimensions(images_dir / name)
+            regions.append({
+                "name": name,
+                "kind": kind,
+                "page": page,
+                "bbox": bbox,
+                "width": size[0] if size else None,
+                "height": size[1] if size else None,
+            })
             return name
 
         def _image_sub(match: re.Match) -> str:

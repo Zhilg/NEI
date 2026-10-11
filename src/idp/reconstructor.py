@@ -11,6 +11,7 @@ Run standalone:  idp-reconstruct [--bundle DIR] [--root DIR] [--format docx,pdf]
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -37,6 +38,9 @@ _HEADING_FONT_SIZE = 14.0
 _LINE_HEIGHT = 1.5
 _MAX_IMAGE_WIDTH_CM = 17.0
 _MAX_IMAGE_HEIGHT_CM = 24.0
+_FIRST_LINE_INDENT_CM = 1.25
+_TEXT_AREA_WIDTH_CM = 17.0
+_TEXT_AREA_HEIGHT_CM = 25.7
 _DOCX_FONT = "Times New Roman"
 _DOCX_FONT_SIZE = 12
 _DOCX_HEADING_FONT_SIZE = 14
@@ -168,7 +172,8 @@ def parse_bundle(text: str) -> list[Block]:
     return blocks
 
 
-def _image_size_cm(image_path: Path) -> tuple[float, float] | None:
+def _image_size_cm(image_path: Path, bbox: list[float] | None = None) -> tuple[float, float] | None:
+    """Display size in cm: from the region bbox when known, else natural 150 dpi."""
     try:
         from PIL import Image
 
@@ -178,6 +183,16 @@ def _image_size_cm(image_path: Path) -> tuple[float, float] | None:
         return None
     if not width_px or not height_px:
         return None
+    if bbox and len(bbox) == 4 and bbox[2] > bbox[0] and bbox[3] > bbox[1]:
+        width_cm = (bbox[2] - bbox[0]) * _TEXT_AREA_WIDTH_CM
+        height_cm = (bbox[3] - bbox[1]) * _TEXT_AREA_HEIGHT_CM
+        pixel_ratio = width_px / float(height_px) if height_px else 1.0
+        target_ratio = width_cm / height_cm if height_cm else pixel_ratio
+        if pixel_ratio > target_ratio:
+            height_cm = width_cm / pixel_ratio
+        else:
+            width_cm = height_cm * pixel_ratio
+        return width_cm, height_cm
     width_cm = width_px / 150.0 * 2.54
     height_cm = height_px / 150.0 * 2.54
     scale = min(_MAX_IMAGE_WIDTH_CM / width_cm, _MAX_IMAGE_HEIGHT_CM / height_cm, 1.0)
@@ -219,6 +234,7 @@ def _setup_docx_styles(document) -> None:
     normal.font.size = Pt(_DOCX_FONT_SIZE)
     normal.paragraph_format.line_spacing = _LINE_HEIGHT
     normal.paragraph_format.space_after = Pt(0)
+    normal.paragraph_format.first_line_indent = Cm(_FIRST_LINE_INDENT_CM)
     rpr = normal.element.get_or_add_rPr()
     fonts = rpr.get_or_add_rFonts()
     for attribute in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
@@ -239,11 +255,12 @@ def _setup_docx_styles(document) -> None:
             fonts.set(qn(attribute), _DOCX_FONT)
 
 
-def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
+def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path, regions: dict[str, dict] | None = None) -> Path:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Cm, Pt
 
+    regions = regions or {}
     document = Document()
     _setup_docx_styles(document)
     has_content = False
@@ -264,6 +281,8 @@ def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path
             for item in block.items:
                 entry = document.add_paragraph(style="List Bullet")
                 entry.add_run(_unescape(item))
+                entry.paragraph_format.first_line_indent = Cm(0)
+                entry.paragraph_format.left_indent = Cm(1.25)
             has_content = True
         elif block.kind == "table":
             _add_docx_table(document, block.rows)
@@ -273,6 +292,10 @@ def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path
             paragraph = document.add_paragraph()
             if only_images:
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                paragraph.paragraph_format.first_line_indent = Cm(0)
+            else:
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+                paragraph.paragraph_format.first_line_indent = Cm(_FIRST_LINE_INDENT_CM)
             for segment in block.segments:
                 if segment.kind == "text":
                     paragraph.add_run(_unescape(segment.text))
@@ -280,7 +303,7 @@ def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path
                     image_path = bundle_dir / segment.path
                     if image_path.is_file():
                         run = paragraph.add_run()
-                        size = _image_size_cm(image_path)
+                        size = _image_size_cm(image_path, regions.get(Path(segment.path).name, {}).get("bbox"))
                         if size is not None:
                             run.add_picture(str(image_path), width=Cm(size[0]), height=Cm(size[1]))
                         else:
@@ -298,7 +321,7 @@ def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path
                             paragraph.add_run(f"[{segment.alt}]")
                         continue
                     run = paragraph.add_run()
-                    size = _image_size_cm(image_path)
+                    size = _image_size_cm(image_path, regions.get(Path(segment.path).name, {}).get("bbox"))
                     if size is not None:
                         run.add_picture(str(image_path), width=Cm(size[0]), height=Cm(size[1]))
                     else:
@@ -333,9 +356,10 @@ def _text_lines_needed(text: str, width: float, font_size: float) -> int:
     return max(1, lines)
 
 
-def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
+def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path, regions: dict[str, dict] | None = None) -> Path:
     import fitz
 
+    regions = regions or {}
     fontname, fontfile = _resolve_font()
     document = fitz.open()
     page = document.new_page(width=_PAGE_WIDTH, height=_PAGE_HEIGHT)
@@ -347,19 +371,31 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
         state["y"] = _MARGIN
         state["used"] = False
 
-    def write_text(text: str, font_size: float = _FONT_SIZE, bold: bool = False) -> None:
+    def write_text(text: str, font_size: float = _FONT_SIZE, bold: bool = False,
+                   indent: bool = True, align: int = 3) -> None:
         if not text.strip():
             return
         active_font, active_file = _resolve_font(bold)
+        body = text
+        if indent and align == 3:
+            indent_pt = _FIRST_LINE_INDENT_CM * 28.3465
+            try:
+                font = fitz.Font(fontfile=active_file) if active_file else fitz.Font(active_font)
+                space_pt = font.text_length(" ", fontsize=font_size)
+            except Exception:
+                space_pt = 0.0
+            if space_pt > 0:
+                body = " " * max(1, int(indent_pt / space_pt)) + text
         for attempt in range(2):
             rect = fitz.Rect(_MARGIN, state["y"], _PAGE_WIDTH - _MARGIN, _PAGE_HEIGHT - _MARGIN)
             leftover = page.insert_textbox(
                 rect,
-                text,
+                body,
                 fontsize=font_size,
                 fontname=active_font,
                 fontfile=active_file,
                 lineheight=_LINE_HEIGHT,
+                align=align,
             )
             if leftover >= 0:
                 state["y"] = _PAGE_HEIGHT - _MARGIN - leftover + _GAP
@@ -369,7 +405,7 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
             font_size = max(8.0, font_size - 1.0)
         state["y"] = _MARGIN
 
-    def write_image(image_path: Path) -> None:
+    def write_image(image_path: Path, geometry: dict | None = None) -> None:
         if not image_path.is_file():
             return
         try:
@@ -378,13 +414,22 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
             return
         content_width = _PAGE_WIDTH - 2 * _MARGIN
         content_height = _PAGE_HEIGHT - 2 * _MARGIN
-        remaining = _PAGE_HEIGHT - _MARGIN - state["y"]
-        scale = min(content_width / pixmap.width, remaining / pixmap.height)
-        if scale < min(content_width / pixmap.width, content_height / pixmap.height):
-            start_page()
-            scale = min(content_width / pixmap.width, content_height / pixmap.height)
-        width = pixmap.width * scale
-        height = pixmap.height * scale
+        bbox = (geometry or {}).get("bbox")
+        if bbox and len(bbox) == 4 and bbox[2] > bbox[0] and bbox[3] > bbox[1]:
+            width = min((bbox[2] - bbox[0]) * content_width, content_width)
+            ratio = pixmap.width / float(pixmap.height) if pixmap.height else 1.0
+            height = width / ratio if ratio else width
+            if height > content_height:
+                height = content_height
+                width = height * ratio
+        else:
+            remaining = _PAGE_HEIGHT - _MARGIN - state["y"]
+            scale = min(content_width / pixmap.width, remaining / pixmap.height)
+            if scale < min(content_width / pixmap.width, content_height / pixmap.height):
+                start_page()
+                scale = min(content_width / pixmap.width, content_height / pixmap.height)
+            width = pixmap.width * scale
+            height = pixmap.height * scale
         rect = fitz.Rect(_MARGIN, state["y"], _MARGIN + width, state["y"] + height)
         page.insert_image(rect, filename=str(image_path))
         state["y"] += height + _GAP
@@ -446,10 +491,10 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
                 start_page()
         elif block.kind == "heading":
             text = _unescape(block.segments[0].text) if block.segments else ""
-            write_text(text, _HEADING_FONT_SIZE, bold=True)
+            write_text(text, _HEADING_FONT_SIZE, bold=True, indent=False, align=0)
         elif block.kind == "list":
             for item in block.items:
-                write_text(f"• {_unescape(item)}")
+                write_text(f"• {_unescape(item)}", indent=False, align=0)
         elif block.kind == "table":
             write_table(block.rows)
         elif block.kind == "paragraph":
@@ -458,13 +503,13 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
                 if segment.kind == "image":
                     write_text(pending)
                     pending = ""
-                    write_image(bundle_dir / segment.path)
+                    write_image(bundle_dir / segment.path, regions.get(Path(segment.path).name))
                 elif segment.kind == "handwritten":
                     image_path = bundle_dir / segment.path
                     if image_path.is_file():
                         write_text(pending)
                         pending = ""
-                        write_image(image_path)
+                        write_image(image_path, regions.get(Path(segment.path).name))
                         if segment.text:
                             write_text(_unescape(segment.text))
                     else:
@@ -477,19 +522,37 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
     return output_path
 
 
+def load_regions(bundle_dir: Path) -> dict[str, dict]:
+    """Image geometry (bbox, pixel size) recorded by the txt exporter."""
+    meta_file = bundle_dir / "meta.json"
+    if not meta_file.is_file():
+        return {}
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    regions = meta.get("regions") or []
+    return {
+        Path(str(region["name"])).name: region
+        for region in regions
+        if isinstance(region, dict) and region.get("name")
+    }
+
+
 def reconstruct_bundle(bundle_dir: Path, formats: list[str] | None = None) -> list[Path]:
     text_file = bundle_dir / "text.txt"
     if not text_file.is_file():
         return []
     requested = formats if formats is not None else list(settings.reconstruct_formats)
     blocks = parse_bundle(_join_wrapped_links(text_file.read_text(encoding="utf-8")))
+    regions = load_regions(bundle_dir)
     created: list[Path] = []
     for fmt in requested:
         fmt = fmt.lower().lstrip(".")
         if fmt == "docx":
-            created.append(build_docx(blocks, bundle_dir, bundle_dir / "reconstruct.docx"))
+            created.append(build_docx(blocks, bundle_dir, bundle_dir / "reconstruct.docx", regions))
         elif fmt == "pdf":
-            created.append(build_pdf(blocks, bundle_dir, bundle_dir / "reconstruct.pdf"))
+            created.append(build_pdf(blocks, bundle_dir, bundle_dir / "reconstruct.pdf", regions))
     return created
 
 
