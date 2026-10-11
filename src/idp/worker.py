@@ -179,21 +179,10 @@ class Worker:
         text = text.replace("…", "...")
         return text
 
-    @staticmethod
-    def _normalize_entities_and_formulas(text: str) -> str:
-        text = re.sub(r"от\s+(\d+(?:\.\d+)?)\s*до\s+(\d+(?:\.\d+)?)", lambda m: f" RANGE_NUM {m.group(1)}-{m.group(2)} ", text)
-        text = re.sub(r"[±\+]\s*(\d+(?:\.\d+)?)", lambda m: f" TOLERANCE_NUM {m.group(1)} ", text)
-        text = re.sub(r"\b\d+(?:\.\d+)?\s*(?:мм|см|м|км|кг|г|с|мс|Гц|кГц|МГц|В|А|Вт|кВт)\b", " NUM UNIT ", text)
-        text = re.sub(r"\$\$[^$]+\$\$", " FORMULA ", text)
-        text = re.sub(r"\$[^$]+\$", " FORMULA ", text)
-        return text
-
     def _normalize_markdown(self, markdown: str) -> str:
         return self._normalize_typography(
-            self._normalize_entities_and_formulas(
-                _clean_ocr_artifacts(
-                    self._postprocess_markdown(markdown)
-                )
+            _clean_ocr_artifacts(
+                self._postprocess_markdown(markdown)
             )
         )
 

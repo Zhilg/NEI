@@ -24,21 +24,28 @@ _BULLET_RE = re.compile(r"^[-*+]\s+(.*)$")
 _TABLE_ROW_RE = re.compile(r"^\|.*\|$")
 _TABLE_SEPARATOR_RE = re.compile(r"^[:\-\s]+$")
 _INLINE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)|\[HANDWRITTEN:\s*([^\]]*)\]\(([^)\s]+)\)")
+_LINK_ANY_RE = re.compile(r"(!?\[[^\]]*?\])\(([^)]*?)\)", re.DOTALL)
 _ESCAPE_RE = re.compile(r"\\([.\-*+\\`()\[\]{}#!|>~])")
 
 _PAGE_WIDTH = 595.28
 _PAGE_HEIGHT = 841.89
-_MARGIN = 48.0
-_GAP = 8.0
-_FONT_SIZE = 11.0
-_TABLE_FONT_SIZE = 9.5
-_HEADING_SIZES = {1: 20.0, 2: 16.0, 3: 14.0, 4: 12.5, 5: 12.0, 6: 11.5}
-_MAX_IMAGE_WIDTH_CM = 16.0
-_MAX_IMAGE_HEIGHT_CM = 22.0
+_MARGIN = 56.7  # 2 cm
+_GAP = 6.0
+_FONT_SIZE = 12.0
+_TABLE_FONT_SIZE = 11.0
+_HEADING_FONT_SIZE = 14.0
+_LINE_HEIGHT = 1.5
+_MAX_IMAGE_WIDTH_CM = 17.0
+_MAX_IMAGE_HEIGHT_CM = 24.0
+_DOCX_FONT = "Times New Roman"
+_DOCX_FONT_SIZE = 12
+_DOCX_HEADING_FONT_SIZE = 14
+_FONT_DIR = Path(__file__).parent / "fonts"
 _FONT_CANDIDATES = (
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/gnu-free/FreeSans.ttf",
+    str(_FONT_DIR / "LiberationSerif-Regular.ttf"),
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
 )
 
 
@@ -77,6 +84,33 @@ def _split_segments(line: str) -> list[Segment]:
     if position < len(line):
         segments.append(Segment("text", text=line[position:]))
     return segments
+
+
+def _join_wrapped_links(text: str) -> str:
+    """Repair image links that were wrapped across lines.
+
+    A soft wrap inside a markdown link (alt text or path) breaks the link
+    entirely, so the newline is removed and the link reassembled.
+    """
+
+    def _fix(match: re.Match) -> str:
+        label = " ".join(match.group(1).split())
+        path = "".join(match.group(2).split())
+        return f"{label}({path})"
+
+    return _LINK_ANY_RE.sub(_fix, text)
+
+
+def _is_plain_line(line: str) -> bool:
+    """A markdown paragraph line (soft wraps are joined into one paragraph)."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("<!--") or stripped.startswith("#") or stripped.startswith("```"):
+        return False
+    if _TABLE_ROW_RE.match(stripped) and stripped.count("|") >= 2:
+        return False
+    return _BULLET_RE.match(stripped) is None
 
 
 def parse_bundle(text: str) -> list[Block]:
@@ -122,10 +156,15 @@ def parse_bundle(text: str) -> list[Block]:
                 index += 1
             blocks.append(Block("list", items=items))
             continue
-        segments = _split_segments(stripped)
+        paragraph_lines = [stripped]
+        index += 1
+        while index < len(lines) and _is_plain_line(lines[index]):
+            paragraph_lines.append(lines[index].strip())
+            index += 1
+        paragraph = " ".join(part for part in paragraph_lines if part)
+        segments = _split_segments(paragraph)
         if segments:
             blocks.append(Block("paragraph", segments=segments))
-        index += 1
     return blocks
 
 
@@ -146,6 +185,8 @@ def _image_size_cm(image_path: Path) -> tuple[float, float] | None:
 
 
 def _add_docx_table(document, rows: list[list[str]]) -> None:
+    from docx.shared import Pt
+
     columns = max(len(row) for row in rows)
     table = document.add_table(rows=len(rows), cols=columns)
     table.style = "Table Grid"
@@ -153,18 +194,58 @@ def _add_docx_table(document, rows: list[list[str]]) -> None:
         for column in range(columns):
             cell = table.cell(row_index, column)
             cell.text = _unescape(row[column]) if column < len(row) else ""
-            if row_index == 0 and len(rows) > 1:
-                for paragraph in cell.paragraphs:
-                    for run in paragraph.runs:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.line_spacing = 1.0
+                for run in paragraph.runs:
+                    run.font.name = _DOCX_FONT
+                    run.font.size = Pt(_DOCX_FONT_SIZE)
+                    if row_index == 0 and len(rows) > 1:
                         run.bold = True
+
+
+def _setup_docx_styles(document) -> None:
+    """Times New Roman 12, 1.5 line spacing, 2 cm margins, headings at 14 pt."""
+    from docx.oxml.ns import qn
+    from docx.shared import Cm, Pt
+
+    for section in document.sections:
+        section.top_margin = Cm(2)
+        section.bottom_margin = Cm(2)
+        section.left_margin = Cm(2)
+        section.right_margin = Cm(2)
+
+    normal = document.styles["Normal"]
+    normal.font.name = _DOCX_FONT
+    normal.font.size = Pt(_DOCX_FONT_SIZE)
+    normal.paragraph_format.line_spacing = _LINE_HEIGHT
+    normal.paragraph_format.space_after = Pt(0)
+    rpr = normal.element.get_or_add_rPr()
+    fonts = rpr.get_or_add_rFonts()
+    for attribute in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+        fonts.set(qn(attribute), _DOCX_FONT)
+
+    for level in range(1, 7):
+        style = document.styles[f"Heading {level}"]
+        style.font.name = _DOCX_FONT
+        style.font.size = Pt(_DOCX_HEADING_FONT_SIZE)
+        style.font.bold = True
+        style.font.color.rgb = None
+        style.paragraph_format.line_spacing = _LINE_HEIGHT
+        style.paragraph_format.space_before = Pt(12)
+        style.paragraph_format.space_after = Pt(6)
+        rpr = style.element.get_or_add_rPr()
+        fonts = rpr.get_or_add_rFonts()
+        for attribute in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+            fonts.set(qn(attribute), _DOCX_FONT)
 
 
 def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Cm
+    from docx.shared import Cm, Pt
 
     document = Document()
+    _setup_docx_styles(document)
     has_content = False
     for block in blocks:
         if block.kind == "page_break":
@@ -173,11 +254,16 @@ def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path
                 has_content = False
         elif block.kind == "heading":
             text = _unescape(block.segments[0].text) if block.segments else ""
-            document.add_heading(text, level=min(max(block.level, 1), 6))
+            heading = document.add_heading("", level=min(max(block.level, 1), 6))
+            run = heading.add_run(text)
+            run.font.name = _DOCX_FONT
+            run.font.size = Pt(_DOCX_HEADING_FONT_SIZE)
+            run.font.bold = True
             has_content = True
         elif block.kind == "list":
             for item in block.items:
-                document.add_paragraph(_unescape(item), style="List Bullet")
+                entry = document.add_paragraph(style="List Bullet")
+                entry.add_run(_unescape(item))
             has_content = True
         elif block.kind == "table":
             _add_docx_table(document, block.rows)
@@ -222,10 +308,17 @@ def build_docx(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path
     return output_path
 
 
-def _resolve_font() -> tuple[str, str | None]:
+def _resolve_font(bold: bool = False) -> tuple[str, str | None]:
     for candidate in _FONT_CANDIDATES:
-        if Path(candidate).is_file():
+        path = Path(candidate)
+        if not path.is_file():
+            continue
+        if not bold:
             return "F0", candidate
+        bold_path = path.with_name(path.name.replace("Regular", "Bold"))
+        if bold_path.is_file():
+            return "FB", str(bold_path)
+        return "F0", candidate
     return "china-s", None
 
 
@@ -254,18 +347,19 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
         state["y"] = _MARGIN
         state["used"] = False
 
-    def write_text(text: str, font_size: float = _FONT_SIZE) -> None:
+    def write_text(text: str, font_size: float = _FONT_SIZE, bold: bool = False) -> None:
         if not text.strip():
             return
-        content_width = _PAGE_WIDTH - 2 * _MARGIN
+        active_font, active_file = _resolve_font(bold)
         for attempt in range(2):
             rect = fitz.Rect(_MARGIN, state["y"], _PAGE_WIDTH - _MARGIN, _PAGE_HEIGHT - _MARGIN)
             leftover = page.insert_textbox(
                 rect,
                 text,
                 fontsize=font_size,
-                fontname=fontname,
-                fontfile=fontfile,
+                fontname=active_font,
+                fontfile=active_file,
+                lineheight=_LINE_HEIGHT,
             )
             if leftover >= 0:
                 state["y"] = _PAGE_HEIGHT - _MARGIN - leftover + _GAP
@@ -328,6 +422,7 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
                         fontsize=_TABLE_FONT_SIZE,
                         fontname=fontname,
                         fontfile=fontfile,
+                        lineheight=1.2,
                     )
                 x += column_widths[column]
             state["y"] += height
@@ -350,9 +445,8 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path) -> Path:
             if state["used"]:
                 start_page()
         elif block.kind == "heading":
-            size = _HEADING_SIZES.get(block.level, _FONT_SIZE)
             text = _unescape(block.segments[0].text) if block.segments else ""
-            write_text(text, size)
+            write_text(text, _HEADING_FONT_SIZE, bold=True)
         elif block.kind == "list":
             for item in block.items:
                 write_text(f"• {_unescape(item)}")
@@ -388,7 +482,7 @@ def reconstruct_bundle(bundle_dir: Path, formats: list[str] | None = None) -> li
     if not text_file.is_file():
         return []
     requested = formats if formats is not None else list(settings.reconstruct_formats)
-    blocks = parse_bundle(text_file.read_text(encoding="utf-8"))
+    blocks = parse_bundle(_join_wrapped_links(text_file.read_text(encoding="utf-8")))
     created: list[Path] = []
     for fmt in requested:
         fmt = fmt.lower().lstrip(".")

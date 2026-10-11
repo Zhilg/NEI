@@ -343,12 +343,7 @@ class TxtExporter:
         elif file_type in ("html", "html_folder"):
             text = self._bundle_html(source, images_dir, text, folder=file_type == "html_folder")
 
-        header = (
-            f"<!-- source: {self._relative(source)} -->\n"
-            "<!-- Гиперссылки на картинки: ![подпись](images/имя_файла); "
-            "рукописи: [HANDWRITTEN: текст](images/имя_файла) -->"
-        )
-        (bundle_dir / "text.txt").write_text(f"{header}\n\n{text.strip()}\n", encoding="utf-8")
+        (bundle_dir / "text.txt").write_text(f"{text.strip()}\n", encoding="utf-8")
         (bundle_dir / "tables.json").write_text(
             json.dumps({"tables": parse_markdown_tables(text)}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
