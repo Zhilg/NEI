@@ -4,12 +4,12 @@ Every processed document gets its own folder inside ``<output_root>/txts/``:
 
     txts/
       <file name>/
-        text.md      document text with hyperlinks to its images
+        text.txt      document text with hyperlinks to its images
         images/      page renders and embedded pictures of the document
         tables.json  structured markdown tables (rows/cells)
         meta.json    source info and image inventory
 
-Tables are kept as Markdown tables in ``text.md`` (so ``pandoc text.md -o out.docx``
+Tables are kept as Markdown tables in ``text.txt`` (so ``pandoc text.txt -o out.docx``
 rebuilds them) and additionally mirrored as structured rows in ``tables.json``.
 Handwritten fragments are referenced as hyperlinks to the page image, because
 manuscripts are preserved as images instead of unreliable text.
@@ -272,8 +272,12 @@ class TxtExporter:
         elif file_type in ("html", "html_folder"):
             text = self._bundle_html(source, images_dir, text, folder=file_type == "html_folder")
 
-        header = f"<!-- source: {self._relative(source)} -->"
-        (bundle_dir / "text.md").write_text(f"{header}\n\n{text.strip()}\n", encoding="utf-8")
+        header = (
+            f"<!-- source: {self._relative(source)} -->\n"
+            "<!-- Гиперссылки на картинки: ![подпись](images/имя_файла); "
+            "рукописи: [HANDWRITTEN: текст](images/имя_файла) -->"
+        )
+        (bundle_dir / "text.txt").write_text(f"{header}\n\n{text.strip()}\n", encoding="utf-8")
         (bundle_dir / "tables.json").write_text(
             json.dumps({"tables": parse_markdown_tables(text)}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -516,7 +520,7 @@ class TxtExporter:
             "document_type": document_type,
             "annotation": annotation,
             "metadata": metadata,
-            "text_file": "text.md",
+            "text_file": "text.txt",
             "images_dir": "images",
             "images": images,
             "tables_file": "tables.json",
