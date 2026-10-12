@@ -1,9 +1,10 @@
 """Export per-file text bundles with hyperlinks to images for DOCX/PDF reconstruction.
 
-Every processed document gets its own folder inside ``<output_root>/txts/``:
+Every processed document gets its own folder inside ``<output_root>/txts/``,
+mirroring the document's path relative to the input root:
 
     txts/
-      <file name>/
+      <relative dir>/<file name>/
         text.txt      document text with hyperlinks to its images
         images/      page renders and embedded pictures of the document
         tables.json  structured markdown tables (rows/cells)
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import shutil
@@ -27,6 +29,8 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from idp.config import settings
+
+logger = logging.getLogger(__name__)
 
 _PAGE_MARKER_RE = re.compile(r"<!--\s*page\s+(\d+)\s*-->")
 _SLIDE_MARKER_RE = re.compile(r"<!--\s*slide\s+(\d+)\s*-->")
@@ -319,7 +323,7 @@ def _crop_region(render_path: Path, bbox: list[float], target: Path) -> bool:
 
 
 class TxtExporter:
-    """Writes one ``txts/<file name>/`` bundle per processed document."""
+    """Writes one ``txts/<relative dir>/<file name>/`` bundle per processed document."""
 
     def __init__(self, output_root: Path | None = None) -> None:
         self.root = (output_root or settings.output_root) / "txts"
@@ -332,12 +336,13 @@ class TxtExporter:
         file_type: str,
         text: str,
         *,
+        relative: Path,
         pages: int | None = None,
         document_type: str = "other",
         annotation: str = "",
         metadata: dict | None = None,
     ) -> Path:
-        bundle_dir = self._bundle_dir(source)
+        bundle_dir = self._bundle_dir(relative)
         images_dir = bundle_dir / "images"
         self._reset_regions()
         shutil.rmtree(bundle_dir, ignore_errors=True)
@@ -345,7 +350,7 @@ class TxtExporter:
 
         text = text or ""
         if file_type == "pdf":
-            text = self._bundle_pdf(source, images_dir, text)
+            text = self._bundle_pdf(source, images_dir, text, rendered_dir=self._rendered_dir(source, relative))
         elif file_type == "docx":
             text = self._bundle_docx(source, images_dir, text)
         elif file_type == "pptx":
@@ -358,31 +363,34 @@ class TxtExporter:
             json.dumps({"tables": parse_markdown_tables(text)}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        self._write_meta(bundle_dir, source, file_type, pages, document_type, annotation, metadata or {}, images_dir)
+        self._write_meta(bundle_dir, source, relative, file_type, pages, document_type, annotation, metadata or {}, images_dir)
         return bundle_dir
+
+    def _rendered_dir(self, source: Path, relative: Path) -> Path:
+        stem = source.stem if source.is_file() else source.name
+        return settings.output_root / "rendered" / relative.parent / stem
 
     def _reset_regions(self) -> None:
         self._regions = []
 
-    def _bundle_dir(self, source: Path) -> Path:
-        base = _sanitize_name(source.name)
+    def _bundle_dir(self, relative: Path) -> Path:
+        parts = [_sanitize_name(part) for part in relative.parts if part not in (".", "..")]
+        directory = self.root.joinpath(*parts[:-1]) if len(parts) > 1 else self.root
+        base = parts[-1] if parts else "unnamed"
         candidate = base
         counter = 2
-        while candidate.lower() in self._used:
+        while self._bundle_key(directory, candidate) in self._used:
             candidate = f"{base}_{counter}"
             counter += 1
-        self._used.add(candidate.lower())
-        return self.root / candidate
+        self._used.add(self._bundle_key(directory, candidate))
+        return directory / candidate
 
     @staticmethod
-    def _relative(source: Path) -> str:
-        try:
-            return str(source.resolve().relative_to(settings.input_root.resolve()))
-        except Exception:
-            return source.name
+    def _bundle_key(directory: Path, name: str) -> str:
+        return str(directory / name).lower()
 
-    def _bundle_pdf(self, pdf_path: Path, images_dir: Path, text: str) -> str:
-        page_images = self._copy_page_images(pdf_path, images_dir)
+    def _bundle_pdf(self, pdf_path: Path, images_dir: Path, text: str, rendered_dir: Path | None = None) -> str:
+        page_images = self._copy_page_images(pdf_path, images_dir, rendered_dir)
         embedded, embedded_rects = _extract_pdf_embedded_images(pdf_path, images_dir)
         if not page_images and not embedded:
             return text
@@ -541,11 +549,12 @@ class TxtExporter:
         block = _IMAGE_PLACEHOLDER_RE.sub(_image_sub, block)
         return _HANDWRITTEN_RE.sub(_handwritten_sub, block)
 
-    def _copy_page_images(self, pdf_path: Path, images_dir: Path) -> dict[int, str]:
-        rendered_dir = settings.output_root / "rendered" / pdf_path.stem
+    def _copy_page_images(self, pdf_path: Path, images_dir: Path, rendered_dir: Path | None = None) -> dict[int, str]:
+        if rendered_dir is None:
+            rendered_dir = self._rendered_dir(pdf_path, Path(pdf_path.name))
         pngs = sorted(rendered_dir.glob("*.png")) if rendered_dir.is_dir() else []
         if not pngs:
-            pngs = self._render_pages(pdf_path)
+            pngs = self._render_pages(pdf_path, rendered_dir)
         page_images: dict[int, str] = {}
         for index, png in enumerate(pngs, 1):
             name = f"page_{index:05d}.png"
@@ -554,13 +563,14 @@ class TxtExporter:
         return page_images
 
     @staticmethod
-    def _render_pages(pdf_path: Path) -> list[Path]:
+    def _render_pages(pdf_path: Path, rendered_dir: Path) -> list[Path]:
         try:
             from idp.renderer import extract_pdf_text_and_visual_pages
 
-            _, pngs, _ = extract_pdf_text_and_visual_pages(pdf_path)
+            _, pngs, _ = extract_pdf_text_and_visual_pages(pdf_path, output_dir=rendered_dir)
             return pngs
-        except Exception:
+        except Exception as exc:
+            logger.warning("Cannot render pages of %s: %s", pdf_path, exc)
             return []
 
     def _bundle_docx(self, docx_path: Path, images_dir: Path, text: str) -> str:
@@ -649,6 +659,7 @@ class TxtExporter:
         self,
         bundle_dir: Path,
         source: Path,
+        relative: Path,
         file_type: str,
         pages: int | None,
         document_type: str,
@@ -658,7 +669,7 @@ class TxtExporter:
     ) -> None:
         images = sorted(path.name for path in images_dir.iterdir() if path.is_file())
         meta = {
-            "source": self._relative(source),
+            "source": str(relative),
             "type": file_type,
             "size_bytes": source.stat().st_size if source.is_file() else None,
             "pages": pages,

@@ -46,8 +46,6 @@ _KEYWORD_HINTS = {
 
 def detect_document_type(path: Path, text: str = "") -> str:
     ext = path.suffix.lower()
-    if ext in _EXT_TYPE:
-        pass
     text_sample = text[:4000] if text else ""
     scores: dict[str, int] = {}
     for dtype, pattern in _KEYWORD_HINTS.items():
@@ -55,4 +53,4 @@ def detect_document_type(path: Path, text: str = "") -> str:
             scores[dtype] = scores.get(dtype, 0) + 1
     if scores:
         return max(scores, key=scores.get)
-    return _DEFAULT_TYPE
+    return _EXT_TYPE.get(ext) or _DEFAULT_TYPE

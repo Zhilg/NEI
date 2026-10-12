@@ -12,12 +12,16 @@ Run standalone:  idp-reconstruct [--bundle DIR] [--root DIR] [--format docx,pdf]
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from idp.config import settings
+
+logger = logging.getLogger(__name__)
 
 _PAGE_MARKER_RE = re.compile(r"<!--\s*page\s+(\d+)\s*-->")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -51,6 +55,8 @@ _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
 )
+_MIN_FONT_SIZE = 8.0
+_MAX_TEXT_WRITES = 512
 
 
 @dataclass
@@ -349,6 +355,22 @@ def _chars_per_line(width: float, font_size: float) -> int:
     return max(4, int(width / (font_size * 0.52)))
 
 
+def _split_at_separator(text: str) -> tuple[str, str, str]:
+    """Split near the middle at a whitespace boundary so both halves stay wrappable.
+
+    Splitting in the middle keeps the number of retries logarithmic even for a
+    paragraph that is far longer than one page.
+    """
+    target = len(text) // 2
+    best: re.Match | None = None
+    for match in re.finditer(r"\s+", text):
+        if best is None or abs(match.start() - target) < abs(best.start() - target):
+            best = match
+    if best is None:
+        return "", "", text
+    return text[: best.start()], text[best.start(): best.end()], text[best.end():]
+
+
 def _text_lines_needed(text: str, width: float, font_size: float) -> int:
     lines = 0
     for chunk in text.split("\n"):
@@ -386,24 +408,58 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path, regions:
                 space_pt = 0.0
             if space_pt > 0:
                 body = " " * max(1, int(indent_pt / space_pt)) + text
-        for attempt in range(2):
+        pending = [body]
+        size = font_size
+        writes = 0
+        while pending:
+            writes += 1
+            if writes > _MAX_TEXT_WRITES:
+                logger.warning(
+                    "PDF reconstruction stopped after %d writes; %d fragment(s) dropped",
+                    _MAX_TEXT_WRITES, len(pending),
+                )
+                break
+            remaining = pending.pop(0)
+            if not remaining.strip():
+                continue
+            if _PAGE_HEIGHT - _MARGIN - state["y"] < _MIN_FONT_SIZE * _LINE_HEIGHT:
+                start_page()
             rect = fitz.Rect(_MARGIN, state["y"], _PAGE_WIDTH - _MARGIN, _PAGE_HEIGHT - _MARGIN)
-            leftover = page.insert_textbox(
-                rect,
-                body,
-                fontsize=font_size,
-                fontname=active_font,
-                fontfile=active_file,
-                lineheight=_LINE_HEIGHT,
-                align=align,
-            )
+            try:
+                leftover = page.insert_textbox(
+                    rect,
+                    remaining,
+                    fontsize=size,
+                    fontname=active_font,
+                    fontfile=active_file,
+                    lineheight=_LINE_HEIGHT,
+                    align=align,
+                )
+            except ValueError as exc:
+                logger.warning("PDF reconstruction insert_textbox failed: %s", exc)
+                start_page()
+                pending.insert(0, remaining)
+                continue
             if leftover >= 0:
                 state["y"] = _PAGE_HEIGHT - _MARGIN - leftover + _GAP
                 state["used"] = True
-                return
-            start_page()
-            font_size = max(8.0, font_size - 1.0)
-        state["y"] = _MARGIN
+                continue
+            if size > _MIN_FONT_SIZE:
+                start_page()
+                size = max(_MIN_FONT_SIZE, size - 1.0)
+                pending.insert(0, remaining)
+                continue
+            head, separator, tail = _split_at_separator(remaining)
+            if not head or not tail:
+                logger.warning(
+                    "PDF reconstruction dropped a text fragment that does not fit a page: %.120r",
+                    remaining,
+                )
+                start_page()
+                state["used"] = False
+                continue
+            pending.insert(0, tail)
+            pending.insert(0, head)
 
     def write_image(image_path: Path, geometry: dict | None = None) -> None:
         if not image_path.is_file():
@@ -559,6 +615,10 @@ def reconstruct_bundle(bundle_dir: Path, formats: list[str] | None = None) -> li
 def main() -> None:
     import argparse
 
+    logging.basicConfig(
+        level=getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     parser = argparse.ArgumentParser(description="Rebuild DOCX/PDF documents from txts bundles")
     parser.add_argument("--bundle", type=Path, help="single bundle directory")
     parser.add_argument("--root", type=Path, help="bundles root (default: <output_root>/txts)")

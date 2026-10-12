@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.util import Emu
 
 
 _HEADING_PATTERN = re.compile(r"^(?:Глава\s+\d+|[0-9]+(?:\.[0-9]+)*\s+.+)$", re.UNICODE)

@@ -1,129 +1,77 @@
-# Architecture: Offline PDF Batch Pipeline
+# Architecture: Offline Document Pipeline
 
 ## Scope
 
-The system processes only PDF files submitted from explicit, allowlisted absolute directories. It is a local, disconnected deployment: no cloud APIs, package downloads, model downloads, telemetry, or internet egress at runtime.
-
-The architecture deliberately does not contain an external message broker, document classifier, PDF native-text path, OCR ensemble, standalone text-quality service, standalone table/figure service, specialist extraction path, confidence fusion service, or HITL portal. PostgreSQL owns durable work orchestration; MinerU owns layout; a single Qwen-VL reconstruction run owns document assembly and validation.
+Один Docker Compose стек, работающий без интернета. Вход — каталог с PDF/DOCX/PPTX/HTML,
+выход — Markdown, сущности и бандлы для восстановления документов. Внешних сервисов нет:
+никакой базы данных, объектного хранилища, брокера очередей, OCR-движка и HITL-портала.
+Весы моделей монтируются с хоста; скачивание чего-либо в runtime запрещено.
 
 ## System Context
 
 ```mermaid
 flowchart TB
-    Operator["Operator"] --> CLI["idp batch submit/status/report"]
-    CLI --> Controller["Controller"]
-    Controller --> PG[("PostgreSQL")]
-    Controller --> Storage[("MinIO")]
-    Controller --> Workers["Bounded workers"]
-    Workers --> GPU1["GPU1: SwinIR, MinerU, PaddleOCR"]
-    Workers --> GPU0["GPU0 scheduler: Qwen-VL or Qwen3"]
-    WorkerReports["Worker results"] --> Controller
-    Controller --> Reports["CSV/JSON reports + final bundle keys"]
+    Operator["Оператор"] -->|"cp файлов в data/input/"| Worker["worker (idp)"]
+    Worker -->|"chat/completions"| V0["vllm-vl-0 (GPU0)"]
+    Worker -->|"chat/completions"| V1["vllm-vl-1 (GPU1)"]
+    V0 --> FS[("data/output/")]
+    V1 --> FS
+    Worker --> FS
+    Operator -->|"idp-reconstruct"| FS
+    Operator -->|"idp-operator"| Corrections["operator_corrections.jsonl"]
+    Corrections -. few-shot блок в промпте .-> Worker
 ```
 
-## Control Plane
+Сеть Compose `internal: true`: worker видит только сервисы стека, наружу — ничего.
 
-### Submission and discovery
+## Worker
 
-`idp batch submit ROOT...` verifies every root is absolute, resolves it with `realpath`, and confirms it is inside configured allowlist roots. Source directories are mounted read-only. The scanner recursively discovers PDFs, never follows symbolic links, waits for two identical file-stat observations, then calculates SHA-256.
+Один процесс, `asyncio`. Обход `input_root` рекурсивно (`rglob`); папки с `*.html`
+обрабатываются как один документ. Для каждого файла:
 
-The resulting scan snapshot is immutable. Each `batch_item` records the submitted root, observed path, file metadata, content hash, disposition and document reference. A later file change is not folded into a running batch.
+1. **Конвертация** — PDF рендерится в PNG (`src/idp/renderer.py`, пул потоков, документ
+   открывается per-thread), DOCX/PPTX/HTML конвертируются нативно. Текстовый слой PDF
+   не читается никогда.
+2. **VLM** — `src/idp/vlm_client.py`: реконструкция Markdown по чанкам страниц
+   (`IDP_VL_MAX_IMAGES`), затем извлечение сущностей из чистого текста и отдельно
+   с изображений. Общий `httpx.AsyncClient` на процесс, round-robin по эндпоинтам,
+   3 попытки с backoff на сетевые ошибки и 429/5xx.
+3. **Постобработка** — нормализация таблиц, типографики, чистка OCR-артефактов,
+   снятие bbox-аннотаций; абзацы и заголовки выделяются в `entities`/`paragraphs`.
+4. **Сущности** — `page` для текстовых чанков вычисляется по маркерам `<!-- page N -->`,
+   для визуальных — по позиции чанка; далее дедупликация, нормализация и порог
+   уверенности `IDP_MIN_ENTITY_CONFIDENCE`.
+5. **Артефакты** — `<stem>.md` (только `--artifacts`), бандл `txts/`, рендеры `rendered/`,
+   `reconstruct.docx/pdf` из бандла. Тяжёлые операции (рендер, экспорт, сборка)
+   выполняются в `asyncio.to_thread`, чтобы не блокировать event loop.
 
-### PostgreSQL queue
+Результаты: `results.jsonl` (append per file) + `results_readable.json` (rewrite раз в
+прогон), `entities.json` (flush раз в прогон и каждые 50 файлов), `stats.jsonl`
+(append per file). Все пути вывода повторяют структуру input.
 
-PostgreSQL is the source of truth and the work queue. A worker claims work with `FOR UPDATE SKIP LOCKED`; the claim has an owner, expiry time and heartbeat. A reaper requeues expired claims. Job dependencies enforce stage order. Jobs, item state changes, resource reservations and final output pointers are written in transactional boundaries.
+## Inference backends
 
-No worker directly mutates a batch item to a terminal state. A worker emits a stage result to the controller/repository layer, which verifies idempotency and commits the state transition.
+- `vllm-vl-0`, `vllm-vl-1` — два инстанса vLLM с одной VL-моделью, по одному на GPU;
+  worker балансирует запросы round-robin (`IDP_VL_ENDPOINTS`).
+- `infra/compose/sglang.yml` — оверлей поверх `local.yml`, переключает те же сервисы
+  на SGLang (порты и имена не меняются).
 
-### Core records
+Параметры инференса (квантизация, длина контекста, KV-cache) задаются в compose,
+не в Python-коде.
 
-| Record | Purpose |
-|---|---|
-| `pipeline_profiles` | Immutable runtime/model/prompt/schema/limit release configuration |
-| `batches`, `batch_roots` | Submission and scan snapshot |
-| `documents`, `batch_items` | Content identity and one path occurrence in one batch |
-| `jobs`, `stage_runs` | Dependencies, claims, attempts, errors and timings |
-| `resource_reservations` | GPU, CPU and storage quota admission control |
-| `artifacts` | MinIO object hash, lineage and retention class |
-| `entity_results` | Queryable entity summary |
-| `audit_samples`, `events` | Audit selection and immutable operations log |
+## Schema и фидбек
 
-### Idempotency and reuse
+- Схема сущностей: `src/idp/entity_schema.json` — read-only шаблон; рабочая копия
+  (`IDP_ENTITY_SCHEMA_PATH`, по умолчанию `<output_root>/entity_schema.json`)
+  создаётся/дополняется автоматически. Запись не может уронить прогон: при отказе
+  файловой системы пишется warning.
+- `idp-operator` — терминальный review страниц; корректировки оператора попадают в
+  `operator_corrections.jsonl` и подмешиваются few-shot блоком в system-промпт
+  (`FeedbackCache`, инвалидация по mtime+size файла).
+- `idp-finetune-dataset` — конвертирует коррекции в `finetune_data.jsonl`; системный
+  промпт в датасете всегда продакшн-версия.
 
-`source_sha256` identifies the canonical document. Final output can be reused only when source hash, pipeline version, complete profile hash, prompt version, entity schema version and quality policy version all match. Any change to code, weights, quantization, runtime image, prompt, schema or threshold invalidates reuse.
+## Логирование
 
-## Data Plane
-
-### 1. Render
-
-A deterministic PDF renderer creates page images. The text layer is neither read nor persisted. `render_manifest` records original page geometry, rotation, DPI, colour mode, image hashes and every coordinate transform.
-
-### 2. Upscale
-
-Every page is processed by local SwinIR x4 without GAN. A lightweight image-quality gate compares the original and improved image using artifact/clipping/no-reference signals and sample OCR preflight. The better input is selected for downstream processing, while the immutable original render remains available for lineage.
-
-### 3. Full MinerU layout
-
-Pinned offline MinerU 3.4.0 produces `middle.json`. An adapter converts it to the internal, versioned `layout_manifest`. The adapter retains every block and never uses MinerU-generated text or Markdown as content:
-
-```text
-block_id, type, page, bbox, hierarchy, relations, reading_order, crop_ref
-```
-
-All known types are retained, including text, titles, lists, tables, images, charts, formulas, headers, footers, footnotes, stamps and signatures.
-
-### 4. OCR within text blocks
-
-PaddleOCR runs only inside MinerU text-bearing blocks. `PP-OCRv5_server_det` segments lines within each block without changing document-level structure. A line-level router chooses:
-
-- `eslav_PP-OCRv5_mobile_rec` for Russian, Ukrainian, Belarusian and English;
-- `cyrillic_PP-OCRv5_mobile_rec` for other Cyrillic scripts;
-- `PP-OCRv6_medium` for supported Latin/CJK scripts.
-
-The OCR manifest keeps raw and normalized text, token/line geometry in page coordinates, confidence, script, language, crop hash and exact model revision. Unknown scripts remain image evidence and are flagged; no text is fabricated.
-
-### 5. Qwen-VL reconstruction and validation
-
-One logical Qwen3.8-27B reconstruction run receives layout, selected page images, all semantically relevant crops, OCR tokens and coordinate transforms. Long documents may use deterministic internal page/chunk batching, but there is no separate validation model or pipeline.
-
-Its structured response must:
-
-- preserve full layout coverage and reading order;
-- validate OCR against the supplied image and record evidence-backed corrections;
-- transcribe tables;
-- interpret semantically significant images, diagrams, charts, formulas, stamps, signatures, headers, footers and footnotes;
-- assemble one grounded document-level Markdown output;
-- report lightweight local validation findings for OCR disagreement, unreadable regions, missing blocks and obvious sum/date/numbering/reference inconsistencies.
-
-Every Markdown block preserves `block_id`, page, bbox and evidence. Qwen-VL is prohibited from introducing facts without source evidence.
-
-### 6. Fenic entities
-
-Fenic runs `semantic.extract` against the reconstructed Markdown using local Qwen3-14B through an OpenAI-compatible vLLM endpoint. It produces a versioned Pydantic entity schema. An entity is valid only if its evidence quote exists in Markdown and its page/block/bbox resolve to layout provenance.
-
-## Resource Scheduling
-
-```mermaid
-flowchart LR
-    J[("PostgreSQL jobs")] --> CPU["CPU pools\nscan/hash/render/storage"]
-    J --> G1["GPU1 bounded queues\nSwinIR -> MinerU -> OCR"]
-    J --> A["GPU0 admission scheduler"]
-    A --> QV["Qwen3.8-27B"]
-    A --> Q3["Qwen3-14B / Fenic"]
-```
-
-GPU0 has exactly one active heavy role. GPU1 has separate bounded queues for enhancement, layout and OCR. The profile fixes concurrency, VRAM, timeout, image/page/crop bounds, artifact quota and retry limits. Reservations are persisted and released through heartbeat expiry, including after a crashed worker.
-
-If object storage falls below the configured reserve, the controller sets the batch to `PAUSED_CAPACITY`; no new heavy job starts, but completed bundles can finish publication.
-
-## Output and Quality
-
-Publication is atomic into an immutable MinIO prefix. It contains `final.md`, `entities.json` and `manifest.json`. The manifest stores input/output hashes, complete artifact lineage, profile and model checksums, prompts, schemas, retries, fallbacks, OCR signals, VLM findings and evidence coverage.
-
-Quality is `pass`, `warning` or `failed`. A technically successful result is published even when quality is failed, with `COMPLETED_WITH_WARNINGS`. A terminal technical failure is `QUARANTINED` and does not block other items.
-
-## Compose Deployment
-
-One Docker Compose stack runs the system in development and production. The application source directory, local model directories, MinerU/PaddleOCR tool directory, input directory and persistent data directory are bind-mounted into containers. The application image is only a Python runtime; it is not rebuilt when code changes.
-
-The Windows build script creates a portable application image with pinned Python dependencies and test tools. PostgreSQL, MinIO and staging data persist outside containers. The worker invokes only mounted local model tools and reaches only local Compose model services; telemetry and model downloads remain disabled.
+Все модули используют `logging`; уровень — `IDP_LOG_LEVEL` (по умолчанию `INFO`).
+Прогресс-бар tqdm идёт в stdout, диагностика — в stderr.

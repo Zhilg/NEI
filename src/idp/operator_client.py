@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
+import logging
 import os
 import subprocess
 import sys
@@ -14,7 +14,9 @@ from pathlib import Path
 from idp.config import settings
 from idp.feedback_store import append_correction, corrections_path, read_corrections
 from idp.renderer import render_pdf_to_pngs
-from idp.vlm_client import reconstruct_markdown
+from idp.vlm_client import close_vlm_client, reconstruct_markdown
+
+logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 PDF_EXTENSIONS = {".pdf"}
@@ -147,7 +149,7 @@ class OperatorClient:
                 self._launch_editor(draft_path)
                 try:
                     markdown = self._read_draft(draft_path)
-                except (OSError, json.JSONDecodeError) as exc:
+                except OSError as exc:
                     print(f"Cannot read draft after edit: {exc}", file=sys.stderr)
                     continue
                 self._render_console(image_path, markdown, draft_path)
@@ -155,7 +157,7 @@ class OperatorClient:
             if choice in {"r", "reread"}:
                 try:
                     markdown = self._read_draft(draft_path)
-                except (OSError, json.JSONDecodeError) as exc:
+                except OSError as exc:
                     print(f"Cannot read draft: {exc}", file=sys.stderr)
                     continue
                 self._render_console(image_path, markdown, draft_path)
@@ -163,7 +165,7 @@ class OperatorClient:
             if choice in {"a", "accept"}:
                 try:
                     saved_markdown = self._read_draft(draft_path)
-                except (OSError, json.JSONDecodeError) as exc:
+                except OSError as exc:
                     print(f"Cannot read draft: {exc}", file=sys.stderr)
                     continue
                 append_correction(
@@ -177,6 +179,7 @@ class OperatorClient:
                 marker.write_text("reviewed", encoding="utf-8")
                 print(f"Saved correction -> {corrections_path()}")
                 return True
+        return False
 
     async def run(self) -> None:
         images = self._collect_images()
@@ -189,7 +192,7 @@ class OperatorClient:
         print(f"Pages to review: {len(images)} (document_type={self.document_type}, test_mode={settings.test_mode})")
 
         reviewed = {str(record.get("page_image", "")) for record in read_corrections()}
-        pending = [img for img in images if not self._already_reviewed(img, set())]
+        pending = [img for img in images if not self._already_reviewed(img, reviewed)]
         print(f"Pending pages: {len(pending)}")
 
         if pending:
@@ -241,6 +244,8 @@ def _parse_args() -> argparse.Namespace:
 
 async def _main() -> None:
     args = _parse_args()
+    level = getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO)
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings.test_mode = args.test_mode
 
     input_path = Path(args.input)
@@ -254,7 +259,10 @@ async def _main() -> None:
         open_image=args.open_image,
         force=args.force,
     )
-    await client.run()
+    try:
+        await client.run()
+    finally:
+        await close_vlm_client()
 
 
 def main() -> None:
