@@ -24,7 +24,7 @@ class _TextExtractor(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
         self._skip_depth: int = 0
-        self._in_table = False
+        self._table_depth: int = 0
         self._table_rows: list[list[str]] = []
         self._current_row: list[str] = []
         self._current_cell: list[str] = []
@@ -63,6 +63,10 @@ class _TextExtractor(HTMLParser):
             self._heading_buf = None
             self._heading_level = 0
 
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
     def handle_starttag(self, tag: str, attrs: list) -> None:
         if tag in ("script", "style", "noscript", "iframe", "svg"):
             self._skip_depth += 1
@@ -79,13 +83,13 @@ class _TextExtractor(HTMLParser):
             self._heading_level = int(tag[1])
             self._heading_buf = ""
         if tag == "table":
-            self._in_table = True
-        if tag in ("tr",):
-            if self._in_table:
-                self._flush_row()
-        if tag in ("td", "th"):
-            if self._in_table:
-                self._flush_cell()
+            # Nested tables flatten into the enclosing cell: only the outermost
+            # table drives row/column collection.
+            self._table_depth += 1
+        if self._table_depth == 1 and tag == "tr":
+            self._flush_row()
+        if self._table_depth == 1 and tag in ("td", "th"):
+            self._flush_cell()
         if tag in ("p", "div", "br", "li",
                     "blockquote", "title", "caption", "pre", "section",
                     "article", "figure", "figcaption",
@@ -98,14 +102,13 @@ class _TextExtractor(HTMLParser):
         if tag in ("button", "input", "select", "textarea", "option", "label", "form", "nav", "aside", "header", "footer"):
             self._skip_depth = max(0, self._skip_depth - 1)
         if tag == "table":
-            self._in_table = False
-            self._flush_table()
-        if tag in ("tr",):
-            if self._in_table:
-                self._flush_row()
-        if tag in ("td", "th"):
-            if self._in_table:
-                self._flush_cell()
+            if self._table_depth == 1:
+                self._flush_table()
+            self._table_depth = max(0, self._table_depth - 1)
+        if self._table_depth == 1 and tag == "tr":
+            self._flush_row()
+        if self._table_depth == 1 and tag in ("td", "th"):
+            self._flush_cell()
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             self._maybe_emit_heading()
         if tag in ("p", "div", "li",
@@ -120,10 +123,10 @@ class _TextExtractor(HTMLParser):
             if not text:
                 return
             if self._heading_buf is not None and self._heading_level:
-                self._heading_buf = (self._heading_buf + " " + text).strip()
+                self._heading_buf = (self._heading_buf + " " + data).strip()
                 return
-            if self._in_table:
-                self._current_cell.append(text)
+            if self._table_depth:
+                self._current_cell.append(data)
                 return
             self._parts.append(text)
 
@@ -136,7 +139,7 @@ def _extract_html_text(html_content: str) -> str:
     parser = _TextExtractor()
     parser.feed(html_content)
     parser.close()
-    text = "".join(parser._parts)
+    text = parser.text
     lines = text.splitlines()
     cleaned = [line.strip() for line in lines if line.strip()]
     return "\n\n".join(cleaned)

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
-import sys
+import logging
 from pathlib import Path
 
 from idp.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class FeedbackStore:
@@ -29,12 +31,12 @@ class FeedbackStore:
                     try:
                         record = json.loads(line)
                     except json.JSONDecodeError:
-                        print(f"Feedback store: skipping malformed line in {self.path}", file=sys.stderr)
+                        logger.warning("Feedback store: skipping malformed line in %s", self.path)
                         continue
                     if isinstance(record, dict):
                         records.append(record)
         except OSError as exc:
-            print(f"Feedback store: cannot read {self.path}: {exc}", file=sys.stderr)
+            logger.warning("Feedback store: cannot read %s: %s", self.path, exc)
             return []
         return records
 

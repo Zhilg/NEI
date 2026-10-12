@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+import logging
+import os
 from pathlib import Path
 
 from idp.config import settings
 from idp.feedback_store import read_corrections
 from idp.prompts import combined_system_prompt, entity_system_prompt
+
+logger = logging.getLogger(__name__)
 
 
 def _target_text(record: dict) -> str:
@@ -30,11 +33,13 @@ def _target_text(record: dict) -> str:
 
 
 def _prompt_text(document_type: str = "other", visual: bool = True) -> str:
+    # Training samples must mirror the production system prompt exactly, so the
+    # test variants (different wording, confidence comments) are never used here.
     return (
-        combined_system_prompt(document_type=document_type, test=True)
+        combined_system_prompt(document_type=document_type)
         + "\n\n"
         + "ENTITY EXTRACTION RULES:\n"
-        + entity_system_prompt(document_type=document_type, visual=visual, test=True)
+        + entity_system_prompt(document_type=document_type, visual=visual)
     )
 
 
@@ -82,6 +87,10 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    logging.basicConfig(
+        level=getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     corrections = Path(args.input) if args.input else Path(settings.operator_corrections_path)
     output = Path(args.output) if args.output else Path(settings.finetune_dataset_path)
 
@@ -91,7 +100,7 @@ def main() -> None:
         include_images=not args.no_images,
     )
     if not samples:
-        print(f"No operator corrections with entities found in {corrections}", file=sys.stderr)
+        logger.warning("No operator corrections with entities found in %s", corrections)
         return
 
     output.parent.mkdir(parents=True, exist_ok=True)

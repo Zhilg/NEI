@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# The whole file is rewritten on flush, so a long run must not flush per file.
+_FLUSH_EVERY = 50
 
 
 class EntityStore:
@@ -13,6 +19,7 @@ class EntityStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._data: dict[str, dict[str, Any]] = self._load()
         self._dirty = False
+        self._appends_since_flush = 0
 
     def _load(self) -> dict[str, dict[str, Any]]:
         try:
@@ -36,21 +43,30 @@ class EntityStore:
             unique_entities.append(entity)
         self._data[source_file] = {"paragraphs": paragraphs, "entities": unique_entities, "annotation": annotation}
         self._dirty = True
-        self.flush()
+        self._appends_since_flush += 1
+        if self._appends_since_flush >= _FLUSH_EVERY:
+            self.flush()
 
     def flush(self) -> None:
         if not self._dirty:
             return
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-        self._dirty = False
+        try:
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            self._dirty = False
+            self._appends_since_flush = 0
+        except OSError as exc:
+            logger.warning("Cannot write entity store %s: %s", self.path, exc)
 
     def update_schema(self, new_types: list[dict]) -> None:
-        from idp.vlm_client import update_entity_schema
+        from idp.entity_schema import update_entity_schema
 
         update_entity_schema(new_types)
 
     def __del__(self) -> None:
         if self._dirty:
-            self.flush()
+            try:
+                self.flush()
+            except Exception:
+                pass

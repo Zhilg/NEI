@@ -122,23 +122,17 @@ IDP_MODELS_ROOT=../../transfer/models
 
 ## Режимы работы
 
-### Без флага `--artifacts` (быстрый, экономия токенов)
+### Без флага `--artifacts` (быстрый, экономия диска)
 
 ```bash
 docker compose -f infra/compose/local.yml up -d
 ```
 
-В этом режиме:
-- **Визуальные страницы PDF** → отправляются на VLM с промптом **только для извлечения сущностей** (entity-only). Markdown не генерируется.
-- **Параграфы** берутся из нативного текстового слоя PDF.
-- **Экономия**: ~30-40% токенов на визуальных страницах, так как VLM не тратит токены на реконструкцию markdown.
+В этом режиме pipeline выполняет всё, кроме записи `<stem>.md`: рендерит страницы,
+строит Markdown, извлекает сущности, пишет бандлы и собирает reconstruct.docx/pdf,
+но сам `.md` на диск не сохраняется.
 
-**Когда качество может упасть:**
-- Сканированные PDF без текстового слоя → параграфы будут пустые
-- PDF с таблицами, колонками, врезками → нативный текст не сохраняет reading order
-- Документы с рукописным текстом → нативный текст его не извлекает
-
-### С флагом `--artifacts` (качество, полный markdown)
+### С флагом `--artifacts` (полный markdown)
 
 ```bash
 docker compose -f infra/compose/local.yml up -d
@@ -151,10 +145,17 @@ docker compose exec worker idp --artifacts
 IDP_ARTIFACTS_MODE=true
 ```
 
-В этом режиме:
-- **Визуальные страницы PDF** → комбинированный запрос: реконструкция markdown + извлечение сущностей
-- **Параграфы** из VLM-реконструкции + нативного текста
-- **Качество paragraphs**: максимальное, VLM понимает структуру, таблицы, reading order
+В этом режиме дополнительно пишется `<stem>.md` — реконструированный Markdown
+(текстовый слой PDF никогда не читается, всё идёт через VLM).
+
+## Переменные окружения
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `IDP_ENTITY_SCHEMA_PATH` | `<output_root>/entity_schema.json` | куда дописывать новые типы сущностей (исходная схема в `src/idp/` — шаблон только для чтения) |
+| `IDP_LOG_LEVEL` | `INFO` | уровень логов (`DEBUG` включает размеры страниц, URL и превью ответов VLM) |
+| `IDP_ARTIFACTS_MODE` | `false` | аналог флага `--artifacts` |
+| `IDP_RECONSTRUCT_FORMATS` | `docx,pdf` | какие форматы собирать из бандлов (пусто — не собирать) |
 
 ## Настройка скорости и качества
 
@@ -199,11 +200,19 @@ IDP_MIN_ENTITY_CONFIDENCE=0.3
 
 ## Результаты
 
+Пути вывода повторяют структуру `data/input/`:
+
+- `data/output/<путь>/<stem>.md` — реконструированный Markdown (только с `--artifacts`)
 - `data/output/results.jsonl` — одна строка на документ, для программного чтения
-- `data/output/results_readable.json` — массив с pretty-print, для человека
-- `data/output/entities.json` — все сущности сгруппированные по файлу
+- `data/output/results_readable.json` — pretty-print, для человека (перезаписывается один раз за прогон)
+- `data/output/entities.json` — все сущности, сгруппированные по файлу (сбрасывается на диск раз в прогон и каждые 50 файлов)
 - `data/output/stats.jsonl` — статистика по обработке
-- `data/output/txts/<имя файла>/` — бандл для восстановления DOCX/PDF: `text.txt` (текст + гиперссылки на картинки), `images/` (рендеры страниц и встроенные изображения), `tables.json`, `meta.json`, `reconstruct.docx`, `reconstruct.pdf`
+- `data/output/rendered/<путь>/<stem>/` — рендеры страниц PDF
+- `data/output/txts/<путь>/<stem>/` — бандл для восстановления DOCX/PDF: `text.txt` (текст + гиперссылки на картинки), `images/` (рендеры страниц и встроенные изображения), `tables.json`, `meta.json`, `reconstruct.docx`, `reconstruct.pdf`
+- `data/output/entity_schema.json` — рабочая копия схемы сущностей (см. `IDP_ENTITY_SCHEMA_PATH`)
+
+Повторный запуск пропускает файлы, которые уже есть в `results.jsonl` со статусом
+`ok` или `skip`; `idp --force` обрабатывает всё заново.
 
 ## Проблемы
 
@@ -287,19 +296,26 @@ src/idp/           # Код пайплайна
   worker.py        # Оркестратор
   vlm_client.py    # Клиент к vLLM, промпты, парсинг
   renderer.py      # PDF → PNG
-  html_converter.py # HTML → текст
-  docx_converter.py # DOCX → текст
-  pptx_converter.py # PPTX → текст
+  html_converter.py # HTML → markdown
+  docx_converter.py # DOCX → markdown
+  pptx_converter.py # PPTX → markdown
+  document_classifier.py  # Определение типа документа
   result_writer.py # Запись результатов
+  stats_writer.py  # stats.jsonl
   entity_store.py  # Хранилище сущностей
+  feedback_store.py # Коррекции оператора (few-shot для VLM)
+  finetune_dataset.py # Датасет дообучения из коррекций
+  metadata_extractor.py # Метаданные DOCX/PPTX
   txt_export.py    # Экспорт txts-бандлов с гиперссылками на картинки
   reconstructor.py # Сборка DOCX/PDF из бандлов
+  operator_client.py # Терминальный инструмент review'а оператора
+  prompts.py       # Промпты для VLM
 
 infra/compose/
-  local.yml        # Docker Compose для production
-  local-test.yml   # Для тестов
+  local.yml        # Docker Compose (worker + 2 инстанса vLLM VL)
+  sglang.yml       # Оверлей: замена vLLM на SGLang
 
 data/
-  input/           # П-drop файлов
-  output/          # Результаты
+  input/           # Каталог входных файлов
+  output/          # Результаты (структура повторяет input)
 ```

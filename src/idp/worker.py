@@ -5,10 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import re
-import shutil
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +16,7 @@ from tqdm import tqdm
 
 from idp.config import settings
 from idp.document_classifier import detect_document_type
+from idp.entity_schema import load_entity_schema, update_entity_schema
 from idp.docx_converter import convert_docx_to_markdown
 from idp.html_converter import convert_html_folder_to_markdown, convert_html_to_markdown
 from idp.metadata_extractor import extract_metadata
@@ -25,18 +25,20 @@ from idp.renderer import extract_pdf_text_and_visual_pages
 from idp.entity_store import EntityStore
 from idp.reconstructor import reconstruct_bundle
 from idp.result_writer import ResultWriter
-from idp.stats_writer import StatsWriter, FileTimer
+from idp.stats_writer import FileTimer, StatsWriter
 from idp.txt_export import TxtExporter
 from idp.vlm_client import (
-    _clean_ocr_artifacts,
+    clean_ocr_artifacts,
     strip_bbox_annotations,
     extract_entities_from_text,
     extract_paragraphs,
     generate_document_annotation,
     reconstruct_markdown,
-    update_entity_schema,
     extract_entities_from_images,
+    close_vlm_client,
 )
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html"}
 
@@ -76,8 +78,11 @@ class FileResult:
 
 class Worker:
     def __init__(self, artifacts_mode: bool = False, force: bool = False) -> None:
-        self.artifacts_mode = artifacts_mode
+        self.artifacts_mode = artifacts_mode or settings.artifacts_mode
         self.force = force
+        self._input_root: Path = settings.input_root
+        self._processed: set[str] = set()
+        self._stats_writer: StatsWriter | None = None
 
     def _find_files(self, input_root: Path) -> list[Path]:
         files: list[Path] = []
@@ -92,22 +97,44 @@ class Worker:
         filtered_files = [f for f in files if not any(f.is_relative_to(d) for d in dirs)]
         return sorted(dirs) + sorted(filtered_files)
 
-    def _already_processed(self, file_path: Path, processed: set[str]) -> bool:
-        relative = str(file_path.relative_to(settings.input_root))
-        return relative in processed
+    def _load_processed(self) -> set[str]:
+        processed: set[str] = set()
+        if self.force:
+            return processed
+        results_path = settings.output_root / "results.jsonl"
+        if not results_path.exists():
+            return processed
+        with open(results_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("status") in ("ok", "skip"):
+                    processed.add(record["file"])
+        return processed
 
-    def _get_new_entity_types(self, entities: list[dict], schema: dict) -> list[dict]:
-        existing_names = {t["name"] for t in schema.get("entity_types", [])}
-        found_types: set[str] = set()
-        for entity in entities:
-            if isinstance(entity, dict):
-                etype = entity.get("type")
-                if etype and etype not in existing_names:
-                    found_types.add(etype)
-        new_types = []
-        for name in sorted(found_types):
-            new_types.append({"name": name, "description": f"Auto-detected entity type: {name}"})
-        return new_types
+    def _already_processed(self, file_path: Path) -> bool:
+        relative = str(file_path.relative_to(self._input_root))
+        return relative in self._processed
+
+    def _artifact_paths(self, relative: Path) -> tuple[Path, Path]:
+        output_md = settings.output_root / relative.parent / f"{relative.stem}.md"
+        return output_md, output_md.with_suffix(".md.tmp")
+
+    def _rendered_dir(self, relative: Path) -> Path:
+        return settings.output_root / "rendered" / relative.parent / relative.stem
+
+    def _get_new_entity_types(self, entity_types: set[str], schema: dict) -> list[dict]:
+        existing_names = {t["name"] for t in schema.get("entity_types", []) if t.get("name")}
+        return [
+            {"name": name, "description": f"Auto-detected entity type: {name}"}
+            for name in sorted(entity_types - existing_names)
+            if name
+        ]
 
     def _postprocess_markdown(self, markdown: str) -> str:
         lines = markdown.splitlines()
@@ -180,7 +207,7 @@ class Worker:
 
     def _normalize_markdown(self, markdown: str) -> str:
         return self._normalize_typography(
-            _clean_ocr_artifacts(
+            clean_ocr_artifacts(
                 self._postprocess_markdown(markdown)
             )
         )
@@ -212,65 +239,107 @@ class Worker:
         pbar: tqdm,
         txt_exporter: TxtExporter,
     ) -> dict:
-        relative = file_path.relative_to(settings.input_root)
+        relative = file_path.relative_to(self._input_root)
         stem = file_path.stem if file_path.is_file() else file_path.name
-        output_md = settings.output_root / f"{stem}.md"
-        output_md_tmp = output_md.with_suffix(".md.tmp")
+        output_md, output_md_tmp = self._artifact_paths(relative)
         file_type = file_path.suffix.lower().lstrip(".") if file_path.is_file() else "html_folder"
 
         timer = FileTimer(
-            stats_writer=None,
             file_name=str(relative),
             file_type=file_type,
             size_bytes=file_path.stat().st_size if file_path.is_file() else 0,
             pages=None,
         )
 
+        result: FileResult | None = None
         try:
             if file_path.is_dir():
-                result = await self._process_html_folder(file_path, output_md_tmp, output_md, timer)
+                result = await self._process_html_folder(file_path, relative, output_md_tmp, output_md, timer)
             elif file_path.suffix.lower() == ".pdf":
-                result = await self._process_pdf(file_path, output_md_tmp, output_md, timer)
-            elif file_path.suffix.lower() == ".docx":
-                result = await self._process_docx(file_path, output_md_tmp, output_md, timer)
-            elif file_path.suffix.lower() == ".pptx":
-                result = await self._process_pptx(file_path, output_md_tmp, output_md, timer)
-            elif file_path.suffix.lower() == ".html":
-                result = await self._process_html(file_path, output_md_tmp, output_md, timer)
+                result = await self._process_pdf(file_path, relative, output_md_tmp, output_md, timer)
+            elif file_path.suffix.lower() in (".docx", ".pptx", ".html"):
+                result = await self._process_native(
+                    file_path, relative, output_md_tmp, output_md, timer,
+                    file_type=file_path.suffix.lower().lstrip("."),
+                )
             else:
-                result = self._skip_result(file_path, timer, file_type)
+                result = self._skip_result(file_path, relative, timer, file_type)
                 pbar.set_postfix(file=file_path.name, stage="skip")
                 return result.to_dict()
-            self._export_txt_bundle(file_path, result, txt_exporter)
+            await self._export_txt_bundle(file_path, relative, result, txt_exporter)
             pbar.set_postfix(file=file_path.name, stage="done")
             return result.to_dict()
         except Exception as exc:  # noqa: BLE001
             if output_md_tmp.exists():
                 output_md_tmp.unlink()
             pbar.set_postfix(file=file_path.name, stage="error")
-            result = self._error_result(file_path, timer, file_type, exc)
+            logger.exception("Failed to process %s", relative)
+            result = self._error_result(file_path, relative, timer, file_type, exc)
             return result.to_dict()
         finally:
-            self._record_stats(file_path, timer, result if 'result' in dir() else None, entity_store)
+            self._record_stats(timer, result, entity_store)
 
-    async def _process_html_folder(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
-        markdown = convert_html_folder_to_markdown(file_path)
+    async def _process_native(
+        self,
+        file_path: Path,
+        relative: Path,
+        output_md_tmp: Path,
+        output_md: Path,
+        timer: FileTimer,
+        *,
+        file_type: str,
+    ) -> FileResult:
+        converters = {
+            "docx": convert_docx_to_markdown,
+            "pptx": convert_pptx_to_markdown,
+            "html": convert_html_to_markdown,
+        }
+        converter = converters[file_type]
+        markdown = await asyncio.to_thread(converter, file_path)
+        document_type = detect_document_type(file_path, markdown)
+        paragraphs = extract_paragraphs(markdown)
+        all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
+        annotation = await self._safe_annotation(text=markdown)
+        final_markdown = self._normalize_markdown(markdown)
+        self._write_artifact(output_md_tmp, output_md, final_markdown)
+        return self._ok_result(
+            file_path, relative, timer, file_type, markdown, paragraphs,
+            all_entities, annotation, document_type, text=final_markdown,
+        )
+
+    async def _process_html_folder(
+        self,
+        file_path: Path,
+        relative: Path,
+        output_md_tmp: Path,
+        output_md: Path,
+        timer: FileTimer,
+    ) -> FileResult:
+        markdown = await asyncio.to_thread(convert_html_folder_to_markdown, file_path)
         if not markdown.strip():
-            return self._skip_result_from_data(file_path, timer, "html_folder", markdown)
+            return self._skip_result_from_data(file_path, relative, timer, "html_folder", markdown)
         document_type = detect_document_type(file_path, markdown)
         all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
         annotation = await self._safe_annotation(text=markdown)
         self._write_artifact(output_md_tmp, output_md, markdown)
         paragraphs = extract_paragraphs(markdown)
-        return self._ok_result(file_path, timer, "html_folder", markdown, paragraphs, all_entities, annotation, document_type, text=markdown)
+        return self._ok_result(
+            file_path, relative, timer, "html_folder", markdown, paragraphs,
+            all_entities, annotation, document_type, text=markdown,
+        )
 
-    async def _process_pdf(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
-        _, pngs, _ = extract_pdf_text_and_visual_pages(file_path)
+    async def _process_pdf(
+        self,
+        file_path: Path,
+        relative: Path,
+        output_md_tmp: Path,
+        output_md: Path,
+        timer: FileTimer,
+    ) -> FileResult:
+        _, pngs, _ = await asyncio.to_thread(
+            extract_pdf_text_and_visual_pages, file_path, self._rendered_dir(relative)
+        )
         timer.pages = len(pngs)
-        rendered_dir = settings.output_root / "rendered" / file_path.stem
-        rendered_dir.mkdir(parents=True, exist_ok=True)
-        for png in pngs:
-            shutil.copy2(png, rendered_dir / png.name)
         vlm_markdown = await reconstruct_markdown(pngs)
         clean_markdown = strip_bbox_annotations(vlm_markdown)
         document_type = detect_document_type(file_path, clean_markdown)
@@ -282,40 +351,14 @@ class Worker:
         final_markdown = self._normalize_markdown(clean_markdown)
         annotated_markdown = self._normalize_markdown(vlm_markdown)
         self._write_artifact(output_md_tmp, output_md, final_markdown)
-        return self._ok_result(file_path, timer, "pdf", annotated_markdown, paragraphs, all_entities, annotation, document_type, text=annotated_markdown)
-
-    async def _process_docx(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
-        markdown = convert_docx_to_markdown(file_path)
-        document_type = detect_document_type(file_path, markdown)
-        paragraphs = extract_paragraphs(markdown)
-        all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
-        annotation = await self._safe_annotation(text=markdown)
-        final_markdown = self._normalize_markdown(markdown)
-        self._write_artifact(output_md_tmp, output_md, final_markdown)
-        return self._ok_result(file_path, timer, "docx", markdown, paragraphs, all_entities, annotation, document_type, text=final_markdown)
-
-    async def _process_pptx(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
-        markdown = convert_pptx_to_markdown(file_path)
-        document_type = detect_document_type(file_path, markdown)
-        paragraphs = extract_paragraphs(markdown)
-        all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
-        annotation = await self._safe_annotation(text=markdown)
-        final_markdown = self._normalize_markdown(markdown)
-        self._write_artifact(output_md_tmp, output_md, final_markdown)
-        return self._ok_result(file_path, timer, "pptx", markdown, paragraphs, all_entities, annotation, document_type, text=final_markdown)
-
-    async def _process_html(self, file_path: Path, output_md_tmp: Path, output_md: Path, timer: FileTimer) -> FileResult:
-        markdown = convert_html_to_markdown(file_path)
-        document_type = detect_document_type(file_path, markdown)
-        paragraphs = extract_paragraphs(markdown)
-        all_entities = await extract_entities_from_text(markdown, model=settings.vl_model, document_type=document_type)
-        annotation = await self._safe_annotation(text=markdown)
-        final_markdown = self._normalize_markdown(markdown)
-        self._write_artifact(output_md_tmp, output_md, final_markdown)
-        return self._ok_result(file_path, timer, "html", markdown, paragraphs, all_entities, annotation, document_type, text=final_markdown)
+        return self._ok_result(
+            file_path, relative, timer, "pdf", annotated_markdown, paragraphs,
+            all_entities, annotation, document_type, text=annotated_markdown,
+        )
 
     def _write_artifact(self, tmp: Path, final: Path, content: str) -> None:
         if self.artifacts_mode:
+            tmp.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(content, encoding="utf-8")
             os.replace(tmp, final)
 
@@ -323,12 +366,24 @@ class Worker:
         try:
             return await generate_document_annotation(text=text, images=images)
         except Exception as exc:  # noqa: BLE001
-            print(f"Annotation generation failed: {exc}", file=sys.stderr)
+            logger.warning("Annotation generation failed: %s", exc)
             return ""
 
-    def _ok_result(self, file_path: Path, timer: FileTimer, file_type: str, markdown: str, paragraphs: list[dict], entities: list[dict], annotation: str, document_type: str, text: str = "") -> FileResult:
+    def _ok_result(
+        self,
+        file_path: Path,
+        relative: Path,
+        timer: FileTimer,
+        file_type: str,
+        markdown: str,
+        paragraphs: list[dict],
+        entities: list[dict],
+        annotation: str,
+        document_type: str,
+        text: str = "",
+    ) -> FileResult:
         return FileResult(
-            file=str(file_path.relative_to(settings.input_root)),
+            file=str(relative),
             type=file_type,
             size_bytes=timer.size_bytes,
             pages=timer.pages,
@@ -343,31 +398,42 @@ class Worker:
             text=text,
         )
 
-    def _export_txt_bundle(self, file_path: Path, result: FileResult, txt_exporter: TxtExporter) -> None:
+    async def _export_txt_bundle(
+        self,
+        file_path: Path,
+        relative: Path,
+        result: FileResult,
+        txt_exporter: TxtExporter,
+    ) -> None:
+        if result.status != "ok":
+            return
         try:
-            bundle_dir = txt_exporter.export(
+            bundle_dir = await asyncio.to_thread(
+                txt_exporter.export,
                 file_path,
-                file_type=result.type,
-                text=result.text,
+                result.type,
+                result.text,
+                relative=relative,
                 pages=result.pages,
                 document_type=result.document_type,
                 annotation=result.annotation,
                 metadata=result.metadata,
             )
         except Exception as exc:  # noqa: BLE001
-            print(f"Txt export failed for {file_path.name}: {exc}", file=sys.stderr)
+            logger.warning("Txt export failed for %s: %s", file_path.name, exc)
             return
-        try:
-            reconstruct_bundle(bundle_dir)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Docx/pdf reconstruction failed for {file_path.name}: {exc}", file=sys.stderr)
+        if settings.reconstruct_formats:
+            try:
+                await asyncio.to_thread(reconstruct_bundle, bundle_dir)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Docx/pdf reconstruction failed for %s: %s", file_path.name, exc)
 
-    def _skip_result(self, file_path: Path, timer: FileTimer, file_type: str) -> FileResult:
-        return self._skip_result_from_data(file_path, timer, file_type, "")
+    def _skip_result(self, file_path: Path, relative: Path, timer: FileTimer, file_type: str) -> FileResult:
+        return self._skip_result_from_data(file_path, relative, timer, file_type, "")
 
-    def _skip_result_from_data(self, file_path: Path, timer: FileTimer, file_type: str, markdown: str) -> FileResult:
+    def _skip_result_from_data(self, file_path: Path, relative: Path, timer: FileTimer, file_type: str, markdown: str) -> FileResult:
         return FileResult(
-            file=str(file_path.relative_to(settings.input_root)),
+            file=str(relative),
             type=file_type,
             size_bytes=timer.size_bytes,
             pages=timer.pages,
@@ -381,9 +447,9 @@ class Worker:
             metadata={},
         )
 
-    def _error_result(self, file_path: Path, timer: FileTimer, file_type: str, exc: Exception) -> FileResult:
+    def _error_result(self, file_path: Path, relative: Path, timer: FileTimer, file_type: str, exc: Exception) -> FileResult:
         return FileResult(
-            file=str(file_path.relative_to(settings.input_root)),
+            file=str(relative),
             type=file_type,
             size_bytes=timer.size_bytes,
             pages=timer.pages,
@@ -397,11 +463,11 @@ class Worker:
             metadata={},
         )
 
-    def _record_stats(self, file_path: Path, timer: FileTimer, result: FileResult | None, entity_store: EntityStore | None = None) -> None:
+    def _record_stats(self, timer: FileTimer, result: FileResult | None, entity_store: EntityStore | None = None) -> None:
         duration = time.perf_counter() - timer.start
-        stats = StatsWriter(settings.output_root / "stats.jsonl")
+        stats = self._stats_writer or StatsWriter(settings.output_root / "stats.jsonl")
         stats.record(
-            file=str(file_path.relative_to(settings.input_root)),
+            file=timer.file_name,
             type=timer.file_type,
             size_bytes=timer.size_bytes,
             pages=timer.pages,
@@ -409,18 +475,14 @@ class Worker:
             status=result.status if result else "error",
             error=result.error if result else "unknown",
         )
-        if result:
+        if result is not None and result.status == "ok" and entity_store is not None:
             aggregated = self._aggregate_entities(result.entities)
             result.entities = aggregated
-            store = entity_store if entity_store is not None else EntityStore(settings.output_root / "entities.json")
-            store.append(result.file, result.paragraphs, aggregated, result.annotation)
-
-    def _load_entity_schema(self) -> dict:
-        from idp.vlm_client import _load_entity_schema as _schema
-        return _schema()
+            entity_store.append(result.file, result.paragraphs, aggregated, result.annotation)
 
     async def run(self, input_root: Path | None = None) -> None:
         root = input_root or settings.input_root
+        self._input_root = root
         settings.output_root.mkdir(parents=True, exist_ok=True)
         files = self._find_files(root)
         result_writer = ResultWriter(
@@ -429,51 +491,43 @@ class Worker:
         )
         entity_store = EntityStore(settings.output_root / "entities.json")
         txt_exporter = TxtExporter()
+        self._stats_writer = StatsWriter(settings.output_root / "stats.jsonl")
+        self._processed = self._load_processed()
 
-        processed: set[str] = set()
-        if not self.force:
-            results_path = settings.output_root / "results.jsonl"
-            if results_path.exists():
-                with open(results_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            record = json.loads(line)
-                            if record.get("status") in ("ok", "skip"):
-                                processed.add(record["file"])
-                        except json.JSONDecodeError:
-                            continue
+        pending: list[Path] = []
+        for file_path in files:
+            if self._already_processed(file_path):
+                continue
+            pending.append(file_path)
 
-        pbar = tqdm(files, desc="Files", unit="file")
-        all_new_entities: list[dict] = []
+        pbar = tqdm(total=len(pending), desc="Files", unit="file")
         file_semaphore = asyncio.Semaphore(settings.vl_concurrency)
+        new_entity_types: set[str] = set()
 
         async def _process_with_semaphore(file_path: Path) -> dict:
             async with file_semaphore:
                 return await self._process_file(file_path, result_writer, entity_store, pbar, txt_exporter)
 
-        pending = []
-        for file_path in pbar:
-            if self._already_processed(file_path, processed):
-                pbar.set_postfix(file=file_path.name, stage="skip")
-                continue
-            pending.append(_process_with_semaphore(file_path))
-
-        results = []
-        if pending:
-            for coro in asyncio.as_completed(pending):
+        tasks = [_process_with_semaphore(file_path) for file_path in pending]
+        try:
+            for coro in asyncio.as_completed(tasks):
                 result = await coro
-                results.append(result)
-                all_new_entities.extend(result.get("entities", []))
+                pbar.update(1)
                 result_writer.write(result)
+                for entity in result.get("entities", []):
+                    if isinstance(entity, dict) and entity.get("type"):
+                        new_entity_types.add(str(entity["type"]))
+        finally:
+            pbar.close()
+            result_writer.finalize()
+            entity_store.flush()
+            await close_vlm_client()
 
-        if all_new_entities:
-            schema = self._load_entity_schema()
-            new_types = self._get_new_entity_types(all_new_entities, schema)
+        if new_entity_types:
+            new_types = self._get_new_entity_types(new_entity_types, load_entity_schema())
             if new_types:
                 update_entity_schema(new_types)
+                logger.info("Added %d new entity type(s) to %s", len(new_types), settings.entity_schema_path or settings.output_root / "entity_schema.json")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -485,6 +539,8 @@ def _parse_args() -> argparse.Namespace:
 
 async def _main() -> None:
     args = _parse_args()
+    level = getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO)
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     worker = Worker(artifacts_mode=args.artifacts, force=args.force)
     await worker.run()
 

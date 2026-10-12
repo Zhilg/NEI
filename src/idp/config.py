@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Union
+
+logger = logging.getLogger(__name__)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -17,7 +21,6 @@ class Settings(BaseSettings):
 
     input_root: Path = Field(default=Path("/input"))
     output_root: Path = Field(default=Path("/output"))
-    models_root: Path = Field(default=Path("/models"))
     render_dpi: int = Field(default=200, ge=72, le=600)
     upscale_factor: int = Field(default=1, ge=1, le=4)
     max_image_dimension: int = Field(default=2048, ge=512, le=4096)
@@ -31,7 +34,7 @@ class Settings(BaseSettings):
 
     test_mode: bool = Field(default=False)
     artifacts_mode: bool = Field(default=False)
-    entity_schema_path: Path = Field(default=Path(__file__).parent / "entity_schema.json")
+    entity_schema_path: Union[str, Path, None] = Field(default=None)
     trash_path: str = Field(default="")
     min_entity_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
     reconstruct_formats: Union[str, list[str]] = Field(default="docx,pdf")
@@ -48,13 +51,20 @@ class Settings(BaseSettings):
     operator_corrections_path: Path = Field(default=Path("/output/operator_corrections.jsonl"))
     finetune_dataset_path: Path = Field(default=Path("/output/finetune_data.jsonl"))
 
-    @field_validator("input_root", "output_root", "models_root", "operator_corrections_path", "finetune_dataset_path")
+    @field_validator("input_root", "output_root", "operator_corrections_path", "finetune_dataset_path")
     @classmethod
     def require_absolute_path(cls, value: Path) -> Path:
         if not value.is_absolute():
             msg = f"path must be absolute: {value}"
             raise ValueError(msg)
         return value
+
+    @field_validator("entity_schema_path", mode="before")
+    @classmethod
+    def parse_entity_schema_path(cls, value: str | Path | None) -> Path | None:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return Path(value)
 
     @field_validator("vl_endpoint")
     @classmethod
@@ -80,11 +90,6 @@ class Settings(BaseSettings):
                 return []
             return [v.strip().rstrip("/") for v in value.split(",") if v.strip()]
         return []
-
-    @field_validator("vllm_kv_cache_memory")
-    @classmethod
-    def parse_kv_cache_memory(cls, value: str) -> str:
-        return str(value).strip()
 
     @field_validator("reconstruct_formats", mode="before")
     @classmethod

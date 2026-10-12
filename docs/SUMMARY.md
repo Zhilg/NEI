@@ -1,116 +1,56 @@
 # Offline PDF Batch Pipeline
 
-Локальный, air-gapped пайплайн для рекурсивной обработки PDF. Система принимает абсолютные каталоги, создаёт неизменяемый batch-снимок файлов и публикует Markdown с извлечёнными сущностями. PDF text layer всегда отбрасывается.
+Локальный, air-gapped пайплайн пакетной обработки документов: **PDF/DOCX/PPTX/HTML → VLM → Markdown → сущности**.
+Сеть отключена (`internal: true`), все модели и веса — локальные.
 
 ## Поток данных
 
 ```mermaid
 flowchart LR
-    A["Разрешённые абсолютные каталоги"] --> B["Scanner\nrecursive PDF scan\nstable stat + SHA-256"]
-    B --> C[("PostgreSQL\nbatches, items, jobs, leases")]
-    C --> D["Render\nPDF -> page images\ntext layer ignored"]
-    D --> E["SwinIR x4\nquality gate / fallback"]
-    E --> F["MinerU 3.4\nfull layout manifest\nall blocks + order"]
-    F --> G["PaddleOCR\nline OCR inside text blocks"]
-    F --> H["all non-text block crops"]
-    G --> I["Qwen3.8-27B\none logical reconstruction run"]
-    H --> I
-    I --> J["Grounded document Markdown\nOCR and light logic findings"]
-    J --> K["Fenic + Qwen3-14B\ntyped entity extraction"]
-    K --> L["Atomic MinIO bundle\nfinal.md / entities.json / manifest.json"]
-    L --> C
-
-    C -. job claims, leases, retries .-> D
-    C -. resource reservations .-> E
-    C -. resource reservations .-> F
-    C -. GPU0 admission .-> I
-    C -. GPU0 admission .-> K
+    A["data/input/"] --> B{"Тип файла"}
+    B -->|PDF| C["Render\nPDF → page PNG\nтекстовый слой не читается"]
+    C --> D["VLM\nреконструкция Markdown\n+ сущности по изображениям"]
+    B -->|DOCX| E["mammoth\n→ Markdown"]
+    B -->|PPTX| F["python-pptx\n→ Markdown"]
+    B -->|HTML / папка| G["HTMLParser\n→ Markdown"]
+    D --> H["Нормализация\nтаблицы, типографика, OCR-артефакты"]
+    E --> H
+    F --> H
+    G --> H
+    H --> I["VLM\nсущности из текста"]
+    I --> J["output/\n*.md, entities.json,\nresults.jsonl, stats.jsonl"]
+    J --> K["txts/<путь>/\nбандл: text.txt, images/,\ntables.json, meta.json"]
+    K --> L["reconstruct.docx /\nreconstruct.pdf"]
 ```
 
 ## Компоненты
 
-| Компонент | Роль | Вход | Выход |
-|---|---|---|---|
-| Controller | Управляет batch lifecycle и dependency graph | `batch submit` | jobs, terminal reports |
-| PostgreSQL | Единственная очередь и источник истины | batch/item/job state | leases, retries, artifact pointers |
-| MinIO | Versioned artifacts и final output | temporary artifacts | immutable final bundles |
-| Render | Рендерит PDF только в изображения | PDF bytes | page images, coordinate manifest |
-| SwinIR x4 | Улучшает страницу без GAN | page image | chosen image, fallback decision |
-| MinerU 3.4 | Полный layout документа | chosen page image | all block types, bbox, hierarchy, reading order |
-| PaddleOCR | Распознаёт строки в text-bearing blocks | MinerU text-block crops | OCR tokens, confidence, provenance |
-| Qwen3.8-27B | Собирает и проверяет документ | layout, images/crops, OCR | grounded Markdown, findings |
-| Fenic + Qwen3-14B | Извлекает сущности по Pydantic schema | Markdown with provenance | typed entities with evidence |
-
-## Блоки MinerU
-
-`layout_manifest` сохраняет каждый блок MinerU без потерь: text, title, list, table, image, chart, formula, header, footer, footnote, stamp, signature и будущие поддерживаемые типы. Для каждого блока сохраняются `block_id`, page, bbox, hierarchy, relations, reading order и crop reference.
-
-OCR применяется только к text-bearing blocks. Остальные блоки не отбрасываются: Qwen-VL получает их изображения и metadata, расшифровывает таблицы, интерпретирует диаграммы/графики/формулы и включает значимую информацию в итоговый Markdown.
-
-## Ресурсы
-
-```mermaid
-flowchart TB
-    PG[(PostgreSQL job queue)] --> CPU["CPU bounded pools\nscan, hash, render, MinIO I/O"]
-    PG --> GPU1["GPU1 bounded queues\nSwinIR -> MinerU -> PaddleOCR"]
-    PG --> S["GPU0 admission scheduler\nexactly one heavy role"]
-    S --> VLM["Qwen3.8-27B\nreconstruction + validation"]
-    S --> TXT["Qwen3-14B\nFenic extraction"]
-```
-
-- GPU1 запускает SwinIR, MinerU и PaddleOCR в отдельных bounded queues.
-- GPU0 запускает либо Qwen-VL, либо Qwen3. Одновременная загрузка двух тяжёлых ролей запрещена.
-- PostgreSQL reservations, heartbeats и leases предотвращают oversubscription и возвращают работу после падения worker.
-- Ограничены размер PDF, число страниц, pixels/page, crop area, artifact size, queue depth, timeout, retries, CPU/RAM/VRAM и свободное место MinIO.
-
-## Качество без PDF text layer
-
-Качество не является отдельным сервисом и не зависит от text layer. `manifest.json` фиксирует:
-
-- решение quality gate для upscale;
-- OCR coverage, confidence, language/script и model revision;
-- Qwen-VL OCR corrections только с visual evidence;
-- VLM findings: OCR disagreement, нечитаемые blocks, пропуски blocks, очевидные несогласованности сумм, дат, нумерации и ссылок;
-- evidence coverage сущностей и итоговый `quality=pass|warning|failed`.
-
-`quality=failed` технически публикуется как `COMPLETED_WITH_WARNINGS`; это не подтверждение правильности результата. Технически невозможные файлы получают `QUARANTINED` и не блокируют batch.
-
-## Состояния
-
-```mermaid
-stateDiagram-v2
-    [*] --> SCANNING
-    SCANNING --> QUEUED: stable supported PDF
-    SCANNING --> SKIPPED_UNSUPPORTED
-    SCANNING --> SKIPPED_UNSTABLE
-    QUEUED --> RUNNING: claimed job + lease
-    RUNNING --> QUEUED: expired lease or retryable failure
-    RUNNING --> PAUSED_CAPACITY: insufficient storage
-    PAUSED_CAPACITY --> QUEUED: capacity restored
-    RUNNING --> QUARANTINED: terminal technical failure
-    RUNNING --> COMPLETED: quality=pass
-    RUNNING --> COMPLETED_WITH_WARNINGS: quality=warning or failed
-    COMPLETED --> [*]
-    COMPLETED_WITH_WARNINGS --> [*]
-    QUARANTINED --> [*]
-```
-
-## Вход и выход
-
-| Категория | Контракт |
+| Компонент | Роль |
 |---|---|
-| Submit | `idp batch submit /allowed/root-a /allowed/root-b` |
-| Поддерживаемый файл | PDF, стабильный в момент scan, внутри allowlist root |
-| Final Markdown | `final.md`, блоки с `block_id`, page, bbox и evidence |
-| Entities | `entities.json`: type, value, normalized_value, page, block_id, bbox, evidence, confidence |
-| Manifest | `manifest.json`: hashes, lineage, profile/model/prompt/schema versions, quality, findings, retries |
-| Report | `idp batch report BATCH_ID --format json|csv` |
+| `worker` (`idp`) | Оркестратор: обход input, конкурентная обработка файлов, запись артефактов |
+| `vllm-vl-0/1` | Два инстанса vLLM с одной VL-моделью (GPU0/GPU1), round-robin через `IDP_VL_ENDPOINTS` |
+| `sglang` (оверлей) | Альтернативный бэкенд инференса вместо vLLM |
 
-## Offline и тестирование
+Артефакты пишутся только на диск: ни PostgreSQL, ни MinIO, ни брокера очередей нет.
+Очередь — `asyncio` + семафор `IDP_VL_CONCURRENCY` внутри одного процесса.
 
-- Целевая машина не имеет доступа к интернету. Runtime использует только локальные services и запрещает downloads/telemetry/egress.
-- Один Docker Compose stack монтирует исходный код, локальные модели, OCR/MinerU-инструменты, входящие PDF и persistent data с хоста; rebuild приложения не нужен.
-- Windows build script собирает переносимый application image, а `operator` запускает healthcheck, batch-команды и тесты без установки Python на хосте.
-- Local CI запускает unit/schema/queue/storage tests без GPU и весов.
-- Target server запускает resumable model smoke и canary/soak tests только для profile/runtime promotion.
-- Пока нет ground truth, система не заявляет accuracy metrics; audit sampling формирует будущий размеченный corpus.
+## Ключевые свойства
+
+- **PDF**: страницы рендерятся в PNG (`PyMuPDF`), текстовый слой не читается никогда.
+- **Идемпотентность**: файл пропускается, если он есть в `results.jsonl` со статусом `ok`/`skip`; `--force` обрабатывает заново.
+- **Выходные пути повторяют структуру input** — файлы с одинаковым именем из разных подпапок не конфликтуют.
+- **Сущности**: из текста (чанки по 6000 символов, поле `page` вычисляется по маркерам `<!-- page N -->`) и с изображений (чанки по `IDP_VL_MAX_IMAGES` страниц), затем дедупликация и нормализация.
+- **Схема сущностей**: рабочая копия в `output/entity_schema.json`; новые типы дописываются туда, пакетная копия остаётся read-only шаблоном.
+- **Бандлы**: `text.txt` ссылается на вырезанные по bbox области (`figure_*`, `handwritten_*`), из которых `reconstructor` собирает настоящие DOCX/PDF.
+
+## Ограничения и флаги
+
+| Параметр | Значение |
+|---|---|
+| `IDP_VL_CONCURRENCY` | одновременных запросов к VLM (по умолчанию 12) |
+| `IDP_VL_MAX_IMAGES` | страниц в одном запросе (по умолчанию 2) |
+| `IDP_VL_TIMEOUT_SECONDS` | таймаут запроса, 3 попытки с backoff 1s/2s/4s |
+| `IDP_MIN_ENTITY_CONFIDENCE` | порог уверенности сущности (по умолчанию 0.3) |
+| `IDP_RECONSTRUCT_FORMATS` | `docx,pdf` / пусто |
+| `IDP_ENTITY_SCHEMA_PATH` | путь рабочей схемы сущностей |
+| `IDP_LOG_LEVEL` | уровень логов (`DEBUG` — диагностика VLM и рендера) |
