@@ -8,7 +8,7 @@ services:
       - -m
       - sglang.launch_server
       - --model-path
-      - /models/new_vl
+      - /models/${IDP_VL_MODEL_DIR:-new_vl}
       - --served-model-name
       - ${IDP_VL_MODEL:-Qwen3.8-27B}
       - --host
@@ -26,7 +26,7 @@ services:
       - --trust-remote-code
     environment:
       NVIDIA_DRIVER_CAPABILITIES: all
-      HF_HOME: /models/new_vl/hf-cache
+      HF_HOME: /models/${IDP_VL_MODEL_DIR:-new_vl}/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     volumes:
@@ -45,7 +45,7 @@ services:
       - -m
       - sglang.launch_server
       - --model-path
-      - /models/new_vl
+      - /models/${IDP_VL_MODEL_DIR:-new_vl}
       - --served-model-name
       - ${IDP_VL_MODEL:-Qwen3.8-27B}
       - --host
@@ -63,7 +63,7 @@ services:
       - --trust-remote-code
     environment:
       NVIDIA_DRIVER_CAPABILITIES: all
-      HF_HOME: /models/new_vl/hf-cache
+      HF_HOME: /models/${IDP_VL_MODEL_DIR:-new_vl}/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     volumes:

@@ -12,8 +12,18 @@ logger = logging.getLogger(__name__)
 
 
 class FeedbackStore:
+    """Append-only store of operator corrections used as VLM few-shot feedback.
+
+    The path is resolved per access (not bound at construction) so runtime
+    configuration changes apply — same reason as ``corrections_path()``.
+    """
+
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or Path(settings.operator_corrections_path)
+        self._explicit_path = Path(path) if path is not None else None
+
+    @property
+    def path(self) -> Path:
+        return self._explicit_path or Path(settings.operator_corrections_path)
 
     def corrections_path(self) -> Path:
         return self.path
@@ -81,7 +91,8 @@ _default_store = FeedbackStore()
 
 
 def corrections_path() -> Path:
-    return _default_store.corrections_path()
+    """Current corrections path (resolved per call so config changes apply)."""
+    return Path(settings.operator_corrections_path)
 
 
 def read_corrections(path: Path | None = None) -> list[dict]:

@@ -107,8 +107,6 @@ class PromptBuilder:
                     + _confidence_guidance()
                 ),
             )
-        md = self.markdown().content
-        ent = self.entity().content
         return PromptTemplate(
             name="combined",
             content=(

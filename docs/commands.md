@@ -65,6 +65,38 @@ python scripts/download_vl_model.py
 
 Модель попадает в `transfer/models/new_vl/`, а compose подключает её как `/models/new_vl`.
 
+### Смена модели (например, для сравнения скорости)
+
+```bash
+# скачать другой билд рядом с основным
+python scripts/download_vl_model.py --repo cyankiwi/Qwen3.8-7B-AWQ-INT4 --model-dir new_vl_7b
+
+# запустить стек на ней
+IDP_VL_MODEL_DIR=new_vl_7b IDP_VL_MODEL=Qwen3.8-7B \\
+  docker compose -f infra/compose/local.yml up -d
+```
+
+`IDP_VL_MODEL_DIR` переключает папку `/models/<dir>` в обоих инстансах vLLM/SGLang
+(и их `HF_HOME`), `IDP_VL_MODEL` — имя модели, которое воркер подставляет в запросы.
+Оба параметра работают и для оверлея `sglang.yml`.
+
+Сравнить поведение моделей (latency, decode tok/s, страницы/с) можно бенчмарком:
+
+```bash
+python scripts/bench_vlm.py \\
+  --endpoint http://localhost:8000/v1 --model Qwen3.8-27B \\
+  --pages data/output/rendered/<путь>/<stem>/page_0000*.png \\
+  --images-per-request 2 --repeat 3 --report data/bench_27b.jsonl
+
+python scripts/bench_vlm.py \\
+  --endpoint http://localhost:8000/v1 --model Qwen3.8-7B \\
+  --pages data/output/rendered/<путь>/<stem>/page_0000*.png \\
+  --images-per-request 2 --repeat 3 --report data/bench_7b.jsonl
+```
+
+Если страницы не указаны, бенчмарк генерирует три тестовых PNG сам.
+Важно: бенчмарк стримит ответ (`stream: true`) vLLM/SGLang умеют это из коробки.
+
 ## Настройка GPU
 
 В `.env`:
@@ -156,6 +188,33 @@ IDP_ARTIFACTS_MODE=true
 | `IDP_LOG_LEVEL` | `INFO` | уровень логов (`DEBUG` включает размеры страниц, URL и превью ответов VLM) |
 | `IDP_ARTIFACTS_MODE` | `false` | аналог флага `--artifacts` |
 | `IDP_RECONSTRUCT_FORMATS` | `docx,pdf` | какие форматы собирать из бандлов (пусто — не собирать) |
+| `IDP_VL_MODEL_DIR` | `new_vl` | папка модели внутри `/models` для vLLM/SGLang (compose) |
+| `IDP_VL_MODEL` | `Qwen3.8-27B` | имя модели в запросах к VLM (compose) |
+| `IDP_VL_MAX_IMAGES` | `2` | сколько страниц отправлять в одном VLM-запросе (compose) |
+
+## Веб-интерфейс для отдельных файлов
+
+Отдельный режим для одного документа: файл перетаскивают в окно браузера и нажимают
+кнопки — пайплайн обрабатывает его без просмотра каталогов.
+
+```bash
+# на хосте (нужны зависимости проекта: pip install -e .)
+idp-web --root data/ui --host 127.0.0.1 --port 8080
+
+# в контейнере воркера
+docker compose -f infra/compose/local.yml run --rm -p 8080:8080 worker idp-web --root /output/ui --host 0.0.0.0 --port 8080
+```
+
+Что умеет:
+
+- принять файл (drag & drop или выбор через проводник): PDF, DOCX, XLSX, PPTX, HTML, изображения;
+- кнопка **Обработать** — прогоняет полный пайплайн (`*.md` + бандл `txts/`, по умолчанию DOCX и PDF);
+- кнопки **DOCX / PDF / TXT** — пересобирают выбранный артефакт из бандла, не запуская VLM повторно;
+- ссылки на скачи Markdown, TXT-бандла и `reconstruct.docx` / `reconstruct.pdf`.
+
+Сервер работает только на стандартной библиотеке (новых пакетов в air-gapped образ
+не добавляется), файлы и результаты складываются под `--root` (`uploads/<id>/`,
+`output/<id>/`).
 
 ## Настройка скорости и качества
 
@@ -177,6 +236,25 @@ IDP_VLLM_VL_GPU_1=1
 
 В `src/idp/config.py` можно также увеличить `vl_max_tokens` если нужно более длинный вывод.
 
+### Сравнение моделей (27B против маленькой)
+
+Скорость в первую очередь зависит от размера модели, поэтому рядом с 27B можно
+поставить компактный билд и сравнить пропускную способность (см. «Смена модели»):
+
+```bash
+# оконный стенд: измерить текущую скорость
+python scripts/bench_vlm.py --endpoint http://localhost:8000/v1 --model Qwen3.8-27B \
+  --pages data/output/rendered/<путь>/<stem>/page_0000*.png --repeat 3
+
+# поменять модель в .env и повторить
+IDP_VL_MODEL_DIR=new_vl_7b IDP_VL_MODEL=Qwen3.8-7B docker compose -f infra/compose/local.yml up -d
+python scripts/bench_vlm.py --endpoint http://localhost:8000/v1 --model Qwen3.8-7B \
+  --pages data/output/rendered/<путь>/<stem>/page_0000*.png --repeat 3
+```
+
+Смотрите `pages/s` и `tokens_per_sec` между прогонами, а качество — глазами по
+`data/output/*.md` на одном и том же же наборе файлов.
+
 ### Увеличить качество
 
 ```env
@@ -196,6 +274,29 @@ IDP_MIN_ENTITY_CONFIDENCE=0.5
 IDP_VL_MAX_IMAGES=2
 IDP_VL_CONCURRENCY=12
 IDP_MIN_ENTITY_CONFIDENCE=0.3
+```
+
+## Тесты (без GPU)
+
+Тесты не требуют видеокарты: VLM подменяется заглушкой `tests/vlm_stub.py`
+(OpenAI-совместимый сервер, отдаёт детерминированный markdown/JSON на базе хешей
+присланных страниц), входные PDF/DOCX/HTML генерируются в `tests/fixtures.py`.
+
+```bash
+python3 -m pip install -e ".[dev]"     # pymupdf, pillow, mammoth, docx, pptx, httpx, pytest, pytest-timeout
+python3 -m pytest tests/ -q --timeout 150 --timeout-method=thread
+```
+
+Покрыто: сборка txts-бандлов и reconstruct.docx/pdf на заглушке (включая 40-страничный
+документ — все заголовки должны дожить до вывода), wide-таблицы (краш
+`text box must be finite and not empty`), склейка перенесённых ссылок, поток оператора
+(`--force`, EOF, пробелы), бенчмарк и веб-интерфейс (upload/process/formats/download).
+
+Заглушку можно запустить и вручную, чтобы дергать воркер/оператор без vLLM:
+
+```bash
+python3 tests/vlm_stub.py --port 8123
+IDP_VL_ENDPOINTS=http://127.0.0.1:8123/v1 IDP_VL_MODEL=stub-vl idp --artifacts
 ```
 
 ## Результаты
@@ -260,7 +361,9 @@ VLM размечает каждую картинку и рукописный ф�
 - Times New Roman 12 pt, полуторный межстрочный интервал, поля 2 см
 - заголовки 14 pt полужирные, уровень сохраняется в структуре документа
 - абзацы — выключка по ширине и красная строка 1.25 см, списки со смещением
-- таблицы — сетка, шапка полужирная, интервал 1.0
+- таблицы — сетка, шапка полужирная, интервал 1.0; ширина столбцов подбирается автоматически
+  по содержимому (с минимумом по ширине), поэтому длинная ячейка не сплющивает остальные
+  столбцы, а очень широкая таблица не роняет сборку
 - рукописные области вставляются картинками, транскрипция идёт курсивной подписью
 - размер картинки берётся из её bbox в `meta.json` → `regions` (доля страницы),
   а не угадывается по DPI; там же лежат пиксельные размеры и позиция
@@ -309,11 +412,20 @@ src/idp/           # Код пайплайна
   txt_export.py    # Экспорт txts-бандлов с гиперссылками на картинки
   reconstructor.py # Сборка DOCX/PDF из бандлов
   operator_client.py # Терминальный инструмент review'а оператора
+  webui.py         # Веб-интерфейс для отдельных файлов (stdlib http.server)
   prompts.py       # Промпты для VLM
 
 infra/compose/
   local.yml        # Docker Compose (worker + 2 инстанса vLLM VL)
   sglang.yml       # Оверлей: замена vLLM на SGLang
+
+scripts/
+  download_vl_model.py # Скачивание модели (--repo/--model-dir для другой сборки)
+  bench_vlm.py         # Замер скорости VLM (TTFT, tok/s, pages/s)
+
+tests/               # Офлайн-тесты: VLM-заглушка вместо GPU (tests/vlm_stub.py)
+  fixtures.py       # Генераторы тестовых PDF/DOCX/HTML/PPTX
+  conftest.py       # Старт заглушки и изолированные input/output
 
 data/
   input/           # Каталог входных файлов

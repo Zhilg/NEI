@@ -31,6 +31,7 @@ _TABLE_SEPARATOR_RE = re.compile(r"^[:\-\s]+$")
 _INLINE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)|\[HANDWRITTEN:\s*([^\]]*)\]\(([^)\s]+)\)")
 _LINK_ANY_RE = re.compile(r"(!?\[[^\]]*?\])\(([^)]*?)\)", re.DOTALL)
 _ESCAPE_RE = re.compile(r"\\([.\-*+\\`()\[\]{}#!|>~])")
+_PATH_FRAGMENT_RE = re.compile(r"[A-Za-z0-9_./#%\-]+")
 
 _PAGE_WIDTH = 595.28
 _PAGE_HEIGHT = 841.89
@@ -48,6 +49,8 @@ _TEXT_AREA_HEIGHT_CM = 25.7
 _DOCX_FONT = "Times New Roman"
 _DOCX_FONT_SIZE = 12
 _DOCX_HEADING_FONT_SIZE = 14
+_DOCX_TABLE_WIDTH_CM = 17.0
+_DOCX_TABLE_MIN_COLUMN_CM = 0.9
 _FONT_DIR = Path(__file__).parent / "fonts"
 _FONT_CANDIDATES = (
     str(_FONT_DIR / "LiberationSerif-Regular.ttf"),
@@ -57,6 +60,10 @@ _FONT_CANDIDATES = (
 )
 _MIN_FONT_SIZE = 8.0
 _MAX_TEXT_WRITES = 512
+_TABLE_MIN_COLUMN_PT = 20.0
+_TABLE_HARD_MIN_COLUMN_PT = 9.0
+_TABLE_MAX_CELL_WEIGHT = 48
+_WRAPPED_LINK_MAX_CHARS = 600
 
 
 @dataclass
@@ -80,6 +87,18 @@ def _unescape(text: str) -> str:
     return _ESCAPE_RE.sub(r"\1", text)
 
 
+def _rect_is_finite(rect) -> bool:
+    """True when a PyMuPDF rect is finite, non-empty and oriented correctly."""
+    try:
+        return (
+            all(math.isfinite(value) for value in (rect.x0, rect.y0, rect.x1, rect.y1))
+            and rect.x1 > rect.x0
+            and rect.y1 > rect.y0
+        )
+    except AttributeError:
+        return False
+
+
 def _split_segments(line: str) -> list[Segment]:
     segments: list[Segment] = []
     position = 0
@@ -100,13 +119,28 @@ def _join_wrapped_links(text: str) -> str:
     """Repair image links that were wrapped across lines.
 
     A soft wrap inside a markdown link (alt text or path) breaks the link
-    entirely, so the newline is removed and the link reassembled.
+    entirely, so the newline is removed and the link reassembled. Only genuine
+    image/handwritten links that actually contain a line break are repaired:
+    a loose ``](``...``)`` pair far apart (unbalanced brackets in the text)
+    must never swallow whole paragraphs, headings or tables between them.
     """
 
     def _fix(match: re.Match) -> str:
-        label = " ".join(match.group(1).split())
-        path = "".join(match.group(2).split())
-        return f"{label}({path})"
+        label = match.group(1)
+        path = match.group(2)
+        if "\n" not in label and "\n" not in path:
+            return match.group(0)  # intact link: never touch it
+        if len(label) + len(path) > _WRAPPED_LINK_MAX_CHARS:
+            return match.group(0)
+        head = label[1:] if label.startswith("!") else label
+        if not (head.startswith("[Image:") or head.startswith("[HANDWRITTEN:")):
+            return match.group(0)
+        joined_path = "".join(path.split())
+        if "(" in path or not _PATH_FRAGMENT_RE.fullmatch(joined_path):
+            # prose between "]" and ")": an unbalanced bracket, not a link
+            return match.group(0)
+        label = " ".join(label.split())
+        return f"{label}({joined_path})"
 
     return _LINK_ANY_RE.sub(_fix, text)
 
@@ -205,15 +239,67 @@ def _image_size_cm(image_path: Path, bbox: list[float] | None = None) -> tuple[f
     return width_cm * scale, height_cm * scale
 
 
+def _table_column_weights(rows: list[list[str]]) -> list[int]:
+    """Content weight per column: longest cell, capped so one huge cell
+    cannot squeeze every other column into nothing."""
+    columns = max((len(row) for row in rows), default=0)
+    weights: list[int] = []
+    for column in range(columns):
+        longest = max(
+            (len(row[column]) for row in rows if column < len(row)),
+            default=0,
+        )
+        weights.append(max(4, min(_TABLE_MAX_CELL_WEIGHT, longest)))
+    return weights
+
+
+def _scale_widths(weights: list[int], available: float, minimum: float, hard_minimum: float) -> list[float]:
+    """Distribute ``available`` points across ``weights`` with a readable
+    minimum width; shrinks proportionally when the minimum does not fit."""
+    total = sum(weights)
+    if total <= 0 or available <= 0:
+        return [available] * len(weights)
+    widths = [weight / total * available for weight in weights]
+    widths = [max(minimum, width) for width in widths]
+    if sum(widths) <= available:
+        return widths
+    scale = available / sum(widths)
+    widths = [max(hard_minimum, width * scale) for width in widths]
+    if sum(widths) > available:
+        # pathological column count: keep the hard minimum for every column
+        # (the table runs past the page edge instead of collapsing/crashing)
+        return [hard_minimum] * len(weights)
+    return widths
+
+
+def _table_column_widths(rows: list[list[str]], available: float) -> list[float]:
+    """Auto-fitted PDF column widths in points."""
+    return _scale_widths(
+        _table_column_weights(rows), available, _TABLE_MIN_COLUMN_PT, _TABLE_HARD_MIN_COLUMN_PT
+    )
+
+
+def _docx_table_column_cm(rows: list[list[str]]) -> list[float]:
+    """Auto-fitted DOCX column widths in cm."""
+    return _scale_widths(
+        _table_column_weights(rows), _DOCX_TABLE_WIDTH_CM, _DOCX_TABLE_MIN_COLUMN_CM, 0.5
+    )
+
+
 def _add_docx_table(document, rows: list[list[str]]) -> None:
-    from docx.shared import Pt
+    from docx.shared import Cm, Pt
 
     columns = max(len(row) for row in rows)
     table = document.add_table(rows=len(rows), cols=columns)
     table.style = "Table Grid"
+    table.autofit = False
+    widths = _docx_table_column_cm(rows)
+    for column, width in enumerate(widths):
+        table.columns[column].width = Cm(width)
     for row_index, row in enumerate(rows):
         for column in range(columns):
             cell = table.cell(row_index, column)
+            cell.width = Cm(widths[column])
             cell.text = _unescape(row[column]) if column < len(row) else ""
             for paragraph in cell.paragraphs:
                 paragraph.paragraph_format.line_spacing = 1.0
@@ -487,18 +573,17 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path, regions:
             width = pixmap.width * scale
             height = pixmap.height * scale
         rect = fitz.Rect(_MARGIN, state["y"], _MARGIN + width, state["y"] + height)
+        if not _rect_is_finite(rect):
+            logger.warning("PDF reconstruction skipped an image with degenerate geometry: %s", image_path)
+            return
         page.insert_image(rect, filename=str(image_path))
         state["y"] += height + _GAP
         state["used"] = True
 
     def write_table(rows: list[list[str]]) -> None:
         columns = max(len(row) for row in rows)
-        weights = [
-            max(6, max((len(row[column]) for row in rows if column < len(row)), default=6))
-            for column in range(columns)
-        ]
         available = _PAGE_WIDTH - 2 * _MARGIN
-        column_widths = [weight / sum(weights) * available for weight in weights]
+        column_widths = _table_column_widths(rows, available)
 
         def row_height(row: list[str]) -> float:
             lines = 1
@@ -513,18 +598,25 @@ def build_pdf(blocks: list[Block], bundle_dir: Path, output_path: Path, regions:
             x = _MARGIN
             for column in range(columns):
                 cell_rect = fitz.Rect(x, state["y"], x + column_widths[column], state["y"] + height)
-                page.draw_rect(cell_rect, color=(0.55, 0.55, 0.55), width=0.5)
+                if _rect_is_finite(cell_rect):
+                    page.draw_rect(cell_rect, color=(0.55, 0.55, 0.55), width=0.5)
                 cell_text = _unescape(row[column]) if column < len(row) else ""
                 if cell_text:
                     inner = fitz.Rect(cell_rect.x0 + 2, cell_rect.y0 + 2, cell_rect.x1 - 2, cell_rect.y1 - 2)
-                    page.insert_textbox(
-                        inner,
-                        cell_text,
-                        fontsize=_TABLE_FONT_SIZE,
-                        fontname=fontname,
-                        fontfile=fontfile,
-                        lineheight=1.2,
-                    )
+                    if _rect_is_finite(inner) and inner.width > 1 and inner.height > 1:
+                        try:
+                            page.insert_textbox(
+                                inner,
+                                cell_text,
+                                fontsize=_TABLE_FONT_SIZE,
+                                fontname=fontname,
+                                fontfile=fontfile,
+                                lineheight=1.2,
+                            )
+                        except ValueError as exc:
+                            logger.warning(
+                                "PDF reconstruction skipped a table cell: %s (%.80r)", exc, cell_text
+                            )
                 x += column_widths[column]
             state["y"] += height
 

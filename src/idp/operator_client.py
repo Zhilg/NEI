@@ -106,7 +106,7 @@ class OperatorClient:
                 print(f"  ... ({len(lines) - 50} more lines)")
 
     @staticmethod
-    def _write_draft(draft_path: Path, image_path: Path, markdown: str) -> None:
+    def _write_draft(draft_path: Path, markdown: str) -> None:
         draft_path.parent.mkdir(parents=True, exist_ok=True)
         normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
         normalized = normalized.replace("\\n", "\n")
@@ -116,6 +116,16 @@ class OperatorClient:
     def _read_draft(draft_path: Path) -> str:
         return draft_path.read_text(encoding="utf-8")
 
+    @staticmethod
+    def _prompt_choice() -> str | None:
+        """Read a menu choice; returns None on EOF/Ctrl-C (operator quit)."""
+        try:
+            raw = input("> ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        return raw.strip().lower()
+
     async def _run_vlm(self, image_path: Path) -> str:
         return await reconstruct_markdown([image_path])
 
@@ -123,24 +133,31 @@ class OperatorClient:
         if self.force:
             return False
         marker = self.drafts_dir / f"{image_path.stem}.reviewed"
-        if marker.exists():
-            return True
-        return False
+        return marker.exists()
 
     async def _review_page(self, image_path: Path) -> bool:
         draft_path = self.drafts_dir / f"{image_path.stem}.md"
-        original_markdown = await self._run_vlm(image_path)
-        self._write_draft(draft_path, image_path, original_markdown)
+        has_draft = draft_path.is_file()
+        if has_draft:
+            # A previous review already produced this draft: keep the operator's
+            # corrections instead of overwriting them with a fresh VLM run
+            # (this is what made --force lose new changes).
+            markdown = self._read_draft(draft_path)
+        else:
+            markdown = await self._run_vlm(image_path)
+            self._write_draft(draft_path, markdown)
         if self.open_image:
             self._open_image(image_path)
-        self._render_console(image_path, original_markdown, draft_path)
-
-        markdown = original_markdown
+        self._render_console(image_path, markdown, draft_path)
 
         while True:
-            print("\n[a] accept   [e] edit draft   [r] re-read draft   [s] skip   [q] quit")
-            choice = input("> ").strip().lower() or "a"
-            if choice in {"q", "quit", "exit"}:
+            print(
+                "\n[a] accept   [e] edit draft   [r] re-read draft"
+                + ("   [n] new VLM output" if has_draft else "")
+                + "   [s] skip   [q] quit"
+            )
+            choice = self._prompt_choice()
+            if choice is None or choice in {"q", "quit", "exit"}:
                 return False
             if choice in {"s", "skip"}:
                 print("Skipped (no correction saved).")
@@ -162,7 +179,17 @@ class OperatorClient:
                     continue
                 self._render_console(image_path, markdown, draft_path)
                 continue
-            if choice in {"a", "accept"}:
+            if choice in {"n", "new"} and has_draft:
+                print("Running VLM again...")
+                try:
+                    markdown = await self._run_vlm(image_path)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"VLM failed: {exc}", file=sys.stderr)
+                    continue
+                self._write_draft(draft_path, markdown)
+                self._render_console(image_path, markdown, draft_path)
+                continue
+            if choice in {"", "a", "accept"}:
                 try:
                     saved_markdown = self._read_draft(draft_path)
                 except OSError as exc:
@@ -179,6 +206,7 @@ class OperatorClient:
                 marker.write_text("reviewed", encoding="utf-8")
                 print(f"Saved correction -> {corrections_path()}")
                 return True
+            print(f"Unknown command: {choice!r} (a/e/r/s/q)")
         return False
 
     async def run(self) -> None:
@@ -205,7 +233,7 @@ class OperatorClient:
                 print(f"  [{index}/{len(pending)}] processing: {image_path.name}")
                 try:
                     markdown = await self._run_vlm(image_path)
-                    self._write_draft(draft_path, image_path, markdown)
+                    self._write_draft(draft_path, markdown)
                 except Exception as exc:
                     print(f"  Failed: {exc}", file=sys.stderr)
                     continue
@@ -246,7 +274,9 @@ async def _main() -> None:
     args = _parse_args()
     level = getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    settings.test_mode = args.test_mode
+    if args.production_prompts and args.test_mode:
+        print("Both --production-prompts and --test-mode given; using production prompts.", file=sys.stderr)
+    settings.test_mode = args.test_mode and not args.production_prompts
 
     input_path = Path(args.input)
     drafts_dir = Path(args.drafts_dir) if args.drafts_dir else corrections_path().parent / "operator_drafts"

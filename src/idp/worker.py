@@ -240,7 +240,6 @@ class Worker:
         txt_exporter: TxtExporter,
     ) -> dict:
         relative = file_path.relative_to(self._input_root)
-        stem = file_path.stem if file_path.is_file() else file_path.name
         output_md, output_md_tmp = self._artifact_paths(relative)
         file_type = file_path.suffix.lower().lstrip(".") if file_path.is_file() else "html_folder"
 

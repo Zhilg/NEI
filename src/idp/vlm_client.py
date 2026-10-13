@@ -63,6 +63,14 @@ _BBOX_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+_OCR_ARTIFACT_PATTERNS = [
+    re.compile(r"\b8OO(\s*мм|\s*mm)\b", re.IGNORECASE),
+    re.compile(r"\bO0(\s*мм|\s*mm)\b", re.IGNORECASE),
+    re.compile(r"(?<=\d)\s*-\s*(?=\d)"),
+    re.compile(r"\b0+([1-9]\d*)\b"),
+    re.compile(r"\b([1-9]\d*)0{3,}\b"),
+]
+
 
 def strip_bbox_annotations(text: str) -> str:
     """Remove region annotations (bbox/img) that the VLM adds for image extraction.
@@ -78,6 +86,65 @@ def with_feedback(system_prompt: str, force_refresh: bool = False) -> str:
     if not block:
         return system_prompt
     return f"{system_prompt}\n\n{block}"
+
+
+def get_vl_endpoints() -> list[str]:
+    """VL endpoints to talk to: explicit list, single endpoint, or empty."""
+    if settings.vl_endpoints:
+        return list(settings.vl_endpoints)
+    if settings.vl_endpoint:
+        return [settings.vl_endpoint]
+    return []
+
+
+class RoundRobinEndpointSelector:
+    """Round-robin over the configured VL endpoints (fallback: vl_endpoint)."""
+
+    def __init__(self, endpoints: list[str] | None = None) -> None:
+        self._endpoints = list(endpoints) if endpoints else get_vl_endpoints()
+        self._index = 0
+
+    def next(self) -> str:
+        if not self._endpoints:
+            return settings.vl_endpoint
+        endpoint = self._endpoints[self._index % len(self._endpoints)]
+        self._index += 1
+        return endpoint
+
+
+class _HttpClient:
+    """POST helper with retries, backoff and endpoint rotation for VL calls."""
+
+    _MAX_ATTEMPTS = 3
+    _BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+
+    def __init__(self, client: httpx.AsyncClient, selector: RoundRobinEndpointSelector) -> None:
+        self.client = client
+        self.selector = selector
+
+    async def post(self, url: str, payload: dict) -> httpx.Response:
+        last_error: Exception | None = None
+        for attempt in range(self._MAX_ATTEMPTS):
+            try:
+                response = await self.client.post(url, json=payload)
+            except (httpx.NetworkError, httpx.TimeoutException) as exc:
+                last_error = exc
+                logger.warning(
+                    "VLM network error (attempt %d/%d): %s", attempt + 1, self._MAX_ATTEMPTS, exc
+                )
+            else:
+                if response.status_code == 200:
+                    return response
+                message = f"VLM request failed: {response.status_code} {response.text[:500]}"
+                last_error = RuntimeError(message)
+                if response.status_code == 429 or 500 <= response.status_code < 600:
+                    logger.warning("%s (attempt %d/%d)", message, attempt + 1, self._MAX_ATTEMPTS)
+                else:
+                    raise RuntimeError(message)
+            if attempt < self._MAX_ATTEMPTS - 1:
+                url = f"{self.selector.next()}/chat/completions"
+                await asyncio.sleep(self._BACKOFF_SECONDS[attempt])
+        raise RuntimeError(f"VLM request failed after retries: {last_error}")
 
 
 def _repair_json(text: str) -> str:
@@ -591,11 +658,9 @@ def normalize_entities(entities: list[dict], document_type: str = "other") -> li
 
 
 class VlmClient:
-    def __init__(self) -> None:
-        self._endpoints = get_vl_endpoints()
-
     def _http(self, endpoints: list[str] | None = None) -> _HttpClient:
-        selector = RoundRobinEndpointSelector(endpoints if endpoints is not None else self._endpoints)
+        # Endpoints are resolved per call so runtime config changes (tests, UI) apply.
+        selector = RoundRobinEndpointSelector(endpoints if endpoints is not None else get_vl_endpoints())
         return _HttpClient(_shared_client(), selector)
 
     def _semaphore(self) -> asyncio.Semaphore:

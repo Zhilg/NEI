@@ -4,6 +4,17 @@
 DOCX конвертируется в Markdown через `mammoth`.
 Без PostgreSQL, MinIO, MinerU, PaddleOCR, SwinIR, Controller, Operator, Fenic.
 
+## Режимы работы
+
+| Режим | Команда | Что делает |
+|---|---|---|
+| Каталог | `idp` | Обрабатывает `data/input/` рекурсивно, складывает результаты в `data/output/` (`--artifacts` добавляет `<stem>.md`, `--force` переобрабатывает) |
+| Оператор | `idp-operator --input page.pdf` | Постраничный review черновиков VLM, исправления идут в few-shot feedback для будущих прогонов (`--force` — ревьюить заново, не теряя правки) |
+| Один файл | `idp-web --root data/ui --port 8080` | Веб-интерфейс: перетащил файл в бокс, нажал «Обработать»/«DOCX»/«PDF»/«TXT», скачал результат |
+| Сборка | `idp-reconstruct [--bundle DIR] [--format docx\|pdf]` | Пересобирает DOCX/PDF из бандла без VLM |
+
+Подробности и переменные окружения — в [docs/commands.md](docs/commands.md).
+
 ## Архитектура
 
 | Сервис | Назначение | GPU |
@@ -114,6 +125,18 @@ docker compose -f infra/compose/local.yml up -d
 ```bash
 cp ~/Downloads/document.pdf data/input/
 docker compose -f infra/compose/local.yml up -d
+```
+
+Если нужно обработать один файл «по кнопке», используй веб-интерфейс
+`idp-web --root data/ui --port 8080`: файл перетаскивается в бокс, дальше кнопки
+«Обработать», «DOCX», «PDF», «TXT» и ссылки на скачивание.
+
+## Тесты (без GPU)
+
+VLM подменяется заглушкой, тесты идут без видеокарты:
+
+```bash
+python3 -m pytest tests/ -q --timeout 150 --timeout-method=thread
 ```
 
 ## Запуск через SGLang
