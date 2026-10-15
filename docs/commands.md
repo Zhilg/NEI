@@ -192,6 +192,79 @@ IDP_ARTIFACTS_MODE=true
 | `IDP_VL_MODEL` | `Qwen3.8-27B` | имя модели в запросах к VLM (compose) |
 | `IDP_VL_MAX_IMAGES` | `2` | сколько страниц отправлять в одном VLM-запросе (compose) |
 
+## CLI (консольный интерфейс)
+
+Все точки входа объявлены в `pyproject.toml` (`[project.scripts]`): `idp`, `idp-web`,
+`idp-reconstruct`, `idp-operator`, `idp-finetune-dataset`. Работают и в контейнере,
+и на хосте (после `pip install -e .`).
+
+CLI — полноценная замена веб-интерфейсу: `idp-web` внутри вызывает тот же `Worker`,
+что и `idp`. Если оболочка не поднялась, все задачи доступны из консоли.
+
+### Прогнать все файлы
+
+`idp` обрабатывает **каталог** `IDP_INPUT_ROOT` целиком, идемпотентно (файл пропускается,
+если он в `results.jsonl` со статусом `ok`/`skip`):
+
+```bash
+docker compose -f infra/compose/local.yml run --rm worker idp --artifacts
+docker compose -f infra/compose/local.yml run --rm worker idp --force     # переобработать всё
+docker compose -f infra/compose/local.yml exec worker idp --artifacts     # в уже запущенном контейнере
+```
+
+| Флаг | Действие |
+|---|---|
+| `--artifacts` | дополнительно писать `<stem>.md` (без него `.md` на диск не сохраняется) |
+| `--force` | игнорировать кэш обработанных и переобработать всё заново |
+
+Каталог задаётся переменной окружения: `IDP_INPUT_ROOT` / `IDP_OUTPUT_ROOT`
+(в `local.yml` это `/input` и `/output`, смонтированные из `data/input` и `data/output`).
+
+### Один файл
+
+Отдельного флага для одного файла в `idp` **нет** — воркер всегда берёт каталог. Два варианта:
+
+```bash
+# вариант 1: положить файл в подкаталог и направить воркер туда
+mkdir -p data/input/single && cp отчёт.pdf data/input/single/
+docker compose -f infra/compose/local.yml run --rm -e IDP_INPUT_ROOT=/input/single worker idp --artifacts
+
+# вариант 2: веб-интерфейс — туда файл перетаскивают мышью (см. ниже)
+idp-web --root data/ui --port 8080
+```
+
+### Собрать PDF / DOCX / TXT из готовых бандлов
+
+DOCX и PDF пересобираются из бандла `txts/<имя файла>/` **без обращения к VLM**
+(поэтому это работает даже когда модель недоступна):
+
+```bash
+docker compose -f infra/compose/local.yml run --rm worker idp-reconstruct                        # все бандлы
+docker compose -f infra/compose/local.yml run --rm worker idp-reconstruct --bundle data/output/txts/scan.pdf
+docker compose -f infra/compose/local.yml run --rm worker idp-reconstruct --format pdf           # docx, pdf или оба
+```
+
+| Флаг | Действие |
+|---|---|
+| `--bundle <путь>` | пересобрать один бандл |
+| `--root <путь>` | корень бандлов, по умолчанию `<output_root>/txts` |
+| `--format` | `docx`, `pdf` или `docx,pdf`; пусто — оба |
+
+**TXT пересобрать нельзя** — `text.txt` уже лежит в бандле и пишется во время обработки;
+`idp-reconstruct` умеет только `docx` и `pdf`.
+
+### CLI без GPU
+
+Воркер — обычный HTTP-клиент к VLM (в образе нет `torch`/CUDA), поэтому консольные
+команды запускаются без видеокарты:
+
+```bash
+docker compose -f infra/compose/local.yml run --rm --no-deps worker idp --help
+docker compose -f infra/compose/local.yml run --rm --no-deps worker idp-reconstruct --help
+```
+
+`--no-deps` не поднимает `vllm-vl-0/1`, так что команда не падает даже если GPU недоступна.
+
 ## Веб-интерфейс для отдельных файлов
 
 Отдельный режим для одного документа: файл перетаскивают в окно браузера и нажимают
@@ -201,8 +274,8 @@ IDP_ARTIFACTS_MODE=true
 # на хосте (нужны зависимости проекта: pip install -e .)
 idp-web --root data/ui --host 127.0.0.1 --port 8080
 
-# в контейнере воркера
-docker compose -f infra/compose/local.yml run --rm -p 8080:8080 worker idp-web --root /output/ui --host 0.0.0.0 --port 8080
+# в контейнере: сервис web из infra/compose/local.yml
+docker compose -f infra/compose/local.yml up -d web
 ```
 
 Чтобы запустить интерфейс без GPU (с заглушкой вместо vLLM), добавьте `--stub`:
@@ -214,15 +287,16 @@ idp-web --stub --root data/ui --port 8080
 Заглушка `tests/vlm_stub.py` стартует в процессе и отдаёт детерминированный markdown/JSON,
 так что весь пайплайн (render → VLM → entities → bundle → reconstruct) работает офлайн.
 
-Через Docker Compose — два режима:
+Отдельный `docker-compose.yml` в корне репо поднимает интерфейс и заглушку на образе
+`worker:latest` — без GPU и без `infra/compose/local.yml`:
 
 ```bash
-# прод (без заглушки, VLM по умолчанию http://vllm-vl:8000/v1)
-docker compose up -d
-
-# режим тестирования со стабом
-IDP_VL_ENDPOINTS=http://vlm-stub:8123/v1 docker compose --profile stub up -d
+docker compose up -d                       # прод, VLM по умолчанию http://vllm-vl:8000/v1
+docker compose --profile stub up -d        # интерфейс + vlm-stub
 ```
+
+Заглушка включается **только** через `--stub` / профиль `stub`; в `infra/compose/local.yml`
+её нет вообще, поэтому на прод-стек она не влияет.
 
 Что умеет:
 

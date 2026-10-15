@@ -27,14 +27,6 @@ services:
       - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
       - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
 
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${IDP_WORKER_GPU:-0}"]
-              capabilities: [gpu]
-
     depends_on:
       vllm-vl-0:
         condition: service_healthy
@@ -169,6 +161,24 @@ services:
 
     networks:
       - idp_internal
+
+  web:
+    image: ${IDP_APP_IMAGE:-local/idp-app:latest}
+    pull_policy: never
+    command: ["idp-web", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      PYTHONPATH: /app
+      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
+      IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}
+      IDP_MAX_IMAGES: ${IDP_MAX_IMAGES:-2}
+      IDP_RECONSTRUCT_FORMATS: ${IDP_RECONSTRUCT_FORMATS:-docx,pdf}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ui_data:/data/ui
+
+volumes:
+  ui_data:
 
 networks:
   idp_internal:
