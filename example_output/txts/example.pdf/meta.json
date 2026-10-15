@@ -1,0 +1,114 @@
+{
+  "source": "example.pdf",
+  "type": "pdf",
+  "size_bytes": 5460,
+  "pages": 3,
+  "document_type": "ttkh",
+  "annotation": "Служебный документ с табличными данными и подписями.",
+  "metadata": {},
+  "text_file": "text.txt",
+  "images_dir": "images",
+  "images": [
+    "figure_0001.png",
+    "figure_0002.png",
+    "handwritten_0001.png",
+    "handwritten_0002.png",
+    "page_00001.png",
+    "page_00002.png",
+    "page_00003.png"
+  ],
+  "regions": [
+    {
+      "name": "page_00001.png",
+      "kind": "page",
+      "page": 1,
+      "bbox": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "width": 1448,
+      "height": 2048
+    },
+    {
+      "name": "page_00002.png",
+      "kind": "page",
+      "page": 2,
+      "bbox": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "width": 1448,
+      "height": 2048
+    },
+    {
+      "name": "page_00003.png",
+      "kind": "page",
+      "page": 3,
+      "bbox": [
+        0.0,
+        0.0,
+        1.0,
+        1.0
+      ],
+      "width": 1448,
+      "height": 2048
+    },
+    {
+      "name": "figure_0001.png",
+      "kind": "figure",
+      "page": 1,
+      "bbox": [
+        0.12,
+        0.3,
+        0.88,
+        0.7
+      ],
+      "width": 1145,
+      "height": 851
+    },
+    {
+      "name": "handwritten_0001.png",
+      "kind": "handwritten",
+      "page": 1,
+      "bbox": [
+        0.61,
+        0.42,
+        0.76,
+        0.455
+      ],
+      "width": 226,
+      "height": 75
+    },
+    {
+      "name": "figure_0002.png",
+      "kind": "figure",
+      "page": 3,
+      "bbox": [
+        0.12,
+        0.3,
+        0.88,
+        0.7
+      ],
+      "width": 1145,
+      "height": 851
+    },
+    {
+      "name": "handwritten_0002.png",
+      "kind": "handwritten",
+      "page": 3,
+      "bbox": [
+        0.61,
+        0.42,
+        0.76,
+        0.455
+      ],
+      "width": 226,
+      "height": 75
+    }
+  ],
+  "tables_file": "tables.json"
+}

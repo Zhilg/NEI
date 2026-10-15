@@ -205,10 +205,30 @@ idp-web --root data/ui --host 127.0.0.1 --port 8080
 docker compose -f infra/compose/local.yml run --rm -p 8080:8080 worker idp-web --root /output/ui --host 0.0.0.0 --port 8080
 ```
 
+Чтобы запустить интерфейс без GPU (с заглушкой вместо vLLM), добавьте `--stub`:
+
+```bash
+idp-web --stub --root data/ui --port 8080
+```
+
+Заглушка `tests/vlm_stub.py` стартует в процессе и отдаёт детерминированный markdown/JSON,
+так что весь пайплайн (render → VLM → entities → bundle → reconstruct) работает офлайн.
+
+Через Docker Compose — два режима:
+
+```bash
+# прод (без заглушки, VLM по умолчанию http://vllm-vl:8000/v1)
+docker compose up -d
+
+# режим тестирования со стабом
+IDP_VL_ENDPOINTS=http://vlm-stub:8123/v1 docker compose --profile stub up -d
+```
+
 Что умеет:
 
 - принять файл (drag & drop или выбор через проводник): PDF, DOCX, XLSX, PPTX, HTML, изображения;
-- кнопка **Обработать** — прогоняет полный пайплайн (`*.md` + бандл `txts/`, по умолчанию DOCX и PDF);
+- кнопка **Обработать всё** — прогоняет пайплайн по всем dropped-файлам сразу (Markdown + DOCX/PDF по умолчанию);
+- кнопка **Обработать** — обрабатывает отдельный файл;
 - кнопки **DOCX / PDF / TXT** — пересобирают выбранный артефакт из бандла, не запуская VLM повторно;
 - ссылки на скачи Markdown, TXT-бандла и `reconstruct.docx` / `reconstruct.pdf`.
 

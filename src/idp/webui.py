@@ -4,15 +4,19 @@ A local browser tool for processing one document at a time (PDF/DOCX/XLSX/
 PPTX/HTML) without watching directories:
 
   * drop a file on the box (or pick it with the file input);
-  * press "Обработать" to run the pipeline (Markdown + DOCX/PDF by default);
+  * press "Обработать всё" to run the pipeline on every dropped file at once,
+    or "Обработать" to process a single file;
   * press "DOCX" / "PDF" / "TXT" to (re)build that artifact from the bundle;
   * download the Markdown, the bundle text or the reconstructed documents.
 
 Everything is standard library (``http.server``) so the UI needs no extra
 packages inside the air-gapped image.
 
-Run:
+Run (with a real vLLM endpoint):
     idp-web --root data/ui --host 127.0.0.1 --port 8080
+
+Run without a GPU (uses the deterministic VLM stub):
+    idp-web --stub --root data/ui --port 8080
 
 Layout under ``--root``::
 
@@ -33,6 +37,7 @@ import json
 import logging
 import mimetypes
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -91,13 +96,15 @@ INDEX_HTML = """<!doctype html>
 </style>
 </head>
 <body>
-<header>IDP — обработка файлов<span>перетащите файл в область и нажмите кнопки</span></header>
+<header>IDP — обработка файлов<span>перетащите файлы в область, нажмите «Обработать всё» или обрабатывайте по отдельности</span></header>
 <main>
   <div id="drop">
     <p><strong>Перетащите файлы сюда</strong></p>
     <p class="hint">PDF, DOCX, XLSX, PPTX, HTML, изображения — или нажмите, чтобы выбрать</p>
     <input type="file" id="picker" multiple hidden>
   </div>
+  <button id="processAll" class="primary" style="margin: 18px 0; padding: 12px 24px; font-size: 16px;" disabled>Обработать всё</button>
+  <p id="processAllHint" class="hint" style="display:none; margin-top:-10px;">Выбросьте файлы или выберите их — нажмите кнопку, чтобы обработать все сразу</p>
   <table>
     <thead><tr>
       <th style="width:34%">Файл</th><th style="width:14%">Статус</th>
@@ -109,6 +116,15 @@ INDEX_HTML = """<!doctype html>
 <script>
 const state = new Map();
 const rows = document.getElementById('rows');
+const processAllBtn = document.getElementById('processAll');
+const processAllHint = document.getElementById('processAllHint');
+
+function updateProcessAllButton() {
+  const pending = Array.from(state.values()).filter(
+    f => f.status === 'pending' || f.status === 'error'
+  );
+  processAllBtn.disabled = !pending.length;
+}
 
 document.getElementById('drop').addEventListener('click', () => document.getElementById('picker').click());
 document.getElementById('picker').addEventListener('change', (e) => { upload(e.target.files); e.target.value = ''; });
@@ -121,6 +137,14 @@ document.getElementById('picker').addEventListener('change', (e) => { upload(e.t
 }));
 document.getElementById('drop').addEventListener('drop', (e) => upload(e.dataTransfer.files));
 
+processAllBtn.addEventListener('click', () => {
+  fetch('action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'process_all' }),
+  }).then(() => { poll(); });
+});
+
 async function upload(files) {
   for (const file of files) {
     const body = new FormData();
@@ -131,6 +155,7 @@ async function upload(files) {
     state.set(info.id, { ...info, status: 'pending', error: '', files: [] });
   }
   render();
+  updateProcessAllButton();
   poll();
 }
 
@@ -155,6 +180,7 @@ async function poll() {
     }
   }
   if (changed) render();
+  updateProcessAllButton();
   const running = data.files.some(f => f.status === 'running' || f.status === 'pending');
   if (running) setTimeout(poll, 1000);
 }
@@ -291,6 +317,20 @@ class FileUIServer:
         """Run an action in a background thread (one job at a time per file)."""
         thread = threading.Thread(target=self._action_worker, args=(file_id, action), daemon=True)
         thread.start()
+
+    def process_all(self) -> None:
+        """Process every pending/error file sequentially in a background thread."""
+        thread = threading.Thread(target=self._process_all_worker, daemon=True)
+        thread.start()
+
+    def _process_all_worker(self) -> None:
+        with self._lock:
+            target_ids = [
+                jid for jid, job in self._jobs.items()
+                if job["status"] in ("pending", "error")
+            ]
+        for file_id in target_ids:
+            self._process(file_id)
 
     def _action_worker(self, file_id: str, action: str) -> None:
         job = self._jobs.get(file_id)
@@ -528,6 +568,10 @@ class FileUIServer:
                     return
                 file_id = str(payload.get("id", ""))
                 action = str(payload.get("action", ""))
+                if action == "process_all":
+                    server.process_all()
+                    self._send_json({"ok": True, "action": "process_all"})
+                    return
                 with server._lock:
                     known = file_id in server._jobs
                 if not known:
@@ -539,17 +583,56 @@ class FileUIServer:
         return Handler
 
 
+def _start_stub() -> StubServer:
+    """Start the deterministic VLM stub and point the pipeline at it.
+
+    Lets ``idp-web --stub`` run end-to-end without a GPU/vLLM.  Requires the
+    test package on the path (run from the repo root or ``pip install -e .``).
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    tests_root = Path.cwd()
+    if str(tests_root) not in sys.path:
+        sys.path.insert(0, str(tests_root))
+    from tests.vlm_stub import StubServer  # noqa: E402
+
+    stub = StubServer()
+    stub.__enter__()
+    settings.vl_endpoints = [stub.endpoint]
+    settings.vl_endpoint = stub.endpoint
+    settings.vl_model = "stub-vl"
+    logger.info("VLM stub started at %s", stub.endpoint)
+    return stub
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Single-file web UI for the IDP pipeline")
     parser.add_argument("--root", default="data/ui", help="working directory (uploads + output)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument(
+        "--stub",
+        action="store_true",
+        help="Start the deterministic VLM stub (no GPU required)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    stub: StubServer | None = None
+    if args.stub:
+        try:
+            stub = _start_stub()
+        except ImportError as exc:
+            logger.error("VLM stub requires the tests package (run from repo root): %s", exc)
+            print(f"error: --stub requires running from the repo root: {exc}", file=sys.stderr)
+            sys.exit(1)
+
     server = FileUIServer(Path(args.root), host=args.host, port=args.port)
     url = server.start()
     print(f"IDP web UI on {url}  (root: {Path(args.root).resolve()})")
+    if stub:
+        print(f"VLM stub active at {stub.endpoint}")
     print("Ctrl+C to stop.")
     try:
         while True:
@@ -558,6 +641,8 @@ def main() -> None:
         pass
     finally:
         server.stop()
+        if stub is not None:
+            stub.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

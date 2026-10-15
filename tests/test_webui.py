@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from idp.config import settings
 from idp.webui import FileUIServer
 from tests.vlm_stub import hash_bytes
 
@@ -53,6 +54,77 @@ def test_index_page(ui, client):
     assert response.status_code == 200
     assert "Перетащите файлы сюда" in response.text
     assert "Обработать" in response.text
+    assert "Обработать всё" in response.text
+
+
+def _wait_done_multi(client: httpx.Client, file_ids: set[str], timeout: float = 90.0) -> dict:
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status = client.get("/api/status").json()
+        remaining = {
+            f["id"] for f in status["files"]
+            if f["id"] in file_ids and f["status"] not in {"done", "error"}
+        }
+        if not remaining:
+            return {f["id"]: f for f in status["files"] if f["id"] in file_ids}
+        time.sleep(0.2)
+    raise AssertionError(f"jobs did not finish in time: {remaining}")
+
+
+def test_process_all_button_processes_every_file(workspace, ui, client, sample_pdf, sample_docx):
+    id_pdf = _upload(client, sample_pdf)
+    id_docx = _upload(client, sample_docx)
+
+    # both files are pending after upload
+    status = client.get("/api/status").json()
+    assert len(status["files"]) == 2
+    assert all(f["status"] == "pending" for f in status["files"])
+
+    # trigger process_all (no file id needed)
+    response = client.post("/action", json={"action": "process_all"})
+    assert response.status_code == 200
+    assert response.json()["ok"]
+
+    results = _wait_done_multi(client, {id_pdf, id_docx})
+    for file_id, item in results.items():
+        assert item["status"] == "done", f"{file_id}: {item}"
+        assert item["error"] == ""
+        assert item["bundle"]
+
+
+def test_process_all_only_processes_pending_and_error(ui, client, sample_pdf):
+    """process_all skips files that are already 'done'."""
+    file_id = _upload(client, sample_pdf)
+    client.post("/action", json={"id": file_id, "action": "process"})
+    item = _wait_done(client, file_id)
+    assert item["status"] == "done"
+
+    # process_all should be a no-op (no pending/error files) and not error
+    response = client.post("/action", json={"action": "process_all"})
+    assert response.status_code == 200
+    assert response.json()["ok"]
+
+
+def test_stub_flag_starts_stub():
+    """The --stub flag auto-starts the VLM stub and wires settings."""
+    from idp.webui import _start_stub
+
+    saved = (settings.vl_endpoints, settings.vl_endpoint, settings.vl_model)
+    try:
+        stub = _start_stub()
+        assert settings.vl_endpoints == [stub.endpoint]
+        assert settings.vl_endpoint == stub.endpoint
+        assert settings.vl_model == "stub-vl"
+
+        # the stub actually responds
+        resp = httpx.get(f"{stub.endpoint}/models", timeout=10.0)
+        assert resp.status_code == 200
+        assert resp.json()["data"][0]["id"] == "stub-vl"
+        stub.__exit__(None, None, None)
+    finally:
+        (settings.vl_endpoints, settings.vl_endpoint, settings.vl_model) = saved
 
 
 def test_upload_process_and_download(workspace, ui, client, sample_pdf):

@@ -1,0 +1,30 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYTHON_IMAGE: python:3.12-slim
+    command: ["idp-web", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      - PYTHONPATH=/app
+      - IDP_VL_ENDPOINTS=${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ui_data:/data/ui
+    restart: unless-stopped
+
+  vlm-stub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYTHON_IMAGE: python:3.12-slim
+    command: ["python", "tests/vlm_stub.py", "--host", "0.0.0.0", "--port", "8123"]
+    environment:
+      - PYTHONPATH=/app
+    profiles: ["stub"]
+
+volumes:
+  ui_data:

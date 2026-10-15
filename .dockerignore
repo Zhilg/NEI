@@ -12,6 +12,5 @@ wheels
 tools_wheels
 transfer
 alembic
-tests
 .kilo
 data

@@ -1,0 +1,160 @@
+[
+  {
+    "file": "example.pdf",
+    "type": "pdf",
+    "size_bytes": 5460,
+    "pages": 3,
+    "duration_sec": 0.548,
+    "status": "ok",
+    "error": null,
+    "paragraphs": [
+      {
+        "page": 1,
+        "paragraph": 1,
+        "text": "## Страница de7f4a8408",
+        "section": "Страница de7f4a8408",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 2,
+        "text": "Содержание страницы 1: сводные данные по объекту de7f4a8408 приведены в таблице ниже.",
+        "section": "Страница de7f4a8408",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 3,
+        "text": "- пункт 1.1;\n- пункт 1.2.",
+        "section": "Страница de7f4a8408",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 4,
+        "text": "| Параметр | Значение | Ед. изм. |\n|---|---|---|\n| Масса de7f4a8408 | 12.5 | кг |\n| Длина de7f4a8408 | 3400 | мм |",
+        "section": "Страница de7f4a8408",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 5,
+        "text": "[Image: chart: график выполнения]",
+        "section": "Страница de7f4a8408",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 6,
+        "text": "Уточнённое значение [HANDWRITTEN: de7f4a8408] проставлено от руки.",
+        "section": "Страница de7f4a8408",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 7,
+        "text": "## Страница 44293bc122",
+        "section": "Страница 44293bc122",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 8,
+        "text": "Содержание страницы 2: сводные данные по объекту 44293bc122 приведены в таблице ниже.",
+        "section": "Страница 44293bc122",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 9,
+        "text": "- пункт 2.1;\n- пункт 2.2.",
+        "section": "Страница 44293bc122",
+        "section_level": 2
+      },
+      {
+        "page": 1,
+        "paragraph": 10,
+        "text": "| Параметр | Значение | Ед. изм. |\n|---|---|---|\n| Масса 44293bc122 | 12.5 | кг |\n| Длина 44293bc122 | 3400 | мм |",
+        "section": "Страница 44293bc122",
+        "section_level": 2
+      },
+      {
+        "page": 2,
+        "paragraph": 1,
+        "text": "## Страница df45bd6fa1",
+        "section": "Страница df45bd6fa1",
+        "section_level": 2
+      },
+      {
+        "page": 2,
+        "paragraph": 2,
+        "text": "Содержание страницы 1: сводные данные по объекту df45bd6fa1 приведены в таблице ниже.",
+        "section": "Страница df45bd6fa1",
+        "section_level": 2
+      },
+      {
+        "page": 2,
+        "paragraph": 3,
+        "text": "- пункт 1.1;\n- пункт 1.2.",
+        "section": "Страница df45bd6fa1",
+        "section_level": 2
+      },
+      {
+        "page": 2,
+        "paragraph": 4,
+        "text": "| Параметр | Значение | Ед. изм. |\n|---|---|---|\n| Масса df45bd6fa1 | 12.5 | кг |\n| Длина df45bd6fa1 | 3400 | мм |",
+        "section": "Страница df45bd6fa1",
+        "section_level": 2
+      },
+      {
+        "page": 2,
+        "paragraph": 5,
+        "text": "[Image: chart: график выполнения]",
+        "section": "Страница df45bd6fa1",
+        "section_level": 2
+      },
+      {
+        "page": 2,
+        "paragraph": 6,
+        "text": "Уточнённое значение [HANDWRITTEN: df45bd6fa1] проставлено от руки.",
+        "section": "Страница df45bd6fa1",
+        "section_level": 2
+      }
+    ],
+    "entities": [
+      {
+        "type": "person",
+        "value": "Иванов И.И.",
+        "normalized_value": null,
+        "page": 1,
+        "paragraph": 1,
+        "evidence": "Иванов И.И.",
+        "confidence": 0.5355,
+        "handwritten": true
+      },
+      {
+        "type": "amount",
+        "value": "12.5",
+        "normalized_value": null,
+        "page": 1,
+        "paragraph": 1,
+        "evidence": "12.5",
+        "confidence": 0.8,
+        "handwritten": false
+      },
+      {
+        "type": "date",
+        "value": "12.05.2026",
+        "normalized_value": "2026-05-12",
+        "page": 3,
+        "paragraph": 1,
+        "evidence": "12.05.2026",
+        "confidence": 0.63,
+        "handwritten": false
+      }
+    ],
+    "annotation": "Служебный документ с табличными данными и подписями.",
+    "document_type": "ttkh",
+    "metadata": {}
+  }
+]
