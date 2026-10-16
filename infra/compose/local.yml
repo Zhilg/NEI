@@ -16,7 +16,7 @@ services:
       IDP_OUTPUT_ROOT: /output
       IDP_MODELS_ROOT: /models
 
-      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
+      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1}
       IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}
       IDP_VL_MAX_IMAGES: ${IDP_VL_MAX_IMAGES:-2}
 
@@ -28,15 +28,13 @@ services:
       - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
 
     depends_on:
-      vllm-vl-0:
-        condition: service_healthy
-      vllm-vl-1:
+      vllm-vl:
         condition: service_healthy
 
     networks:
       - idp_internal
 
-  vllm-vl-0:
+  vllm-vl:
     image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
     pull_policy: never
     build:
@@ -48,7 +46,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_VL_GPU_0:-0}"]
+              count: ${IDP_VLLM_DP_SIZE:-2}
               capabilities: [gpu]
 
     command:
@@ -75,6 +73,8 @@ services:
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
+      - --data-parallel-size
+      - ${IDP_VLLM_DP_SIZE:-2}
 
     environment:
       NVIDIA_DRIVER_CAPABILITIES: all
@@ -99,76 +99,13 @@ services:
     networks:
       - idp_internal
 
-  vllm-vl-1:
-    image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
-    pull_policy: never
-    build:
-      context: ${IDP_SOURCE_ROOT:-../../}
-      dockerfile: infra/dockerfiles/vllm-vl/Dockerfile
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${IDP_VLLM_VL_GPU_1:-1}"]
-              capabilities: [gpu]
-
-    command:
-      - --model
-      - /models/${IDP_VL_MODEL_DIR:-new_vl}
-      - --served-model-name
-      - ${IDP_VL_MODEL:-Qwen3.8-27B}
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8001"
-      - --quantization
-      - compressed-tensors
-      - --dtype
-      - half
-      - --gpu-memory-utilization
-      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
-      - --max-model-len
-      - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
-      - --limit-mm-per-prompt
-      - '{"vision": 3}'
-      - --default-chat-template-kwargs
-      - '{"enable_thinking": false}'
-      - --trust-remote-code
-      - --kv-cache-memory
-      - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
-
-    environment:
-      NVIDIA_DRIVER_CAPABILITIES: all
-      HF_HOME: /models/${IDP_VL_MODEL_DIR:-new_vl}/hf-cache
-      HF_HUB_OFFLINE: "1"
-      TRANSFORMERS_OFFLINE: "1"
-      VLLM_NO_USAGE_STATS: "1"
-      VLLM_IMAGE_MAX_PIXELS: "6000000"
-      VLLM_IMAGE_MIN_PIXELS: "1003520"
-      VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
-
-    volumes:
-      - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
-
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/v1/models', timeout=2)\""]
-      interval: 15s
-      timeout: 5s
-      retries: 40
-      start_period: 90s
-
-    networks:
-      - idp_internal
-
   web:
     image: ${IDP_APP_IMAGE:-local/idp-app:latest}
     pull_policy: never
     command: ["idp-web", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       PYTHONPATH: /app
-      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
+      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1}
       IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}
       IDP_MAX_IMAGES: ${IDP_MAX_IMAGES:-2}
       IDP_RECONSTRUCT_FORMATS: ${IDP_RECONSTRUCT_FORMATS:-docx,pdf}
