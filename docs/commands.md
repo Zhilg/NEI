@@ -188,6 +188,7 @@ IDP_ARTIFACTS_MODE=true
 | `IDP_LOG_LEVEL` | `INFO` | уровень логов (`DEBUG` включает размеры страниц, URL и превью ответов VLM) |
 | `IDP_ARTIFACTS_MODE` | `false` | аналог флага `--artifacts` |
 | `IDP_VISIO_MODE` | `false` | аналог флага `--visio` (собирать `reconstruct.vsdx` из бандла) |
+| `IDP_VISIO_CONTENT` | `pages` | содержимое `reconstruct.vsdx`: `pages` — рендеры страниц, `sheet` — все на одном листе, `document` — редактируемый документ |
 | `IDP_RECONSTRUCT_FORMATS` | `docx,pdf` | какие форматы собирать из бандлов (пусто — не собирать) |
 | `IDP_VL_MODEL_DIR` | `new_vl` | папка модели внутри `/models` для vLLM/SGLang (compose) |
 | `IDP_VL_MODEL` | `Qwen3.8-27B` | имя модели в запросах к VLM (compose) |
@@ -255,7 +256,9 @@ docker compose -f infra/compose/local.yml run --rm worker idp-reconstruct --form
 
 `vsdx` собирается из картинок бандла: каждая страница (`images/page_*.png`)
 становится отдельной страницей Visio. Если в бандле нет рендеров страниц
-(DOCX/PPTX/HTML), берутся встроенные картинки.
+(DOCX/PPTX/HTML), берутся встроенные картинки. Содержимое чертежа меняется
+переменной `IDP_VISIO_CONTENT`: `sheet` — все картинки на одном листе,
+`document` — редактируемый документ (текст, таблицы и рисунки из `text.txt`).
 
 **TXT пересобрать нельзя** — `text.txt` уже лежит в бандле и пишется во время обработки;
 `idp-reconstruct` умеет только `docx`, `pdf` и `vsdx`.
@@ -270,18 +273,40 @@ idp-visio --out drawing.vsdx ./rendered/report/             # папка (рек
 idp-visio --out sheet.vsdx --mode sheet --columns 3 ./rendered/report/
 idp-visio --out a4.vsdx --page-size 8.27x11.69 ./rendered/report/
 idp-visio --bundle data/output/txts/report.pdf              # из бандла → reconstruct.vsdx
+idp-visio --bundle data/output/txts/report.pdf --mode document   # редактируемый документ
+idp-visio --text report.md --out report.vsdx                     # из markdown-файла
 ```
 
 | Флаг | Действие |
 |---|---|
 | `--out <путь>` | куда писать `.vsdx` (по умолчанию — рядом с первой картинкой или `reconstruct.vsdx` в бандле) |
 | `--bundle <путь>` | взять картинки из бандла `txts/...` |
-| `--mode pages\|sheet` | отдельная страница на картинку (по умолчанию) или все картинки на одном листе |
+| `--text <путь>` | собрать документ из markdown-файла (картинки ищутся рядом с ним) |
+| `--mode pages\|sheet\|document` | отдельная страница на картинку (по умолчанию), все картинки на одном листе или редактируемый документ |
 | `--dpi <N>` | DPI для расчёта размера страницы (по умолчанию `IDP_RENDER_DPI`, 200) |
 | `--page-size WxH` | фиксированный формат страницы в дюймах, картинка вписывается с сохранением пропорций |
 | `--columns <N>` | колонок в режиме `sheet` (по умолчанию — квадратная сетка) |
 | `--pattern <glob>` | маска файлов в папках (по умолчанию `*.png`) |
 | `--title <текст>` | заголовок документа в свойствах файла |
+
+### Документ → Visio (редактируемый)
+
+В режиме `document` в чертеж попадает не отрендеренная страница, а сам документ
+из бандла (`text.txt`): заголовки и абзацы становятся текстовыми фигурами
+(Times New Roman, текст правится прямо в Visio), списки — элементами с буллитом,
+таблицы — сеткой прямоугольных ячеек, рисунки — встроенными картинками. Текст
+переносится по ширине листа, длинные блоки и таблицы разбиваются на страницы,
+шапка таблицы повторяется после разрыва.
+
+```bash
+idp-visio --bundle data/output/txts/report.pdf --mode document --out report.vsdx
+idp-visio --text data/output/txts/report.pdf/text.txt --out report.vsdx
+```
+
+Тот же режим доступен пайплайну: `IDP_VISIO_CONTENT=document` меняет содержимое
+`reconstruct.vsdx`, который собирает `idp-reconstruct --format vsdx` (и воркер с
+флагом `--visio`). Значения: `pages` (по умолчанию — рендеры страниц), `sheet`
+(все рендеры на одном листе), `document` (редактируемый документ).
 
 После сборки команда проверяет структуру пакета (части, связи, типы содержимого,
 порядок элементов по схеме Visio) и печатает `structure check: ok`, если всё в порядке.
@@ -430,7 +455,8 @@ python3 -m pytest tests/ -q --timeout 150 --timeout-method=thread
 документ — все заголовки должны дожить до вывода), wide-таблицы (краш
 `text box must be finite and not empty`), склейка перенесённых ссылок, поток оператора
 (`--force`, EOF, пробелы), бенчмарк и веб-интерфейс (upload/process/formats/download),
-экспорт PNG → Visio (структура `.vsdx`, страницы, связи, встроенные картинки).
+экспорт PNG → Visio (структура `.vsdx`, страницы, связи, встроенные картинки),
+документ → Visio (редактируемые текстовые фигуры, таблицы, разбивка по страницам).
 
 Заглушку можно запустить и вручную, чтобы дергать воркер/оператор без vLLM:
 
@@ -528,6 +554,8 @@ docker compose exec worker idp-reconstruct --format vsdx       # только Vi
 
 `reconstruct.vsdx` (формат `vsdx` или флаг `--visio` у воркера) — Visio-чертеж, в котором
 каждый рендер страницы становится отдельной страницей Visio с картинкой во весь лист.
+С `IDP_VISIO_CONTENT=document` в чертеж попадает сам документ: заголовки, абзацы,
+списки и таблицы становятся редактируемыми фигурами Visio.
 
 Отключить авто-сборку в воркере:
 
@@ -555,6 +583,7 @@ src/idp/           # Код пайплайна
   metadata_extractor.py # Метаданные DOCX/PPTX
   txt_export.py    # Экспорт txts-бандлов с гиперссылками на картинки
   visio_exporter.py # Сборка Visio-чертежей (.vsdx) из PNG
+  visio_document.py # Текст документа → редактируемый Visio (фигуры, таблицы)
   visio_cli.py     # CLI: idp-visio (PNG → .vsdx)  reconstructor.py # Сборка DOCX/PDF/Visio из бандлов
   operator_client.py # Терминальный инструмент review'а оператора
   webui.py         # Веб-интерфейс для отдельных файлов (stdlib http.server)

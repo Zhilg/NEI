@@ -4,6 +4,8 @@ Usage:
     idp-visio --out drawing.vsdx page_00001.png page_00002.png
     idp-visio --out drawing.vsdx --mode sheet ./rendered/report/
     idp-visio --bundle data/output/txts/report.pdf
+    idp-visio --bundle data/output/txts/report.pdf --mode document
+    idp-visio --text report.md --out document.vsdx
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import re
 from pathlib import Path
 
 from idp.config import settings
+from idp.visio_document import build_document_vsdx
 from idp.visio_exporter import (
     IMAGE_CONTENT_TYPES,
     build_bundle_vsdx,
@@ -72,8 +75,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("inputs", nargs="*", help="PNG files or directories with images")
     parser.add_argument("--out", type=Path, help="output .vsdx file")
     parser.add_argument("--bundle", type=Path, help="txts bundle to convert (uses its images/)")
-    parser.add_argument("--mode", choices=("pages", "sheet"), default="pages",
-                        help="one Visio page per image (default) or a single tiled sheet")
+    parser.add_argument("--text", type=Path,
+                        help="markdown file with the document text (document mode)")
+    parser.add_argument("--mode", choices=("pages", "sheet", "document"), default="pages",
+                        help="one Visio page per image (default), a single tiled sheet "
+                             "or the editable text of the document")
     parser.add_argument("--dpi", type=int, default=0,
                         help=f"pixels per inch used for page size (default {settings.render_dpi})")
     parser.add_argument("--page-size", type=parse_page_size, default=None,
@@ -85,6 +91,37 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _build_document(args: argparse.Namespace) -> Path:
+    """Build the drawing of a document (its text, not the page renders)."""
+    from idp.reconstructor import parse_bundle_text
+
+    if args.text is not None:
+        text_file = args.text
+        if not text_file.is_file():
+            raise SystemExit(f"text file not found: {text_file}")
+        base_dir = text_file.parent
+        out_path = args.out or text_file.with_suffix(".vsdx")
+    else:
+        bundle_dir = args.bundle
+        if bundle_dir is None or not bundle_dir.is_dir():
+            raise SystemExit("document mode needs --bundle DIR or --text FILE")
+        text_file = bundle_dir / "text.txt"
+        if not text_file.is_file():
+            raise SystemExit(f"bundle has no text.txt: {bundle_dir}")
+        base_dir = bundle_dir
+        out_path = args.out or bundle_dir / "reconstruct.vsdx"
+    blocks = parse_bundle_text(text_file.read_text(encoding="utf-8"))
+    if not blocks:
+        raise SystemExit(f"no content in {text_file}")
+    return build_document_vsdx(
+        blocks,
+        out_path,
+        page_size=args.page_size,
+        title=args.title or base_dir.name,
+        base_dir=base_dir,
+    )
+
+
 def main() -> None:
     logging.basicConfig(
         level=getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -92,7 +129,10 @@ def main() -> None:
     )
     args = _parse_args()
 
-    if args.bundle is not None:
+    mode = "document" if args.text is not None else args.mode
+    if mode == "document":
+        created = _build_document(args)
+    elif args.bundle is not None:
         bundle_dir = args.bundle
         if not bundle_dir.is_dir():
             raise SystemExit(f"bundle not found: {bundle_dir}")
@@ -141,7 +181,7 @@ def main() -> None:
     print(f"created {created}")
     print(
         f"pages: {summary['pages']}, images: {summary['images']}, "
-        f"size: {created.stat().st_size} bytes"
+        f"texts: {summary['texts']}, size: {created.stat().st_size} bytes"
     )
     if problems:
         for problem in problems:

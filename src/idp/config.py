@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     test_mode: bool = Field(default=False)
     artifacts_mode: bool = Field(default=False)
     visio_mode: bool = Field(default=False)
+    visio_content: str = Field(default="pages")
     entity_schema_path: Union[str, Path, None] = Field(default=None)
     trash_path: str = Field(default="")
     min_entity_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
@@ -105,7 +106,15 @@ class Settings(BaseSettings):
                 return []
             return [v.strip().lower().lstrip(".") for v in value.split(",") if v.strip()]
         return []
-        
+
+    @field_validator("visio_content")
+    @classmethod
+    def check_visio_content(cls, value: str) -> str:
+        content = (value or "").strip().lower()
+        if content not in ("pages", "sheet", "document"):
+            msg = f"visio_content must be pages, sheet or document (got {value!r})"
+            raise ValueError(msg)
+        return content
 
 
 settings = Settings()

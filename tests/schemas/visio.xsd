@@ -1081,7 +1081,7 @@
       </xs:sequence>
       </xs:complexType>
 <xs:complexType name="TabSplitterPos_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
-<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Text_Type">
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Text_Type" mixed="true">
           
           <xs:choice minOccurs="0" maxOccurs="unbounded">
     <xs:element name="cp" type="cp_Type" minOccurs="0" maxOccurs="unbounded">

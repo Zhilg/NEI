@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from idp.config import settings
+from idp.visio_document import build_document_vsdx
 from idp.visio_exporter import build_bundle_vsdx
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,11 @@ def _is_plain_line(line: str) -> bool:
     if _TABLE_ROW_RE.match(stripped) and stripped.count("|") >= 2:
         return False
     return _BULLET_RE.match(stripped) is None
+
+
+def parse_bundle_text(text: str) -> list[Block]:
+    """Parse the markdown of a bundle into blocks (wrapped links repaired)."""
+    return parse_bundle(_join_wrapped_links(text))
 
 
 def parse_bundle(text: str) -> list[Block]:
@@ -688,12 +694,37 @@ def load_regions(bundle_dir: Path) -> dict[str, dict]:
     }
 
 
+def build_visio(bundle_dir: Path, blocks: list[Block]) -> Path:
+    """Build the Visio drawing of a bundle.
+
+    ``IDP_VISIO_CONTENT`` selects the content of the drawing: ``pages`` (the
+    page renders, one Visio page per document page), ``sheet`` (all renders on
+    a single page) or ``document`` (the editable text of the document).
+    """
+    bundle_dir = Path(bundle_dir)
+    target = bundle_dir / "reconstruct.vsdx"
+    content = (settings.visio_content or "pages").lower()
+    if content == "document":
+        return build_document_vsdx(
+            blocks,
+            target,
+            title=bundle_dir.name,
+            base_dir=bundle_dir,
+        )
+    return build_bundle_vsdx(
+        bundle_dir,
+        target,
+        mode="sheet" if content == "sheet" else "pages",
+        title=bundle_dir.name,
+    )
+
+
 def reconstruct_bundle(bundle_dir: Path, formats: list[str] | None = None) -> list[Path]:
     text_file = bundle_dir / "text.txt"
     if not text_file.is_file():
         return []
     requested = formats if formats is not None else list(settings.reconstruct_formats)
-    blocks = parse_bundle(_join_wrapped_links(text_file.read_text(encoding="utf-8")))
+    blocks = parse_bundle_text(text_file.read_text(encoding="utf-8"))
     regions = load_regions(bundle_dir)
     created: list[Path] = []
     for fmt in requested:
@@ -704,7 +735,7 @@ def reconstruct_bundle(bundle_dir: Path, formats: list[str] | None = None) -> li
             created.append(build_pdf(blocks, bundle_dir, bundle_dir / "reconstruct.pdf", regions))
         elif fmt == "vsdx":
             try:
-                created.append(build_bundle_vsdx(bundle_dir, bundle_dir / "reconstruct.vsdx"))
+                created.append(build_visio(bundle_dir, blocks))
             except ValueError as exc:
                 logger.warning("Visio export skipped for %s: %s", bundle_dir, exc)
     return created

@@ -1,10 +1,12 @@
-"""Build Visio drawings (.vsdx) from PNG images.
+"""Build Visio drawings (.vsdx) from images or from document bundles.
 
 A ``.vsdx`` file is an OPC package: a ZIP archive with XML parts and embedded
 media. This module writes the minimal set of parts a Visio drawing needs
-(document, page list, page sheets, media) and places every PNG as a picture
-shape, either one PNG per Visio page (``pages`` mode) or a tiled contact sheet
-(``sheet`` mode).
+(document, page list, page sheets, media) and knows three kinds of shapes:
+
+* ``picture`` - the image is embedded as a foreign shape (one PNG per page);
+* ``text``    - a text block, editable in Visio (headings, paragraphs, lists);
+* ``rect``    - a rectangle with text, used for table cells.
 
 Only the standard library is used, so the air-gapped image stays untouched.
 
@@ -48,6 +50,14 @@ _REQUIRED_PARTS = (
 )
 _XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 
+# Visio text style bits (Character section, "Style" cell)
+_STYLE_BOLD = 1
+_STYLE_ITALIC = 2
+_STYLE_UNDERLINE = 4
+
+# Paragraph alignment (Paragraph section, "HorzAlign" cell)
+_ALIGN = {"left": 0, "center": 1, "right": 2, "justify": 3}
+
 
 @dataclass
 class VisioImage:
@@ -71,16 +81,29 @@ class VisioImage:
 
 
 @dataclass
-class _Shape:
-    """A picture shape placed on a page (coordinates are inches)."""
+class VisioShape:
+    """A shape on a page (coordinates are inches, origin is the bottom left)."""
 
-    name: str
-    rel_id: str
-    left: float
-    bottom: float
-    width: float
-    height: float
+    kind: str = "text"
+    name: str = "Shape"
+    left: float = 0.0
+    bottom: float = 0.0
+    width: float = 1.0
+    height: float = 0.5
+    text: str = ""
+    font_size: float = 12 / 72.0
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    align: str = "left"
+    bullet: bool = False
+    indent: float = 0.0
+    fill: str = "#ffffff"
+    margins: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    vertical_align: int = 0
+    image: Path | None = None
     compression: str = "PNG"
+    rel_id: str = ""
 
     @property
     def center_x(self) -> float:
@@ -90,15 +113,26 @@ class _Shape:
     def center_y(self) -> float:
         return self.bottom + self.height / 2.0
 
+    @property
+    def style_bits(self) -> int:
+        bits = 0
+        if self.bold:
+            bits |= _STYLE_BOLD
+        if self.italic:
+            bits |= _STYLE_ITALIC
+        if self.underline:
+            bits |= _STYLE_UNDERLINE
+        return bits
+
 
 @dataclass
-class _Page:
+class VisioPage:
     """One Visio page: its size in inches and the shapes placed on it."""
 
-    name: str
-    width: float
-    height: float
-    shapes: list[_Shape] = field(default_factory=list)
+    name: str = "Page-1"
+    width: float = 8.27
+    height: float = 11.69
+    shapes: list[VisioShape] = field(default_factory=list)
 
 
 def _num(value: float) -> str:
@@ -109,6 +143,11 @@ def _num(value: float) -> str:
 
 def _attr(value: str) -> str:
     return quoteattr(str(value))
+
+
+def _text_content(value: str) -> str:
+    """Escape the text of a shape; line breaks become character references."""
+    return escape(value).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "&#10;")
 
 
 def image_size(path: Path) -> tuple[int, int]:
@@ -278,7 +317,7 @@ def _document_rels() -> str:
     )
 
 
-def _pages_xml(pages: list[_Page]) -> str:
+def _pages_xml(pages: list[VisioPage]) -> str:
     chunks = [
         _XML_DECL,
         f'<Pages xmlns="{VISIO_NS}" xmlns:r="{REL_NS}">',
@@ -326,77 +365,178 @@ def _pages_rels(page_count: int) -> str:
     return "".join(chunks)
 
 
-def _page_xml(page: _Page) -> str:
+def _geometry_section(visible_line: bool = False) -> str:
+    return (
+        '<Section N="Geometry" IX="0">'
+        '<Cell N="NoFill" V="1"/>'
+        f'<Cell N="NoLine" V="{0 if visible_line else 1}"/>'
+        '<Cell N="NoShow" V="0"/>'
+        '<Cell N="NoSnap" V="0"/>'
+        '<Cell N="NoQuickDrag" V="0"/>'
+        '<Row T="RelMoveTo" IX="1"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>'
+        '<Row T="RelLineTo" IX="2"><Cell N="X" V="1"/><Cell N="Y" V="0"/></Row>'
+        '<Row T="RelLineTo" IX="3"><Cell N="X" V="1"/><Cell N="Y" V="1"/></Row>'
+        '<Row T="RelLineTo" IX="4"><Cell N="X" V="0"/><Cell N="Y" V="1"/></Row>'
+        '<Row T="RelLineTo" IX="5"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>'
+        "</Section>"
+    )
+
+
+def _character_section(shape: VisioShape) -> str:
+    return (
+        '<Section N="Character" IX="0">'
+        f'<Cell N="Size" V="{_num(shape.font_size)}"/>'
+        '<Cell N="Color" V="#000000"/>'
+        f'<Cell N="Style" V="{shape.style_bits}"/>'
+        '<Cell N="Font" V="1"/>'
+        '<Cell N="AsianFont" V="1"/>'
+        '<Cell N="ComplexScriptFont" V="1"/>'
+        '<Cell N="Case" V="0"/>'
+        '<Cell N="Pos" V="0"/>'
+        '<Cell N="Strikethru" V="0"/>'
+        '<Cell N="DoubleStrikethru" V="0"/>'
+        '<Cell N="Overline" V="0"/>'
+        '<Cell N="ColorTrans" V="0"/>'
+        '<Cell N="Letterspace" V="0"/>'
+        '<Cell N="ScaleX" V="1"/>'
+        '<Cell N="ScaleY" V="1"/>'
+        '<Cell N="DblUnderline" V="0"/>'
+        '<Cell N="Underline" V="0"/>'
+        '<Cell N="TextBkgnd" V="#ffffff"/>'
+        '<Cell N="TextDirection" V="0"/>'
+        "</Section>"
+    )
+
+
+def _paragraph_section(shape: VisioShape) -> str:
+    bullet = 1 if shape.bullet else 0
+    indent_left = shape.indent
+    indent_first = -shape.indent if shape.indent else 0.0
+    return (
+        '<Section N="Paragraph" IX="0">'
+        f'<Cell N="IndFirst" V="{_num(indent_first)}"/>'
+        f'<Cell N="IndLeft" V="{_num(indent_left)}"/>'
+        '<Cell N="SpLine" V="-1.2"/>'
+        '<Cell N="SpBefore" V="0"/>'
+        '<Cell N="SpAfter" V="0"/>'
+        f'<Cell N="HorzAlign" V="{_ALIGN.get(shape.align, 0)}"/>'
+        f'<Cell N="Bullet" V="{bullet}"/>'
+        '<Cell N="BulletFont" V="0"/>'
+        '<Cell N="BulletSize" V="1"/>'
+        '<Cell N="Flags" V="0"/>'
+        '<Cell N="TextPosAfterBullet" V="0"/>'
+        '<Cell N="TextPosBeforeBullet" V="0"/>'
+        '<Cell N="NoLabel" V="0"/>'
+        '<Cell N="TextBkgnd" V="#ffffff"/>'
+        "</Section>"
+    )
+
+
+def _text_shape_xml(shape: VisioShape, index: int) -> str:
+    visible_line = shape.kind == "rect"
+    left, right, top, bottom = shape.margins
+    return (
+        f'<Shape ID="{index}" NameU={_attr(shape.name)} Name={_attr(shape.name)} '
+        'Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">'
+        f'<Cell N="PinX" V="{_num(shape.center_x)}"/>'
+        f'<Cell N="PinY" V="{_num(shape.center_y)}"/>'
+        f'<Cell N="Width" V="{_num(shape.width)}"/>'
+        f'<Cell N="Height" V="{_num(shape.height)}"/>'
+        f'<Cell N="LocPinX" V="{_num(shape.width / 2)}" F="Width*0.5"/>'
+        f'<Cell N="LocPinY" V="{_num(shape.height / 2)}" F="Height*0.5"/>'
+        '<Cell N="Angle" V="0"/>'
+        '<Cell N="FlipX" V="0"/>'
+        '<Cell N="FlipY" V="0"/>'
+        '<Cell N="ResizeMode" V="0"/>'
+        '<Cell N="LineWeight" V="0.01"/>'
+        '<Cell N="LineColor" V="#000000"/>'
+        f'<Cell N="LinePattern" V="{1 if visible_line else 0}"/>'
+        '<Cell N="Rounding" V="0.0625"/>'
+        f'<Cell N="FillForegnd" V={_attr(shape.fill)}/>'
+        '<Cell N="FillBkgnd" V="#ffffff"/>'
+        f'<Cell N="FillPattern" V="{1 if visible_line else 0}"/>'
+        '<Cell N="ShdwPattern" V="0"/>'
+        f'<Cell N="LeftMargin" V="{_num(left)}"/>'
+        f'<Cell N="RightMargin" V="{_num(right)}"/>'
+        f'<Cell N="TopMargin" V="{_num(top)}"/>'
+        f'<Cell N="BottomMargin" V="{_num(bottom)}"/>'
+        f'<Cell N="VerticalAlign" V="{shape.vertical_align}"/>'
+        '<Cell N="TextDirection" V="0"/>'
+        + _character_section(shape)
+        + _paragraph_section(shape)
+        + _geometry_section(visible_line)
+        + f"<Text>{_text_content(shape.text)}</Text>"
+        + "</Shape>"
+    )
+
+
+def _picture_shape_xml(shape: VisioShape, index: int) -> str:
+    return (
+        f'<Shape ID="{index}" NameU={_attr(shape.name)} Name={_attr(shape.name)} '
+        'Type="Foreign" LineStyle="0" FillStyle="0" TextStyle="0">'
+        f'<Cell N="PinX" V="{_num(shape.center_x)}"/>'
+        f'<Cell N="PinY" V="{_num(shape.center_y)}"/>'
+        f'<Cell N="Width" V="{_num(shape.width)}"/>'
+        f'<Cell N="Height" V="{_num(shape.height)}"/>'
+        f'<Cell N="LocPinX" V="{_num(shape.width / 2)}" F="Width*0.5"/>'
+        f'<Cell N="LocPinY" V="{_num(shape.height / 2)}" F="Height*0.5"/>'
+        '<Cell N="Angle" V="0"/>'
+        '<Cell N="FlipX" V="0"/>'
+        '<Cell N="FlipY" V="0"/>'
+        '<Cell N="ResizeMode" V="0"/>'
+        '<Cell N="ObjType" V="1"/>'
+        '<Cell N="ImgOffsetX" V="0" F="ImgWidth*0"/>'
+        '<Cell N="ImgOffsetY" V="0" F="ImgHeight*0"/>'
+        f'<Cell N="ImgWidth" V="{_num(shape.width)}" F="Width*1"/>'
+        f'<Cell N="ImgHeight" V="{_num(shape.height)}" F="Height*1"/>'
+        '<Cell N="LineWeight" V="0.01"/>'
+        '<Cell N="LineColor" V="#000000"/>'
+        '<Cell N="LinePattern" V="0"/>'
+        '<Cell N="Rounding" V="0.0625"/>'
+        '<Cell N="FillForegnd" V="#ffffff"/>'
+        '<Cell N="FillBkgnd" V="#ffffff"/>'
+        '<Cell N="FillPattern" V="0"/>'
+        '<Cell N="ShdwPattern" V="0"/>'
+        '<Cell N="LeftMargin" V="0.0555555555555556"/>'
+        '<Cell N="VerticalAlign" V="0"/>'
+        '<Cell N="TextDirection" V="0"/>'
+        + _geometry_section(False)
+        + f'<ForeignData ForeignType="Bitmap" CompressionType="{shape.compression}">'
+        + f'<Rel r:id={_attr(shape.rel_id)}/>'
+        + "</ForeignData>"
+        + "</Shape>"
+    )
+
+
+def _page_xml(page: VisioPage) -> str:
     chunks = [
         _XML_DECL,
         f'<PageContents xmlns="{VISIO_NS}" xmlns:r="{REL_NS}">',
         "<Shapes>",
     ]
     for index, shape in enumerate(page.shapes, start=1):
-        chunks.append(
-            f'<Shape ID="{index}" NameU={_attr(shape.name)} Name={_attr(shape.name)} '
-            'Type="Foreign" LineStyle="0" FillStyle="0" TextStyle="0">'
-            f'<Cell N="PinX" V="{_num(shape.center_x)}"/>'
-            f'<Cell N="PinY" V="{_num(shape.center_y)}"/>'
-            f'<Cell N="Width" V="{_num(shape.width)}"/>'
-            f'<Cell N="Height" V="{_num(shape.height)}"/>'
-            f'<Cell N="LocPinX" V="{_num(shape.width / 2)}" F="Width*0.5"/>'
-            f'<Cell N="LocPinY" V="{_num(shape.height / 2)}" F="Height*0.5"/>'
-            '<Cell N="Angle" V="0"/>'
-            '<Cell N="FlipX" V="0"/>'
-            '<Cell N="FlipY" V="0"/>'
-            '<Cell N="ResizeMode" V="0"/>'
-            '<Cell N="ObjType" V="1"/>'
-            '<Cell N="ImgOffsetX" V="0" F="ImgWidth*0"/>'
-            '<Cell N="ImgOffsetY" V="0" F="ImgHeight*0"/>'
-            f'<Cell N="ImgWidth" V="{_num(shape.width)}" F="Width*1"/>'
-            f'<Cell N="ImgHeight" V="{_num(shape.height)}" F="Height*1"/>'
-            '<Cell N="LineWeight" V="0.01"/>'
-            '<Cell N="LineColor" V="#000000"/>'
-            '<Cell N="LinePattern" V="0"/>'
-            '<Cell N="Rounding" V="0.0625"/>'
-            '<Cell N="FillForegnd" V="#ffffff"/>'
-            '<Cell N="FillBkgnd" V="#ffffff"/>'
-            '<Cell N="FillPattern" V="0"/>'
-            '<Cell N="ShdwPattern" V="0"/>'
-            '<Cell N="LeftMargin" V="0.0555555555555556"/>'
-            '<Cell N="VerticalAlign" V="0"/>'
-            '<Cell N="TextDirection" V="0"/>'
-            '<Section N="Geometry" IX="0">'
-            '<Cell N="NoFill" V="1"/>'
-            '<Cell N="NoLine" V="1"/>'
-            '<Cell N="NoShow" V="0"/>'
-            '<Cell N="NoSnap" V="0"/>'
-            '<Cell N="NoQuickDrag" V="0"/>'
-            '<Row T="RelMoveTo" IX="1"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>'
-            '<Row T="RelLineTo" IX="2"><Cell N="X" V="1"/><Cell N="Y" V="0"/></Row>'
-            '<Row T="RelLineTo" IX="3"><Cell N="X" V="1"/><Cell N="Y" V="1"/></Row>'
-            '<Row T="RelLineTo" IX="4"><Cell N="X" V="0"/><Cell N="Y" V="1"/></Row>'
-            '<Row T="RelLineTo" IX="5"><Cell N="X" V="0"/><Cell N="Y" V="0"/></Row>'
-            "</Section>"
-            f'<ForeignData ForeignType="Bitmap" CompressionType="{shape.compression}">'
-            f'<Rel r:id={_attr(shape.rel_id)}/>'
-            "</ForeignData>"
-            "</Shape>"
-        )
+        if shape.kind == "picture":
+            chunks.append(_picture_shape_xml(shape, index))
+        else:
+            chunks.append(_text_shape_xml(shape, index))
     chunks.append("</Shapes></PageContents>")
     return "".join(chunks)
 
 
-def _page_rels(images: list[VisioImage]) -> str:
+def _page_rels(media: list[tuple[str, str]]) -> str:
+    """Relationships of a page: the id of every picture and its media file."""
     chunks = [_XML_DECL, f'<Relationships xmlns="{PKG_REL_NS}">']
-    for index, image in enumerate(images, start=1):
-        name = f"image{index}{image.extension}"
+    for rel_id, media_name in media:
         chunks.append(
-            f'<Relationship Id="rId{index}" '
+            f'<Relationship Id="{rel_id}" '
             'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
-            f'Target="../media/{name}"/>'
+            f'Target="../media/{media_name}"/>'
         )
     chunks.append("</Relationships>")
     return "".join(chunks)
 
 
-def _windows_xml(pages: list[_Page]) -> str:
+def _windows_xml(pages: list[VisioPage]) -> str:
     first = pages[0]
     return (
         _XML_DECL
@@ -478,7 +618,7 @@ def _plan_pages(
     page_size: tuple[float, float] | None,
     columns: int | None,
     margin: float,
-) -> list[_Page]:
+) -> list[VisioPage]:
     """Compute page sizes and shape placement for every image."""
     natural = [
         (image, image.width_px / float(dpi), image.height_px / float(dpi)) for image in images
@@ -487,7 +627,7 @@ def _plan_pages(
     if mode == "sheet":
         return _plan_sheet(natural, page_size=page_size, columns=columns, margin=margin)
 
-    pages: list[_Page] = []
+    pages: list[VisioPage] = []
     for index, (image, width, height) in enumerate(natural, start=1):
         if page_size is not None:
             page_width, page_height = page_size
@@ -499,18 +639,20 @@ def _plan_pages(
             fitted = (width, height)
             left, bottom = 0.0, 0.0
         pages.append(
-            _Page(
+            VisioPage(
                 name=f"Page-{index}",
                 width=page_width,
                 height=page_height,
                 shapes=[
-                    _Shape(
+                    VisioShape(
+                        kind="picture",
                         name=f"Picture {index}",
                         rel_id="rId1",
                         left=left,
                         bottom=bottom,
                         width=fitted[0],
                         height=fitted[1],
+                        image=image.path,
                         compression=image.compression,
                     )
                 ],
@@ -525,7 +667,7 @@ def _plan_sheet(
     page_size: tuple[float, float] | None,
     columns: int | None,
     margin: float,
-) -> list[_Page]:
+) -> list[VisioPage]:
     """Tile every image on a single page."""
     count = len(natural)
     if columns is None or columns < 1:
@@ -550,7 +692,7 @@ def _plan_sheet(
         page_width = columns * cell_width
         page_height = rows * cell_height
 
-    shapes: list[_Shape] = []
+    shapes: list[VisioShape] = []
     for index, (image, width, height) in enumerate(natural):
         column = index % columns
         row = index // columns
@@ -558,24 +700,83 @@ def _plan_sheet(
         left = column * cell_width + (cell_width - fitted[0]) / 2.0
         bottom = page_height - (row + 1) * cell_height + (cell_height - fitted[1]) / 2.0
         shapes.append(
-            _Shape(
+            VisioShape(
+                kind="picture",
                 name=f"Picture {index + 1}",
                 rel_id=f"rId{index + 1}",
                 left=left,
                 bottom=bottom,
                 width=fitted[0],
                 height=fitted[1],
+                image=image.path,
                 compression=image.compression,
             )
         )
     return [
-        _Page(
+        VisioPage(
             name="Page-1",
             width=page_width,
             height=page_height,
             shapes=shapes,
         )
     ]
+
+
+def write_drawing(
+    pages: list[VisioPage],
+    out_path: Path,
+    *,
+    title: str = "",
+) -> Path:
+    """Write a Visio drawing from prepared pages.
+
+    Picture shapes are embedded into the package, text and rectangle shapes
+    stay editable text in Visio.
+    """
+    if not pages:
+        raise ValueError("the drawing has no pages")
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    media_types: set[str] = set()
+    for page in pages:
+        for shape in page.shapes:
+            if shape.kind == "picture" and shape.image is not None:
+                media_types.add(shape.image.suffix.lower())
+
+    core, app = _doc_props(title or out_path.stem, len(pages))
+
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", _content_types(len(pages), media_types))
+        archive.writestr("_rels/.rels", _root_rels())
+        archive.writestr("docProps/core.xml", core)
+        archive.writestr("docProps/app.xml", app)
+        archive.writestr("visio/document.xml", _document_xml())
+        archive.writestr("visio/_rels/document.xml.rels", _document_rels())
+        archive.writestr("visio/pages/pages.xml", _pages_xml(pages))
+        archive.writestr("visio/pages/_rels/pages.xml.rels", _pages_rels(len(pages)))
+        archive.writestr("visio/windows.xml", _windows_xml(pages))
+
+        media_index = 0
+        for page_index, page in enumerate(pages, start=1):
+            page_media: list[tuple[str, str]] = []
+            for shape in page.shapes:
+                if shape.kind != "picture" or shape.image is None:
+                    continue
+                media_index += 1
+                extension = shape.image.suffix.lower()
+                media_name = f"image{media_index}{extension}"
+                archive.writestr(f"visio/media/{media_name}", shape.image.read_bytes())
+                rel_id = f"rId{len(page_media) + 1}"
+                shape.rel_id = rel_id
+                page_media.append((rel_id, media_name))
+            archive.writestr(f"visio/pages/page{page_index}.xml", _page_xml(page))
+            archive.writestr(
+                f"visio/pages/_rels/page{page_index}.xml.rels",
+                _page_rels(page_media),
+            )
+    logger.info("Visio drawing written: %s (%d page(s))", out_path, len(pages))
+    return out_path
 
 
 def build_vsdx(
@@ -617,41 +818,7 @@ def build_vsdx(
         columns=columns,
         margin=margin,
     )
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    media_types = {image.extension for image in prepared}
-    core, app = _doc_props(title or out_path.stem, len(pages))
-
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", _content_types(len(pages), media_types))
-        archive.writestr("_rels/.rels", _root_rels())
-        archive.writestr("docProps/core.xml", core)
-        archive.writestr("docProps/app.xml", app)
-        archive.writestr("visio/document.xml", _document_xml())
-        archive.writestr("visio/_rels/document.xml.rels", _document_rels())
-        archive.writestr("visio/pages/pages.xml", _pages_xml(pages))
-        archive.writestr("visio/pages/_rels/pages.xml.rels", _pages_rels(len(pages)))
-        archive.writestr("visio/windows.xml", _windows_xml(pages))
-
-        media_index = 0
-        for page_index, page in enumerate(pages, start=1):
-            page_media: list[VisioImage] = []
-            for position, shape in enumerate(page.shapes, start=1):
-                shape.rel_id = f"rId{position}"
-                image = prepared[media_index]
-                media_index += 1
-                page_media.append(image)
-                archive.writestr(
-                    f"visio/media/image{media_index}{image.extension}",
-                    image.path.read_bytes(),
-                )
-            archive.writestr(f"visio/pages/page{page_index}.xml", _page_xml(page))
-            archive.writestr(
-                f"visio/pages/_rels/page{page_index}.xml.rels",
-                _page_rels(page_media),
-            )
-    logger.info("Visio drawing written: %s (%d page(s))", out_path, len(pages))
-    return out_path
+    return write_drawing(pages, out_path, title=title)
 
 
 def bundle_images(bundle_dir: Path) -> list[Path]:
@@ -683,7 +850,7 @@ def build_bundle_vsdx(
     columns: int | None = None,
     title: str = "",
 ) -> Path:
-    """Build a Visio drawing from the images of a txts bundle."""
+    """Build a Visio drawing from the page renders of a txts bundle."""
     bundle_dir = Path(bundle_dir)
     images = bundle_images(bundle_dir)
     if not images:
@@ -809,17 +976,51 @@ def _validate_pages(archive: zipfile.ZipFile, names: set[str]) -> list[str]:
             problems.append(f"{part} contains no shapes")
         rels_part = f"visio/pages/_rels/page{index}.xml.rels"
         rel_ids: set[str] = set()
+        image_rels = 0
         if rels_part in names:
             rels_root = ET.fromstring(archive.read(rels_part))
-            rel_ids = {
-                element.get("Id", "")
-                for element in rels_root.findall(f"{{{PKG_REL_NS}}}Relationship")
-            }
+            relationships = rels_root.findall(f"{{{PKG_REL_NS}}}Relationship")
+            rel_ids = {element.get("Id", "") for element in relationships}
+            image_rels = len(
+                [
+                    element
+                    for element in relationships
+                    if element.get("Type", "").endswith("/image")
+                ]
+            )
+        pictures = 0
         for shape in shapes:
             for reference in shape.findall(f"{{{VISIO_NS}}}ForeignData/{{{VISIO_NS}}}Rel"):
+                pictures += 1
                 rel_id = reference.get(f"{{{REL_NS}}}id", "")
                 if rel_id not in rel_ids:
                     problems.append(f"{part}: picture refers to unknown {rel_id}")
+        if pictures != image_rels:
+            problems.append(
+                f"{part}: {pictures} picture(s) but {image_rels} image relationship(s)"
+            )
+    media = {name for name in names if name.startswith("visio/media/")}
+    referenced: set[str] = set()
+    pictures = 0
+    for name in sorted(names):
+        if not re.fullmatch(r"visio/pages/page\d+\.xml", name):
+            continue
+        page_root = ET.fromstring(archive.read(name))
+        pictures += len(page_root.findall(f".//{{{VISIO_NS}}}ForeignData"))
+        rels_name = name.replace("visio/pages/", "visio/pages/_rels/") + ".rels"
+        if rels_name not in names:
+            continue
+        rels_root = ET.fromstring(archive.read(rels_name))
+        for relationship in rels_root.findall(f"{{{PKG_REL_NS}}}Relationship"):
+            if relationship.get("Type", "").endswith("/image"):
+                referenced.add(_resolve(name, relationship.get("Target", "")))
+    if len(referenced) != pictures:
+        problems.append(
+            f"package has {pictures} picture(s) but {len(referenced)} distinct media file(s)"
+        )
+    unused = media - referenced
+    if unused:
+        problems.append(f"unused media file(s): {', '.join(sorted(unused))}")
     return problems
 
 
@@ -829,7 +1030,7 @@ def _validate_schema_rules(archive: zipfile.ZipFile, names: set[str]) -> list[st
     The rules are the ones VisioSchema15 enforces for the elements this module
     writes (see tests/schemas/visio.xsd): the order of the children of the
     document, the mandatory ``ColorEntry`` inside ``Colors``, the mandatory
-    ``PageSheet``/``Rel`` of a page and the picture shape layout.
+    ``PageSheet``/``Rel`` of a page and the shape layout.
     """
     problems: list[str] = []
     if "visio/document.xml" in names:
@@ -870,33 +1071,50 @@ def _validate_schema_rules(archive: zipfile.ZipFile, names: set[str]) -> list[st
             problems.append(f"{name}: no Shapes element")
             continue
         for shape in shapes_element.findall(f"{{{VISIO_NS}}}Shape"):
-            if shape.get("Type") != "Foreign":
-                problems.append(f"{name}: picture shape must have Type='Foreign'")
-            if shape.get("ID") is None:
-                problems.append(f"{name}: shape without ID")
-            foreign = shape.find(f"{{{VISIO_NS}}}ForeignData")
-            if foreign is None:
-                problems.append(f"{name}: shape without ForeignData")
-                continue
-            if foreign.get("ForeignType") != "Bitmap":
-                problems.append(f"{name}: ForeignData must be a Bitmap")
-            if foreign.get("CompressionType") not in ("PNG", "JPEG"):
-                problems.append(f"{name}: unsupported CompressionType {foreign.get('CompressionType')!r}")
-            if foreign.find(f"{{{VISIO_NS}}}Rel") is None:
-                problems.append(f"{name}: ForeignData without Rel")
+            shape_type = shape.get("Type")
             cells = {cell.get("N") for cell in shape.findall(f"{{{VISIO_NS}}}Cell")}
             for required in ("PinX", "PinY", "Width", "Height"):
                 if required not in cells:
                     problems.append(f"{name}: shape without {required} cell")
+            if shape_type == "Foreign":
+                foreign = shape.find(f"{{{VISIO_NS}}}ForeignData")
+                if foreign is None:
+                    problems.append(f"{name}: picture shape without ForeignData")
+                    continue
+                if foreign.get("ForeignType") != "Bitmap":
+                    problems.append(f"{name}: ForeignData must be a Bitmap")
+                if foreign.get("CompressionType") not in ("PNG", "JPEG"):
+                    problems.append(
+                        f"{name}: unsupported CompressionType {foreign.get('CompressionType')!r}"
+                    )
+                if foreign.find(f"{{{VISIO_NS}}}Rel") is None:
+                    problems.append(f"{name}: ForeignData without Rel")
+            elif shape_type == "Shape":
+                if shape.find(f"{{{VISIO_NS}}}Text") is None:
+                    problems.append(f"{name}: text shape without Text element")
+                if shape.find(f"{{{VISIO_NS}}}Section[@N='Character']") is None:
+                    problems.append(f"{name}: text shape without Character section")
+            else:
+                problems.append(f"{name}: unsupported shape Type {shape_type!r}")
     return problems
 
 
 def inspect_vsdx(path: Path) -> dict:
     """Summary of a .vsdx file: page count, page sizes and embedded images."""
-    summary = {"pages": 0, "images": 0, "sizes": []}
+    summary = {"pages": 0, "images": 0, "texts": 0, "sizes": []}
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         summary["images"] = len([name for name in names if name.startswith("visio/media/")])
+        for name in names:
+            if re.fullmatch(r"visio/pages/page\d+\.xml", name):
+                root = ET.fromstring(archive.read(name))
+                summary["texts"] += len(
+                    [
+                        shape
+                        for shape in root.findall(f".//{{{VISIO_NS}}}Shape")
+                        if shape.get("Type") == "Shape"
+                    ]
+                )
         if "visio/pages/pages.xml" not in names:
             return summary
         pages_root = ET.fromstring(archive.read("visio/pages/pages.xml"))

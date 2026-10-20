@@ -175,6 +175,13 @@ def main() -> None:
                 "</xs:complexType>"
             )
 
+    # the text of a shape is character data of the Text element, mixed with the
+    # cp/pp/tp/fld run markers; the docs fragment drops the mixed="true" flag
+    if "Text_Type" in types and 'mixed="true"' not in types["Text_Type"]:
+        types["Text_Type"] = types["Text_Type"].replace(
+            "<xs:complexType ", '<xs:complexType mixed="true" ', 1
+        )
+
     header = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         f'<xsd:schema xmlns:xsd="{XS}" xmlns:xs="{XS}" xmlns:r="{REL_NS}" xmlns="{NS}" '
