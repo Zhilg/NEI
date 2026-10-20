@@ -82,10 +82,12 @@ class Worker:
         artifacts_mode: bool = False,
         force: bool = False,
         visio_mode: bool = False,
+        visio_content: str = "",
     ) -> None:
         self.artifacts_mode = artifacts_mode or settings.artifacts_mode
         self.force = force
         self.visio_mode = visio_mode or settings.visio_mode
+        self.visio_content = (visio_content or settings.visio_content or "pages").lower()
         self._input_root: Path = settings.input_root
         self._processed: set[str] = set()
         self._stats_writer: StatsWriter | None = None
@@ -430,7 +432,9 @@ class Worker:
         formats = self._reconstruct_formats()
         if formats:
             try:
-                await asyncio.to_thread(reconstruct_bundle, bundle_dir, formats)
+                await asyncio.to_thread(
+                    reconstruct_bundle, bundle_dir, formats, self.visio_content
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Document reconstruction failed for %s: %s", file_path.name, exc)
 
@@ -549,6 +553,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Ignore processed cache and reprocess all files")
     parser.add_argument("--visio", action="store_true",
                         help="Also build a Visio drawing (.vsdx) from the rendered pages")
+    parser.add_argument("--visio-content", choices=("pages", "sheet", "document"), default="",
+                        help="Content of the Visio drawing: page renders (default), "
+                             "all renders on one sheet or the editable document")
     return parser.parse_args()
 
 
@@ -556,7 +563,12 @@ async def _main() -> None:
     args = _parse_args()
     level = getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    worker = Worker(artifacts_mode=args.artifacts, force=args.force, visio_mode=args.visio)
+    worker = Worker(
+        artifacts_mode=args.artifacts,
+        force=args.force,
+        visio_mode=args.visio,
+        visio_content=args.visio_content,
+    )
     await worker.run()
 
 

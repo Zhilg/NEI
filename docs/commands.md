@@ -6,6 +6,17 @@
 docker compose -f infra/compose/local.yml up -d
 ```
 
+Код в контейнерах берётся из папки репозитория, смонтированной в `/workspace`
+(`PYTHONPATH=/workspace/src`), поэтому изменения в `src/` применяются без пересборки
+образа — достаточно перезапустить контейнер:
+
+```bash
+docker compose -f infra/compose/local.yml restart worker
+```
+
+Пересборка образа нужна только при изменении зависимостей (`pyproject.toml`,
+`Dockerfile`): `docker compose -f infra/compose/local.yml build worker`.
+
 ## Проверка статуса
 
 ```bash
@@ -219,9 +230,19 @@ docker compose -f infra/compose/local.yml exec worker idp --artifacts     # в �
 | `--artifacts` | дополнительно писать `<stem>.md` (без него `.md` на диск не сохраняется) |
 | `--force` | игнорировать кэш обработанных и переобработать всё заново |
 | `--visio` | дополнительно собрать `reconstruct.vsdx` из рендеров страниц (флаги `IDP_VISIO_MODE=true` или `IDP_RECONSTRUCT_FORMATS=docx,pdf,vsdx` — то же самое постоянно) |
+| `--visio-content pages\|sheet\|document` | что класть в `reconstruct.vsdx`: рендеры страниц (по умолчанию), все рендеры на одном листе или редактируемый документ (то же — `IDP_VISIO_CONTENT`) |
 
 Каталог задаётся переменной окружения: `IDP_INPUT_ROOT` / `IDP_OUTPUT_ROOT`
 (в `local.yml` это `/input` и `/output`, смонтированные из `data/input` и `data/output`).
+
+Код в контейнере берётся из монтируемой папки репозитория (`/workspace/src` в `PYTHONPATH`),
+поэтому правки `src/` видны сразу, без пересборки образа. Пересборка нужна только
+при изменении зависимостей (`pyproject.toml`, `Dockerfile`). Уже обработанные файлы
+пропускаются (см. `results.jsonl`), поэтому после смены режима нужен `--force`:
+
+```bash
+docker compose -f infra/compose/local.yml run --rm worker idp --visio --visio-content document --force
+```
 
 ### Один файл
 

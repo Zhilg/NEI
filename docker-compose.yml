@@ -3,11 +3,14 @@ services:
     image: worker:latest
     command: ["idp-web", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "8080"]
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/workspace/src
       - IDP_VL_ENDPOINTS=${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1}
+      - IDP_VISIO_MODE=${IDP_VISIO_MODE:-false}
+      - IDP_VISIO_CONTENT=${IDP_VISIO_CONTENT:-pages}
     ports:
       - "8080:8080"
     volumes:
+      - .:/workspace:ro
       - ui_data:/data/ui
     restart: unless-stopped
 
@@ -15,7 +18,9 @@ services:
     image: worker:latest
     command: ["python", "tests/vlm_stub.py", "--host", "0.0.0.0", "--port", "8123"]
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/workspace/src
+    volumes:
+      - .:/workspace:ro
     profiles: ["stub"]
 
 volumes:

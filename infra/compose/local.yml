@@ -22,6 +22,10 @@ services:
 
       IDP_VL_CONCURRENCY: ${IDP_VL_CONCURRENCY:-8}
 
+      IDP_VISIO_MODE: ${IDP_VISIO_MODE:-false}
+      IDP_VISIO_CONTENT: ${IDP_VISIO_CONTENT:-pages}
+      IDP_RECONSTRUCT_FORMATS: ${IDP_RECONSTRUCT_FORMATS:-docx,pdf}
+
     volumes:
       - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
       - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
@@ -167,14 +171,17 @@ services:
     pull_policy: never
     command: ["idp-web", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "8080"]
     environment:
-      PYTHONPATH: /app
+      PYTHONPATH: /workspace/src
       IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
       IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}
       IDP_MAX_IMAGES: ${IDP_MAX_IMAGES:-2}
       IDP_RECONSTRUCT_FORMATS: ${IDP_RECONSTRUCT_FORMATS:-docx,pdf}
+      IDP_VISIO_MODE: ${IDP_VISIO_MODE:-false}
+      IDP_VISIO_CONTENT: ${IDP_VISIO_CONTENT:-pages}
     ports:
       - "8080:8080"
     volumes:
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
       - ui_data:/data/ui
 
 volumes:

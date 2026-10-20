@@ -263,6 +263,18 @@ def test_worker_visio_flag_builds_drawing(workspace, sample_pdf, stub_server):
     assert inspect_vsdx(vsdx)["pages"] == 3
 
 
+def test_worker_visio_content_document(workspace, sample_pdf, stub_server):
+    worker = Worker(artifacts_mode=True, visio_mode=True, visio_content="document")
+    asyncio.run(worker.run())
+
+    bundle = workspace.output / "txts" / "report.pdf"
+    vsdx = bundle / "reconstruct.vsdx"
+    assert vsdx.is_file()
+    assert validate_vsdx(vsdx) == []
+    summary = inspect_vsdx(vsdx)
+    assert summary["texts"] > 0, "the drawing holds the text of the document"
+
+
 DOCUMENT_TEXT = """<!-- page 1 -->
 ## Отчёт по объекту
 

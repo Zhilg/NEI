@@ -694,16 +694,17 @@ def load_regions(bundle_dir: Path) -> dict[str, dict]:
     }
 
 
-def build_visio(bundle_dir: Path, blocks: list[Block]) -> Path:
+def build_visio(bundle_dir: Path, blocks: list[Block], content: str | None = None) -> Path:
     """Build the Visio drawing of a bundle.
 
-    ``IDP_VISIO_CONTENT`` selects the content of the drawing: ``pages`` (the
-    page renders, one Visio page per document page), ``sheet`` (all renders on
-    a single page) or ``document`` (the editable text of the document).
+    ``content`` (or ``IDP_VISIO_CONTENT``) selects the content of the drawing:
+    ``pages`` (the page renders, one Visio page per document page), ``sheet``
+    (all renders on a single page) or ``document`` (the editable text of the
+    document).
     """
     bundle_dir = Path(bundle_dir)
     target = bundle_dir / "reconstruct.vsdx"
-    content = (settings.visio_content or "pages").lower()
+    content = (content or settings.visio_content or "pages").lower()
     if content == "document":
         return build_document_vsdx(
             blocks,
@@ -719,7 +720,11 @@ def build_visio(bundle_dir: Path, blocks: list[Block]) -> Path:
     )
 
 
-def reconstruct_bundle(bundle_dir: Path, formats: list[str] | None = None) -> list[Path]:
+def reconstruct_bundle(
+    bundle_dir: Path,
+    formats: list[str] | None = None,
+    content: str | None = None,
+) -> list[Path]:
     text_file = bundle_dir / "text.txt"
     if not text_file.is_file():
         return []
@@ -735,7 +740,7 @@ def reconstruct_bundle(bundle_dir: Path, formats: list[str] | None = None) -> li
             created.append(build_pdf(blocks, bundle_dir, bundle_dir / "reconstruct.pdf", regions))
         elif fmt == "vsdx":
             try:
-                created.append(build_visio(bundle_dir, blocks))
+                created.append(build_visio(bundle_dir, blocks, content=content))
             except ValueError as exc:
                 logger.warning("Visio export skipped for %s: %s", bundle_dir, exc)
     return created

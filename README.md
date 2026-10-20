@@ -171,6 +171,15 @@ idp-visio --text report.md --out report.vsdx
 выбирается переменной `IDP_VISIO_CONTENT` (`pages` — по умолчанию, `sheet`,
 `document`), она же действует для `idp-reconstruct --format vsdx`.
 
+В Docker код подхватывается из смонтированной папки репозитория (`/workspace/src`),
+так что пересборка образа не нужна — хватит `docker compose -f infra/compose/local.yml
+restart worker`. Уже обработанные файлы пропускаются, поэтому для пересборки
+нужен `--force`:
+
+```bash
+docker compose -f infra/compose/local.yml run --rm worker idp --visio --visio-content document --force
+```
+
 ## Тесты (без GPU)
 
 VLM подменяется заглушкой, тесты идут без видеокарты:
