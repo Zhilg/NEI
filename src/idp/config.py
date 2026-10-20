@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     test_mode: bool = Field(default=False)
     artifacts_mode: bool = Field(default=False)
+    visio_mode: bool = Field(default=False)
     entity_schema_path: Union[str, Path, None] = Field(default=None)
     trash_path: str = Field(default="")
     min_entity_confidence: float = Field(default=0.3, ge=0.0, le=1.0)

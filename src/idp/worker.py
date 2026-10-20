@@ -77,9 +77,15 @@ class FileResult:
 
 
 class Worker:
-    def __init__(self, artifacts_mode: bool = False, force: bool = False) -> None:
+    def __init__(
+        self,
+        artifacts_mode: bool = False,
+        force: bool = False,
+        visio_mode: bool = False,
+    ) -> None:
         self.artifacts_mode = artifacts_mode or settings.artifacts_mode
         self.force = force
+        self.visio_mode = visio_mode or settings.visio_mode
         self._input_root: Path = settings.input_root
         self._processed: set[str] = set()
         self._stats_writer: StatsWriter | None = None
@@ -421,11 +427,19 @@ class Worker:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Txt export failed for %s: %s", file_path.name, exc)
             return
-        if settings.reconstruct_formats:
+        formats = self._reconstruct_formats()
+        if formats:
             try:
-                await asyncio.to_thread(reconstruct_bundle, bundle_dir)
+                await asyncio.to_thread(reconstruct_bundle, bundle_dir, formats)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Docx/pdf reconstruction failed for %s: %s", file_path.name, exc)
+                logger.warning("Document reconstruction failed for %s: %s", file_path.name, exc)
+
+    def _reconstruct_formats(self) -> list[str]:
+        """Formats to rebuild from the bundle; ``--visio`` adds the Visio drawing."""
+        formats = list(settings.reconstruct_formats)
+        if self.visio_mode and "vsdx" not in formats:
+            formats.append("vsdx")
+        return formats
 
     def _skip_result(self, file_path: Path, relative: Path, timer: FileTimer, file_type: str) -> FileResult:
         return self._skip_result_from_data(file_path, relative, timer, file_type, "")
@@ -533,6 +547,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="IDP pipeline: extract entities from documents")
     parser.add_argument("--artifacts", action="store_true", help="Save markdown artifacts to output directory")
     parser.add_argument("--force", action="store_true", help="Ignore processed cache and reprocess all files")
+    parser.add_argument("--visio", action="store_true",
+                        help="Also build a Visio drawing (.vsdx) from the rendered pages")
     return parser.parse_args()
 
 
@@ -540,7 +556,7 @@ async def _main() -> None:
     args = _parse_args()
     level = getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    worker = Worker(artifacts_mode=args.artifacts, force=args.force)
+    worker = Worker(artifacts_mode=args.artifacts, force=args.force, visio_mode=args.visio)
     await worker.run()
 
 

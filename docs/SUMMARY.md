@@ -20,7 +20,7 @@ flowchart LR
     H --> I["VLM\nсущности из текста"]
     I --> J["output/\n*.md, entities.json,\nresults.jsonl, stats.jsonl"]
     J --> K["txts/<путь>/\nбандл: text.txt, images/,\ntables.json, meta.json"]
-    K --> L["reconstruct.docx /\nreconstruct.pdf"]
+    K --> L["reconstruct.docx /\nreconstruct.pdf /\nreconstruct.vsdx"]
 ```
 
 ## Компоненты
@@ -51,6 +51,7 @@ flowchart LR
 | `IDP_VL_MAX_IMAGES` | страниц в одном запросе (по умолчанию 2) |
 | `IDP_VL_TIMEOUT_SECONDS` | таймаут запроса, 3 попытки с backoff 1s/2s/4s |
 | `IDP_MIN_ENTITY_CONFIDENCE` | порог уверенности сущности (по умолчанию 0.3) |
-| `IDP_RECONSTRUCT_FORMATS` | `docx,pdf` / пусто |
+| `IDP_RECONSTRUCT_FORMATS` | `docx,pdf` / пусто; `vsdx` — ещё и Visio-чертеж из рендеров |
+| `IDP_VISIO_MODE` | аналог флага `idp --visio` (собирать `reconstruct.vsdx` из бандла) |
 | `IDP_ENTITY_SCHEMA_PATH` | путь рабочей схемы сущностей |
 | `IDP_LOG_LEVEL` | уровень логов (`DEBUG` — диагностика VLM и рендера) |

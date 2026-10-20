@@ -1,0 +1,1238 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VisioSchema15 (namespace http://schemas.microsoft.com/office/visio/2012/main),
+  assembled from the official Microsoft docs fragments
+  (MicrosoftDocs/office-developer-client-docs, docs/visio/*_type-complextypevisio-xml.md)
+  by scripts/build_visio_xsd.py.
+
+  The docs ship broken fragments, so the script repairs them (attribute case,
+  xs:all -> repeated choice, empty leaf types -> string content) and drops the
+  types that cannot be compiled (non deterministic content models, unrelated to
+  the parts this project writes: actions, comments, user data, geometry row
+  subtypes).
+
+  Offline check of a generated drawing:
+      python scripts/validate_visio_vsdx.py drawing.vsdx
+-->
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns="http://schemas.microsoft.com/office/visio/2012/main" targetNamespace="http://schemas.microsoft.com/office/visio/2012/main" elementFormDefault="qualified" attributeFormDefault="unqualified">
+<xsd:import namespace="http://schemas.openxmlformats.org/officeDocument/2006/relationships" schemaLocation="oRel.xsd"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="AttachedToolbars" type="AttachedToolbars_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="AutoLinkComparison" type="AutoLinkComparison_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Cell" type="Cell_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ColorEntry" type="ColorEntry_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Colors" type="Colors_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Connect" type="Connect_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Connects" type="Connects_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="cp" type="cp_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="CustomMenusFile" type="CustomMenusFile_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="CustomToolbarsFile" type="CustomToolbarsFile_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Data1" type="Data_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Data2" type="Data_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Data3" type="Data_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataColumn" type="DataColumn_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataColumns" type="DataColumns_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataConnection" type="DataConnection_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataConnections" type="DataConnections_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataRecordSet" type="DataRecordSet_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataRecordSets" type="DataRecordSets_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DocumentSettings" type="DocumentSettings_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DocumentSheet" type="DocumentSheet_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DynamicGridEnabled" type="DynamicGridEnabled_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="EventItem" type="EventItem_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="EventList" type="EventList_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FaceName" type="FaceName_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FaceNames" type="FaceNames_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="fld" type="fld_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FooterCenter" type="FooterCenter_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FooterLeft" type="FooterLeft_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FooterMargin" type="FooterMargin_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FooterRight" type="FooterRight_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ForeignData" type="ForeignData_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="GlueSettings" type="GlueSettings_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderCenter" type="HeaderCenter_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderFooter" type="HeaderFooter_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderFooterFont" type="HeaderFooterFont_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderLeft" type="HeaderLeft_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderMargin" type="HeaderMargin_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderRight" type="HeaderRight_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Icon" type="Icon_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Issue" type="Issue_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Issues" type="Issues_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="IssueTarget" type="IssueTarget_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Master" type="Master_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="MasterContents" type="PageContents_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Masters" type="Masters_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="MasterShortcut" type="MasterShortcut_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="MentionEntry" type="MentionEntry_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="MentionsList" type="MentionsList_Type"/>
+
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ModernComments" type="ModernComments_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ModernCommentsList" type="ModernCommentsList_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Page" type="Page_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PageContents" type="PageContents_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Pages" type="Pages_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PageSheet" type="PageSheet_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PersonEntry" type="PersonEntry_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Persons" type="Persons_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PersonsList" type="PersonsList_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="pp" type="pp_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PrimaryKey" type="PrimaryKey_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ProtectBkgnds" type="ProtectBkgnds_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ProtectMasters" type="ProtectMasters_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ProtectShapes" type="ProtectShapes_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ProtectStyles" type="ProtectStyles_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PublishedPage" type="PublishedPage_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PublishSettings" type="PublishSettings_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RefBy" type="RefBy_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RefreshableData" type="RefreshableData_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RefreshConflict" type="RefreshConflict_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Rel" type="Rel_Type">
+</xs:element>
+
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RowKeyValue" type="RowKeyValue_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RowMap" type="RowMap_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Rule" type="Rule_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleFilter" type="RuleFilter_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleInfo" type="RuleInfo_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleSet" type="RuleSet_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleSetFlags" type="RuleSetFlags_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleSets" type="RuleSets_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleTest" type="RuleTest_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Section" type="Section_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Shape" type="ShapeSheet_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Shapes" type="Shapes_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ShowConnectionPoints" type="ShowConnectionPoints_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ShowGrid" type="ShowGrid_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ShowGuides" type="ShowGuides_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ShowPageBreaks" type="ShowPageBreaks_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ShowRulers" type="ShowRulers_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="SnapAngle" type="SnapAngle_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="SnapAngles" type="SnapAngles_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="SnapExtensions" type="SnapExtensions_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="SnapSettings" type="SnapSettings_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Solution" type="Solution_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Solutions" type="Solutions_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="StencilGroup" type="StencilGroup_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="StencilGroupPos" type="StencilGroupPos_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="StyleSheet" type="StyleSheet_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="StyleSheets" type="StyleSheets_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="TabSplitterPos" type="TabSplitterPos_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Text" type="Text_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="tp" type="tp_Type"/>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Trigger" type="Trigger_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Validation" type="Validation_Type"> </xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ValidationProperties" type="ValidationProperties_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="VisioDocument" type="VisioDocument_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Window" type="Window_Type">
+</xs:element>
+<xs:element xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Windows" type="Windows_Type">
+</xs:element>
+<xs:complexType name="AttachedToolbars_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="AuthorEntry_Type">
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="Initials" type="xs:string"/>
+    <xs:attribute name="ResolutionID" type="xs:string"/>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="AuthorList_Type">
+          
+          <xs:sequence>
+    <xs:element name="AuthorEntry" type="AuthorEntry_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="AutoLinkComparison_Type">
+    <xs:attribute name="ColumnName" type="xs:string" use="required"/>
+    <xs:attribute name="ContextType" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="ContextTypeLabel" type="xs:string"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Cell_Type">
+          
+          <xs:sequence>
+    <xs:element name="RefBy" type="RefBy_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="N" type="xs:string" use="required"/>
+    <xs:attribute name="U" type="xs:string"/>
+    <xs:attribute name="E" type="xs:string"/>
+    <xs:attribute name="F" type="xs:string"/>
+    <xs:attribute name="V" type="xs:string"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="CellDef_Type">
+    <xs:attribute name="N" type="xs:string" use="required"/>
+    <xs:attribute name="T" type="xs:token" use="required"/>
+    <xs:attribute name="F" type="xs:string"/>
+    <xs:attribute name="IX" type="xs:unsignedByte"/>
+    <xs:attribute name="S" type="xs:unsignedByte"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ColorEntry_Type">
+    <xs:attribute name="IX" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="RGB" type="xs:string" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Colors_Type">
+          
+          <xs:sequence>
+    <xs:element name="ColorEntry" type="ColorEntry_Type" minOccurs="1" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="CommentEntry_Type">
+        <xs:simpleContent>
+        <xs:extension base="xs:string">
+      
+    <xs:attribute name="AuthorID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="PageID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="ShapeID" type="xs:unsignedInt"/>
+    <xs:attribute name="Date" type="xs:dateTime" use="required"/>
+    <xs:attribute name="EditDate" type="xs:dateTime"/>
+    <xs:attribute name="Done" type="xs:boolean"/>
+    <xs:attribute name="CommentID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="AutoCommentType" type="xs:unsignedInt"/>
+        </xs:extension>
+        </xs:simpleContent>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="CommentList_Type">
+          
+          <xs:sequence>
+    <xs:element name="CommentEntry" type="CommentEntry_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Comments_Type">
+          
+          <xs:sequence>
+    <xs:element name="AuthorList" type="AuthorList_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="CommentList" type="CommentList_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ShowCommentTags" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Connect_Type">
+    <xs:attribute name="FromSheet" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="FromCell" type="xs:string"/>
+    <xs:attribute name="FromPart" type="xs:int"/>
+    <xs:attribute name="ToSheet" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="ToCell" type="xs:string"/>
+    <xs:attribute name="ToPart" type="xs:int"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Connects_Type">
+          
+          <xs:sequence>
+    <xs:element name="Connect" type="Connect_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="cp_Type">
+    <xs:attribute name="IX" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType name="CustomMenusFile_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="CustomToolbarsFile_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="Data_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataColumn_Type">
+    <xs:attribute name="ColumnNameID" type="xs:string" use="required"/>
+    <xs:attribute name="Name" type="xs:string" use="required"/>
+    <xs:attribute name="Label" type="xs:string" use="required"/>
+    <xs:attribute name="OrigLabel" type="xs:string"/>
+    <xs:attribute name="LangID" type="xs:unsignedInt"/>
+    <xs:attribute name="Calendar" type="xs:unsignedShort"/>
+    <xs:attribute name="DataType" type="xs:unsignedShort"/>
+    <xs:attribute name="UnitType" type="xs:string"/>
+    <xs:attribute name="Currency" type="xs:unsignedShort"/>
+    <xs:attribute name="Degree" type="xs:unsignedInt"/>
+    <xs:attribute name="DisplayWidth" type="xs:unsignedInt"/>
+    <xs:attribute name="DisplayOrder" type="xs:unsignedInt"/>
+    <xs:attribute name="Mapped" type="xs:boolean"/>
+    <xs:attribute name="Hyperlink" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataColumns_Type">
+          
+          <xs:sequence>
+    <xs:element name="DataColumn" type="DataColumn_Type" minOccurs="1" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="SortColumn" type="xs:string"/>
+    <xs:attribute name="SortAsc" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataConnection_Type">
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="FileName" type="xs:string" use="required"/>
+    <xs:attribute name="ConnectionString" type="xs:string"/>
+    <xs:attribute name="Command" type="xs:string"/>
+    <xs:attribute name="FriendlyName" type="xs:string"/>
+    <xs:attribute name="Timeout" type="xs:unsignedInt"/>
+    <xs:attribute name="AlwaysUseConnectionFile" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataConnections_Type">
+          
+          <xs:sequence>
+    <xs:element name="DataConnection" type="DataConnection_Type" minOccurs="1" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="NextID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataRecordSet_Type">
+          
+          <xs:sequence>
+    <xs:element name="Rel" type="Rel_Type" minOccurs="1" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="DataColumns" type="DataColumns_Type" minOccurs="1" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="PrimaryKey" type="PrimaryKey_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="RowMap" type="RowMap_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="RefreshConflict" type="RefreshConflict_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="AutoLinkComparison" type="AutoLinkComparison_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="ConnectionID" type="xs:unsignedInt"/>
+    <xs:attribute name="Command" type="xs:string"/>
+    <xs:attribute name="Options" type="xs:unsignedInt"/>
+    <xs:attribute name="TimeRefreshed" type="xs:dateTime"/>
+    <xs:attribute name="NextRowID" type="xs:unsignedInt"/>
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="RowOrder" type="xs:boolean"/>
+    <xs:attribute name="RefreshOverwriteAll" type="xs:boolean"/>
+    <xs:attribute name="RefreshNoReconciliationUI" type="xs:boolean"/>
+    <xs:attribute name="RefreshInterval" type="xs:unsignedInt"/>
+    <xs:attribute name="ReplaceLinks" type="xs:unsignedInt"/>
+    <xs:attribute name="Checksum" type="xs:unsignedInt"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DataRecordSets_Type">
+          
+          <xs:sequence>
+    <xs:element name="DataRecordSet" type="DataRecordSet_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="NextID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="ActiveRecordsetID" type="xs:unsignedInt"/>
+    <xs:attribute name="DataWindowOrder" type="xs:string"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DocumentSettings_Type">
+          
+          <xs:choice maxOccurs="unbounded">
+    <xs:element name="GlueSettings" type="GlueSettings_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="SnapSettings" type="SnapSettings_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="SnapExtensions" type="SnapExtensions_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="SnapAngles" type="SnapAngles_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="DynamicGridEnabled" type="DynamicGridEnabled_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ProtectStyles" type="ProtectStyles_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ProtectShapes" type="ProtectShapes_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ProtectMasters" type="ProtectMasters_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ProtectBkgnds" type="ProtectBkgnds_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="CustomMenusFile" type="CustomMenusFile_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="CustomToolbarsFile" type="CustomToolbarsFile_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="AttachedToolbars" type="AttachedToolbars_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:choice>
+    <xs:attribute name="TopPage" type="xs:unsignedInt"/>
+    <xs:attribute name="DefaultTextStyle" type="xs:unsignedInt"/>
+    <xs:attribute name="DefaultLineStyle" type="xs:unsignedInt"/>
+    <xs:attribute name="DefaultFillStyle" type="xs:unsignedInt"/>
+    <xs:attribute name="DefaultGuideStyle" type="xs:unsignedInt"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="DocumentSheet_Type">
+        <xs:complexContent>
+        <xs:extension base="Sheet_Type">
+      
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="NameU" type="xs:string"/>
+    <xs:attribute name="IsCustomName" type="xs:boolean"/>
+    <xs:attribute name="IsCustomNameU" type="xs:boolean"/>
+    <xs:attribute name="UniqueID" type="xs:string"/>
+        </xs:extension>
+        </xs:complexContent>
+      </xs:complexType>
+<xs:complexType name="DynamicGridEnabled_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="EventItem_Type">
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="Action" type="xs:unsignedShort" use="required"/>
+    <xs:attribute name="EventCode" type="xs:unsignedShort" use="required"/>
+    <xs:attribute name="Enabled" type="xs:boolean"/>
+    <xs:attribute name="Target" type="xs:string" use="required"/>
+    <xs:attribute name="TargetArgs" type="xs:string" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="EventList_Type">
+          
+          <xs:sequence>
+    <xs:element name="EventItem" type="EventItem_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Extensions_Type">
+          
+          <xs:sequence>
+    <xs:element name="CellDef" type="CellDef_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="FunctionDef" type="FunctionDef_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="SectionDef" type="SectionDef_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FaceName_Type">
+    <xs:attribute name="NameU" type="xs:string" use="required"/>
+    <xs:attribute name="UnicodeRanges" type="xs:string"/>
+    <xs:attribute name="CharSets" type="xs:string"/>
+    <xs:attribute name="Panos" type="xs:string"/>
+    <xs:attribute name="Panose" type="xs:string"/>
+    <xs:attribute name="Flags" type="xs:unsignedInt"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FaceNames_Type">
+          
+          <xs:sequence>
+    <xs:element name="FaceName" type="FaceName_Type" minOccurs="1" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="fld_Type">
+        <xs:simpleContent>
+        <xs:extension base="xs:string">
+      
+    <xs:attribute name="IX" type="xs:unsignedInt" use="required"/>
+        </xs:extension>
+        </xs:simpleContent>
+      </xs:complexType>
+<xs:complexType name="FooterCenter_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="FooterLeft_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FooterMargin_Type">
+        <xs:simpleContent>
+        <xs:extension base="xs:double">
+      
+    <xs:attribute name="Unit" type="xs:string"/>
+        </xs:extension>
+        </xs:simpleContent>
+      </xs:complexType>
+<xs:complexType name="FooterRight_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ForeignData_Type">
+          
+          <xs:sequence>
+    <xs:element name="Rel" type="Rel_Type" minOccurs="1" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ForeignType" type="xs:token" use="required"/>
+    <xs:attribute name="ObjectType" type="xs:unsignedInt"/>
+    <xs:attribute name="ShowAsIcon" type="xs:boolean"/>
+    <xs:attribute name="ObjectWidth" type="xs:double"/>
+    <xs:attribute name="ObjectHeight" type="xs:double"/>
+    <xs:attribute name="MappingMode" type="xs:unsignedShort"/>
+    <xs:attribute name="ExtentX" type="xs:double"/>
+    <xs:attribute name="ExtentY" type="xs:double"/>
+    <xs:attribute name="CompressionType" type="xs:token"/>
+    <xs:attribute name="CompressionLevel" type="xs:double"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="FunctionDef_Type">
+    <xs:attribute name="N" type="xs:string" use="required"/>
+      </xs:complexType>
+<xs:complexType name="GlueSettings_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="HeaderCenter_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderFooter_Type">
+          
+          <xs:choice maxOccurs="unbounded">
+    <xs:element name="HeaderMargin" type="HeaderMargin_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="FooterMargin" type="FooterMargin_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="HeaderLeft" type="HeaderLeft_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="HeaderCenter" type="HeaderCenter_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="HeaderRight" type="HeaderRight_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="FooterLeft" type="FooterLeft_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="FooterCenter" type="FooterCenter_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="FooterRight" type="FooterRight_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="HeaderFooterFont" type="HeaderFooterFont_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:choice>
+    <xs:attribute name="HeaderFooterColor" type="xs:string"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderFooterFont_Type">
+    <xs:attribute name="Height" type="xs:int"/>
+    <xs:attribute name="Width" type="xs:int"/>
+    <xs:attribute name="Escapement" type="xs:int"/>
+    <xs:attribute name="Orientation" type="xs:int"/>
+    <xs:attribute name="Weight" type="xs:int"/>
+    <xs:attribute name="Italic" type="xs:unsignedByte"/>
+    <xs:attribute name="Underline" type="xs:unsignedByte"/>
+    <xs:attribute name="StrikeOut" type="xs:unsignedByte"/>
+    <xs:attribute name="CharSet" type="xs:unsignedByte"/>
+    <xs:attribute name="OutPrecision" type="xs:unsignedByte"/>
+    <xs:attribute name="ClipPrecision" type="xs:unsignedByte"/>
+    <xs:attribute name="Quality" type="xs:unsignedByte"/>
+    <xs:attribute name="PitchAndFamily" type="xs:unsignedByte"/>
+    <xs:attribute name="FaceName" type="xs:string"/>
+      </xs:complexType>
+<xs:complexType name="HeaderLeft_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="HeaderMargin_Type">
+        <xs:simpleContent>
+        <xs:extension base="xs:double">
+      
+    <xs:attribute name="Unit" type="xs:string"/>
+        </xs:extension>
+        </xs:simpleContent>
+      </xs:complexType>
+<xs:complexType name="HeaderRight_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="Icon_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Issue_Type">
+          
+          <xs:sequence>
+    <xs:element name="IssueTarget" type="IssueTarget_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="RuleInfo" type="RuleInfo_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="Ignored" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Issues_Type">
+          
+          <xs:sequence>
+    <xs:element name="Issue" type="Issue_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="IssueTarget_Type">
+    <xs:attribute name="PageID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="ShapeID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Master_Type">
+          
+          <xs:choice maxOccurs="unbounded">
+    <xs:element name="PageSheet" type="PageSheet_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Rel" type="Rel_Type" minOccurs="1" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Icon" type="Icon_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:choice>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="BaseID" type="xs:string"/>
+    <xs:attribute name="UniqueID" type="xs:string"/>
+    <xs:attribute name="MatchByName" type="xs:boolean"/>
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="NameU" type="xs:string"/>
+    <xs:attribute name="IsCustomName" type="xs:boolean"/>
+    <xs:attribute name="IsCustomNameU" type="xs:boolean"/>
+    <xs:attribute name="IconSize" type="xs:unsignedShort"/>
+    <xs:attribute name="PatternFlags" type="xs:unsignedShort"/>
+    <xs:attribute name="Prompt" type="xs:string"/>
+    <xs:attribute name="Hidden" type="xs:boolean"/>
+    <xs:attribute name="IconUpdate" type="xs:boolean"/>
+    <xs:attribute name="AlignName" type="xs:unsignedShort"/>
+    <xs:attribute name="MasterType" type="xs:unsignedShort"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Masters_Type">
+          
+          <xs:sequence>
+    <xs:element name="Master" type="Master_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="MasterShortcut" type="MasterShortcut_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="MasterShortcut_Type">
+          
+          <xs:choice maxOccurs="unbounded">
+    <xs:element name="Icon" type="Icon_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:choice>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="NameU" type="xs:string"/>
+    <xs:attribute name="IsCustomName" type="xs:boolean"/>
+    <xs:attribute name="IsCustomNameU" type="xs:boolean"/>
+    <xs:attribute name="IconSize" type="xs:unsignedShort"/>
+    <xs:attribute name="PatternFlags" type="xs:unsignedShort"/>
+    <xs:attribute name="Prompt" type="xs:string"/>
+    <xs:attribute name="ShortcutURL" type="xs:string"/>
+    <xs:attribute name="ShortcutHelp" type="xs:string"/>
+    <xs:attribute name="AlignName" type="xs:unsignedShort"/>
+    <xs:attribute name="MasterType" type="xs:unsignedShort"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="MentionEntry_Type">
+		<xs:sequence>
+			<xs:any minOccurs="0" maxOccurs="unbounded" namespace="##any" processContents="lax"/>
+		</xs:sequence>
+		<xs:attribute name="MentionCheckSum" type="xs:unsignedInt" use="required"/>
+		<xs:attribute name="MentionPersonID" type="xs:unsignedInt" use="required"/>
+		<xs:attribute name="MentionID" type="xs:unsignedInt" use="required"/>
+		<xs:attribute name="StartIndex" type="xs:unsignedInt" use="required"/>
+		<xs:attribute name="Length" type="xs:unsignedInt" use="required"/>
+		<xs:anyAttribute namespace="##other" processContents="lax"/>
+	</xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="MentionsList_Type">
+		<xs:sequence>
+			<xs:element name="MentionEntry" type="MentionEntry_Type" minOccurs="0" maxOccurs="unbounded"/>
+		</xs:sequence>
+	</xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ModernComments_Type">
+		<xs:sequence>
+			<xs:element name="ModernCommentsList" type="ModernCommentsList_Type" minOccurs="0" maxOccurs="1"/>
+		</xs:sequence>
+	</xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ModernCommentsList_Type">
+		<xs:sequence>
+			
+		</xs:sequence>
+	</xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Page_Type">
+          
+          <xs:choice maxOccurs="unbounded">
+    <xs:element name="PageSheet" type="PageSheet_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Rel" type="Rel_Type" minOccurs="1" maxOccurs="1">
+    </xs:element>
+    
+      </xs:choice>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="NameU" type="xs:string"/>
+    <xs:attribute name="IsCustomName" type="xs:boolean"/>
+    <xs:attribute name="IsCustomNameU" type="xs:boolean"/>
+    <xs:attribute name="Background" type="xs:boolean"/>
+    <xs:attribute name="BackPage" type="xs:unsignedInt"/>
+    <xs:attribute name="ViewScale" type="xs:double"/>
+    <xs:attribute name="ViewCenterX" type="xs:double"/>
+    <xs:attribute name="ViewCenterY" type="xs:double"/>
+    <xs:attribute name="ReviewerID" type="xs:unsignedInt"/>
+    <xs:attribute name="AssociatedPage" type="xs:unsignedInt"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PageContents_Type">
+          
+          <xs:sequence>
+    <xs:element name="Shapes" type="Shapes_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Connects" type="Connects_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Pages_Type">
+          
+          <xs:sequence>
+    <xs:element name="Page" type="Page_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PageSheet_Type">
+        <xs:complexContent>
+        <xs:extension base="Sheet_Type">
+      
+    <xs:attribute name="UniqueID" type="xs:string"/>
+        </xs:extension>
+        </xs:complexContent>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PersonEntry_Type">
+		<xs:sequence>
+			<xs:any minOccurs="0" maxOccurs="unbounded" namespace="##any" processContents="lax"/>
+		</xs:sequence>
+		<xs:attribute name="DisplayName" type="xs:string" use="required"/>
+		<xs:attribute name="PersonID" type="xs:unsignedInt" use="required"/>
+		<xs:attribute name="ProviderID" type="xs:string"/>
+		<xs:attribute name="UserID" type="xs:string"/>
+		<xs:anyAttribute namespace="##other" processContents="lax"/>
+	</xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Persons_Type">
+		<xs:sequence>
+			<xs:element name="PersonsList" type="PersonsList_Type" minOccurs="0" maxOccurs="1"/>
+		</xs:sequence>
+	</xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PersonsList_Type">
+		<xs:sequence>
+			<xs:element name="PersonEntry" type="PersonEntry_Type" minOccurs="0" maxOccurs="unbounded"/>
+		</xs:sequence>
+	</xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="pp_Type">
+    <xs:attribute name="IX" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PrimaryKey_Type">
+          
+          <xs:sequence>
+    <xs:element name="RowKeyValue" type="RowKeyValue_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ColumnNameID" type="xs:string" use="required"/>
+      </xs:complexType>
+<xs:complexType name="ProtectBkgnds_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="ProtectMasters_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="ProtectShapes_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="ProtectStyles_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PublishedPage_Type">
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="PublishSettings_Type">
+          
+          <xs:sequence>
+    <xs:element name="PublishedPage" type="PublishedPage_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="RefreshableData" type="RefreshableData_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RefBy_Type">
+    <xs:attribute name="T" type="xs:string" use="required"/>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RefreshableData_Type">
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RefreshConflict_Type">
+    <xs:attribute name="RowID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="ShapeID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="PageID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType name="Rel_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Row_Type">
+          
+          <xs:sequence>
+    <xs:element name="Cell" type="Cell_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="Trigger" type="Trigger_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="N" type="xs:string"/>
+    <xs:attribute name="LocalName" type="xs:string"/>
+    <xs:attribute name="IX" type="xs:unsignedInt"/>
+    <xs:attribute name="T" type="xs:string"/>
+    <xs:attribute name="Del" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RowDef_Type">
+          
+          <xs:sequence>
+    <xs:element name="CellDef" type="CellDef_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RowKeyValue_Type">
+    <xs:attribute name="RowID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="Value" type="xs:string" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RowMap_Type">
+    <xs:attribute name="RowID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="PageID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="ShapeID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Rule_Type">
+          
+          <xs:sequence>
+    <xs:element name="RuleFilter" type="RuleFilter_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="RuleTest" type="RuleTest_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="NameU" type="xs:string" use="required"/>
+    <xs:attribute name="Category" type="xs:string"/>
+    <xs:attribute name="Description" type="xs:string"/>
+    <xs:attribute name="RuleTarget" type="xs:int"/>
+    <xs:attribute name="Ignored" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType name="RuleFilter_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleInfo_Type">
+    <xs:attribute name="RuleSetID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="RuleID" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleSet_Type">
+          
+          <xs:sequence>
+    <xs:element name="RuleSetFlags" type="RuleSetFlags_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Rule" type="Rule_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="NameU" type="xs:string" use="required"/>
+    <xs:attribute name="Description" type="xs:string"/>
+    <xs:attribute name="Enabled" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleSetFlags_Type">
+    <xs:attribute name="Hidden" type="xs:boolean"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="RuleSets_Type">
+          
+          <xs:sequence>
+    <xs:element name="RuleSet" type="RuleSet_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType name="RuleTest_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Section_Type">
+          
+          <xs:sequence>
+    <xs:element name="Cell" type="Cell_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="Trigger" type="Trigger_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="Row" type="Row_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="N" type="xs:string" use="required"/>
+    <xs:attribute name="Del" type="xs:boolean"/>
+    <xs:attribute name="IX" type="xs:unsignedInt"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="SectionDef_Type">
+          
+          <xs:sequence>
+    <xs:element name="CellDef" type="CellDef_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="RowDef" type="RowDef_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="N" type="xs:string" use="required"/>
+    <xs:attribute name="T" type="xs:string"/>
+    <xs:attribute name="S" type="xs:unsignedByte"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Shapes_Type">
+          
+          <xs:sequence>
+    <xs:element name="Shape" type="ShapeSheet_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ShapeSheet_Type">
+          
+          <xs:complexContent>
+          <xs:extension base="Sheet_Type">
+          <xs:sequence>
+    <xs:element name="Shapes" type="Shapes_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Text" type="Text_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Data1" type="Data_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Data2" type="Data_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Data3" type="Data_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ForeignData" type="ForeignData_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="OriginalID" type="xs:unsignedInt"/>
+    <xs:attribute name="Del" type="xs:boolean"/>
+    <xs:attribute name="MasterShape" type="xs:unsignedInt"/>
+    <xs:attribute name="UniqueID" type="xs:string"/>
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="NameU" type="xs:string"/>
+    <xs:attribute name="IsCustomName" type="xs:boolean"/>
+    <xs:attribute name="IsCustomNameU" type="xs:boolean"/>
+    <xs:attribute name="Master" type="xs:unsignedInt"/>
+    <xs:attribute name="Type" type="xs:token"/>
+      </xs:extension>
+      </xs:complexContent>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Sheet_Type" abstract="true">
+        
+          <xs:sequence minOccurs="0" maxOccurs="unbounded">
+    <xs:element name="Cell" type="Cell_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="Trigger" type="Trigger_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="Section" type="Section_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    
+    
+      </xs:sequence>
+    <xs:attribute name="LineStyle" type="xs:unsignedInt"/>
+    <xs:attribute name="FillStyle" type="xs:unsignedInt"/>
+    <xs:attribute name="TextStyle" type="xs:unsignedInt"/>
+      </xs:complexType>
+<xs:complexType name="ShowConnectionPoints_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="ShowGrid_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="ShowGuides_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="ShowPageBreaks_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="ShowRulers_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="SnapAngle_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="SnapAngles_Type">
+          
+          <xs:sequence>
+    <xs:element name="SnapAngle" type="SnapAngle_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType name="SnapExtensions_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="SnapSettings_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Solution_Type">
+          
+          <xs:sequence>
+    <xs:element name="Rel" type="Rel_Type" minOccurs="1" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Solutions_Type">
+          
+          <xs:sequence>
+    <xs:element name="Solution" type="Solution_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType name="StencilGroup_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType name="StencilGroupPos_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="StyleSheet_Type">
+        <xs:complexContent>
+        <xs:extension base="Sheet_Type">
+      
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="Name" type="xs:string"/>
+    <xs:attribute name="NameU" type="xs:string"/>
+    <xs:attribute name="IsCustomName" type="xs:boolean"/>
+    <xs:attribute name="IsCustomNameU" type="xs:boolean"/>
+        </xs:extension>
+        </xs:complexContent>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="StyleSheets_Type">
+          
+          <xs:sequence>
+    <xs:element name="StyleSheet" type="StyleSheet_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType name="TabSplitterPos_Type"><xs:simpleContent><xs:extension base="xs:string"><xs:anyAttribute processContents="lax"/></xs:extension></xs:simpleContent></xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Text_Type">
+          
+          <xs:choice minOccurs="0" maxOccurs="unbounded">
+    <xs:element name="cp" type="cp_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="pp" type="pp_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="tp" type="tp_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+    <xs:element name="fld" type="fld_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:choice>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="tp_Type">
+    <xs:attribute name="IX" type="xs:unsignedInt" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Trigger_Type">
+          
+          <xs:sequence>
+    <xs:element name="RefBy" type="RefBy_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="N" type="xs:string" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Validation_Type">
+          
+          <xs:sequence>
+    <xs:element name="ValidationProperties" type="ValidationProperties_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="RuleSets" type="RuleSets_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Issues" type="Issues_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="ValidationProperties_Type">
+    <xs:attribute name="LastValidated" type="xs:dateTime" use="required"/>
+    <xs:attribute name="ShowIgnored" type="xs:boolean" use="required"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="VisioDocument_Type">
+          
+          <xs:sequence>
+    <xs:element name="DocumentSettings" type="DocumentSettings_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="Colors" type="Colors_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="FaceNames" type="FaceNames_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="StyleSheets" type="StyleSheets_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="DocumentSheet" type="DocumentSheet_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="EventList" type="EventList_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="HeaderFooter" type="HeaderFooter_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="PublishSettings" type="PublishSettings_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    
+    
+      </xs:sequence>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Window_Type">
+          
+          <xs:sequence>
+    <xs:element name="StencilGroup" type="StencilGroup_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="StencilGroupPos" type="StencilGroupPos_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ShowRulers" type="ShowRulers_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ShowGrid" type="ShowGrid_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ShowPageBreaks" type="ShowPageBreaks_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ShowGuides" type="ShowGuides_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="ShowConnectionPoints" type="ShowConnectionPoints_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="GlueSettings" type="GlueSettings_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="SnapSettings" type="SnapSettings_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="SnapExtensions" type="SnapExtensions_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="SnapAngles" type="SnapAngles_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="DynamicGridEnabled" type="DynamicGridEnabled_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+    <xs:element name="TabSplitterPos" type="TabSplitterPos_Type" minOccurs="0" maxOccurs="1">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ID" type="xs:unsignedInt" use="required"/>
+    <xs:attribute name="WindowType" type="xs:token" use="required"/>
+    <xs:attribute name="WindowState" type="xs:unsignedInt"/>
+    <xs:attribute name="Document" type="xs:string"/>
+    <xs:attribute name="WindowLeft" type="xs:short"/>
+    <xs:attribute name="WindowTop" type="xs:short"/>
+    <xs:attribute name="WindowWidth" type="xs:unsignedInt"/>
+    <xs:attribute name="WindowHeight" type="xs:unsignedInt"/>
+    <xs:attribute name="Master" type="xs:unsignedInt"/>
+    <xs:attribute name="ContainerType" type="xs:token"/>
+    <xs:attribute name="Container" type="xs:unsignedInt"/>
+    <xs:attribute name="Sheet" type="xs:unsignedInt"/>
+    <xs:attribute name="ReadOnly" type="xs:boolean"/>
+    <xs:attribute name="ParentWindow" type="xs:unsignedInt"/>
+    <xs:attribute name="Page" type="xs:unsignedInt"/>
+    <xs:attribute name="ViewScale" type="xs:double"/>
+    <xs:attribute name="ViewCenterX" type="xs:double"/>
+    <xs:attribute name="ViewCenterY" type="xs:double"/>
+      </xs:complexType>
+<xs:complexType xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="Windows_Type">
+          
+          <xs:sequence>
+    <xs:element name="Window" type="Window_Type" minOccurs="0" maxOccurs="unbounded">
+    </xs:element>
+    
+      </xs:sequence>
+    <xs:attribute name="ClientWidth" type="xs:unsignedShort"/>
+    <xs:attribute name="ClientHeight" type="xs:unsignedShort"/>
+      </xs:complexType>
+<xs:complexType name="NamedRow_Type"><xs:sequence><xs:any minOccurs="0" maxOccurs="unbounded" processContents="skip"/></xs:sequence><xs:anyAttribute processContents="skip"/></xs:complexType>
+<xs:complexType name="NamedIndexedRow_Type"><xs:sequence><xs:any minOccurs="0" maxOccurs="unbounded" processContents="skip"/></xs:sequence><xs:anyAttribute processContents="skip"/></xs:complexType>
+<xs:complexType name="IndexedRow_Type"><xs:sequence><xs:any minOccurs="0" maxOccurs="unbounded" processContents="skip"/></xs:sequence><xs:anyAttribute processContents="skip"/></xs:complexType>
+<xs:complexType name="GeometryRow_Type"><xs:sequence><xs:any minOccurs="0" maxOccurs="unbounded" processContents="skip"/></xs:sequence><xs:anyAttribute processContents="skip"/></xs:complexType>
+</xsd:schema>

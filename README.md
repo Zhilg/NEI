@@ -11,7 +11,8 @@ DOCX конвертируется в Markdown через `mammoth`.
 | Каталог | `idp` | Обрабатывает `data/input/` рекурсивно, складывает результаты в `data/output/` (`--artifacts` добавляет `<stem>.md`, `--force` переобрабатывает) |
 | Оператор | `idp-operator --input page.pdf` | Постраничный review черновиков VLM, исправления идут в few-shot feedback для будущих прогонов (`--force` — ревьюить заново, не теряя правки) |
 | Один файл | `idp-web --root data/ui --port 8080` | Веб-интерфейс: перетащил файл в бокс, нажал «Обработать»/«DOCX»/«PDF»/«TXT», скачал результат. Добавь `--stub`, чтобы работать без GPU (заглушка вместо VLM) |
-| Сборка | `idp-reconstruct [--bundle DIR] [--format docx\|pdf]` | Пересобирает DOCX/PDF из бандла без VLM |
+| Сборка | `idp-reconstruct [--bundle DIR] [--format docx\|pdf\|vsdx]` | Пересобирает DOCX/PDF/Visio из бандла без VLM |
+| Visio | `idp-visio --out drawing.vsdx <png-файлы или папка>` | Собирает Visio-чертеж (.vsdx) из PNG-картинок без VLM |
 
 Подробности и переменные окружения — в [docs/commands.md](docs/commands.md).
 
@@ -36,6 +37,7 @@ DOCX конвертируется в Markdown через `mammoth`.
   - `tables.json` — таблицы структурированными строками (в `text.txt` они остаются markdown-таблицами)
   - `meta.json` — источник, тип, страницы, аннотация и `regions` (файл, тип области, страница, bbox 0..1, размеры в пикселях)
   - `reconstruct.docx` / `reconstruct.pdf` — собранные из бандла документы: Times New Roman 12, заголовки 14, полуторный интервал, картинки и таблицы по местам, разрывы страниц по маркерам (отключается через `IDP_RECONSTRUCT_FORMATS=`)
+  - `reconstruct.vsdx` — Visio-чертеж из рендеров страниц (`--visio` у воркера или `IDP_RECONSTRUCT_FORMATS=docx,pdf,vsdx`): каждая страница PNG становится отдельной страницей Visio
 - `rendered/<относительный/путь>/<stem>/` — рендеры страниц PDF (источник для `page_*` в бандлах)
 - `entity_schema.json` — рабочая копия схемы сущностей; если VLM нашёл новый тип, он дописывается сюда (путь переопределяется через `IDP_ENTITY_SCHEMA_PATH`). Исходная `src/idp/entity_schema.json` остаётся шаблоном только для чтения
 - `results.jsonl` / `results_readable.json` — результаты по каждому файлу
@@ -134,6 +136,30 @@ docker compose -f infra/compose/local.yml up -d
 
 `idp-web --stub --root data/ui --port 8080` — тот же интерфейс, но без GPU:
 заглушка из `tests/vlm_stub.py` подменяет VLM, так что весь пайплайн работает офлайн.
+
+## PNG → Visio (.vsdx)
+
+Рендеры страниц (или любые PNG) собираются в Visio-чертеж без обращения к VLM:
+
+```bash
+# одна картинка — одна страница Visio
+idp-visio --out drawing.vsdx data/output/rendered/report/page_00001.png
+
+# целая папка с рендерами
+idp-visio --out drawing.vsdx data/output/rendered/report/
+
+# все страницы на одном листе (контактный лист)
+idp-visio --out sheet.vsdx --mode sheet --columns 3 data/output/rendered/report/
+
+# фиксированный формат страницы (дюймы), картинка вписывается с сохранением пропорций
+idp-visio --out a4.vsdx --page-size 8.27x11.69 data/output/rendered/report/
+```
+
+Тот же флаг есть у воркера — `idp --visio` кладёт `reconstruct.vsdx` в бандл
+каждого документа (страницы PNG → страницы Visio). Формат `.vsdx` пишется
+только стандартной библиотекой, новых пакетов в air-gapped образ не нужно.
+Готовый файл проверяется по официальной схеме VisioSchema15:
+`python scripts/validate_visio_vsdx.py drawing.vsdx` (схема лежит в `tests/schemas/`).
 
 ## Тесты (без GPU)
 

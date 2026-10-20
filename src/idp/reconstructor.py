@@ -1,4 +1,4 @@
-"""Rebuild DOCX and PDF documents from txts bundles.
+"""Rebuild DOCX, PDF and Visio documents from txts bundles.
 
 Each ``txts/<file name>/`` bundle contains ``text.txt`` (document text with
 hyperlinks to images), ``images/`` (page renders and embedded pictures),
@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from idp.config import settings
+from idp.visio_exporter import build_bundle_vsdx
 
 logger = logging.getLogger(__name__)
 
@@ -701,6 +702,11 @@ def reconstruct_bundle(bundle_dir: Path, formats: list[str] | None = None) -> li
             created.append(build_docx(blocks, bundle_dir, bundle_dir / "reconstruct.docx", regions))
         elif fmt == "pdf":
             created.append(build_pdf(blocks, bundle_dir, bundle_dir / "reconstruct.pdf", regions))
+        elif fmt == "vsdx":
+            try:
+                created.append(build_bundle_vsdx(bundle_dir, bundle_dir / "reconstruct.vsdx"))
+            except ValueError as exc:
+                logger.warning("Visio export skipped for %s: %s", bundle_dir, exc)
     return created
 
 
@@ -711,10 +717,10 @@ def main() -> None:
         level=getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    parser = argparse.ArgumentParser(description="Rebuild DOCX/PDF documents from txts bundles")
+    parser = argparse.ArgumentParser(description="Rebuild DOCX/PDF/Visio documents from txts bundles")
     parser.add_argument("--bundle", type=Path, help="single bundle directory")
     parser.add_argument("--root", type=Path, help="bundles root (default: <output_root>/txts)")
-    parser.add_argument("--format", default="", help="comma separated formats: docx,pdf")
+    parser.add_argument("--format", default="", help="comma separated formats: docx,pdf,vsdx")
     args = parser.parse_args()
 
     formats = [item.strip() for item in args.format.split(",") if item.strip()] or None

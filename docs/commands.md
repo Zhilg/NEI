@@ -187,6 +187,7 @@ IDP_ARTIFACTS_MODE=true
 | `IDP_ENTITY_SCHEMA_PATH` | `<output_root>/entity_schema.json` | куда дописывать новые типы сущностей (исходная схема в `src/idp/` — шаблон только для чтения) |
 | `IDP_LOG_LEVEL` | `INFO` | уровень логов (`DEBUG` включает размеры страниц, URL и превью ответов VLM) |
 | `IDP_ARTIFACTS_MODE` | `false` | аналог флага `--artifacts` |
+| `IDP_VISIO_MODE` | `false` | аналог флага `--visio` (собирать `reconstruct.vsdx` из бандла) |
 | `IDP_RECONSTRUCT_FORMATS` | `docx,pdf` | какие форматы собирать из бандлов (пусто — не собирать) |
 | `IDP_VL_MODEL_DIR` | `new_vl` | папка модели внутри `/models` для vLLM/SGLang (compose) |
 | `IDP_VL_MODEL` | `Qwen3.8-27B` | имя модели в запросах к VLM (compose) |
@@ -195,7 +196,7 @@ IDP_ARTIFACTS_MODE=true
 ## CLI (консольный интерфейс)
 
 Все точки входа объявлены в `pyproject.toml` (`[project.scripts]`): `idp`, `idp-web`,
-`idp-reconstruct`, `idp-operator`, `idp-finetune-dataset`. Работают и в контейнере,
+`idp-reconstruct`, `idp-visio`, `idp-operator`, `idp-finetune-dataset`. Работают и в контейнере,
 и на хосте (после `pip install -e .`).
 
 CLI — полноценная замена веб-интерфейсу: `idp-web` внутри вызывает тот же `Worker`,
@@ -216,6 +217,7 @@ docker compose -f infra/compose/local.yml exec worker idp --artifacts     # в �
 |---|---|
 | `--artifacts` | дополнительно писать `<stem>.md` (без него `.md` на диск не сохраняется) |
 | `--force` | игнорировать кэш обработанных и переобработать всё заново |
+| `--visio` | дополнительно собрать `reconstruct.vsdx` из рендеров страниц (флаги `IDP_VISIO_MODE=true` или `IDP_RECONSTRUCT_FORMATS=docx,pdf,vsdx` — то же самое постоянно) |
 
 Каталог задаётся переменной окружения: `IDP_INPUT_ROOT` / `IDP_OUTPUT_ROOT`
 (в `local.yml` это `/input` и `/output`, смонтированные из `data/input` и `data/output`).
@@ -235,23 +237,66 @@ idp-web --root data/ui --port 8080
 
 ### Собрать PDF / DOCX / TXT из готовых бандлов
 
-DOCX и PDF пересобираются из бандла `txts/<имя файла>/` **без обращения к VLM**
+DOCX, PDF и Visio пересобираются из бандла `txts/<имя файла>/` **без обращения к VLM**
 (поэтому это работает даже когда модель недоступна):
 
 ```bash
 docker compose -f infra/compose/local.yml run --rm worker idp-reconstruct                        # все бандлы
 docker compose -f infra/compose/local.yml run --rm worker idp-reconstruct --bundle data/output/txts/scan.pdf
 docker compose -f infra/compose/local.yml run --rm worker idp-reconstruct --format pdf           # docx, pdf или оба
+docker compose -f infra/compose/local.yml run --rm worker idp-reconstruct --format vsdx          # только Visio
 ```
 
 | Флаг | Действие |
 |---|---|
 | `--bundle <путь>` | пересобрать один бандл |
 | `--root <путь>` | корень бандлов, по умолчанию `<output_root>/txts` |
-| `--format` | `docx`, `pdf` или `docx,pdf`; пусто — оба |
+| `--format` | `docx`, `pdf`, `vsdx` или их комбинация; пусто — все |
+
+`vsdx` собирается из картинок бандла: каждая страница (`images/page_*.png`)
+становится отдельной страницей Visio. Если в бандле нет рендеров страниц
+(DOCX/PPTX/HTML), берутся встроенные картинки.
 
 **TXT пересобрать нельзя** — `text.txt` уже лежит в бандле и пишется во время обработки;
-`idp-reconstruct` умеет только `docx` и `pdf`.
+`idp-reconstruct` умеет только `docx`, `pdf` и `vsdx`.
+
+### PNG → Visio (.vsdx)
+
+Отдельная команда `idp-visio` собирает Visio-чертеж из PNG-картинок (VLM не нужен):
+
+```bash
+idp-visio --out drawing.vsdx page_00001.png page_00002.png   # файлы
+idp-visio --out drawing.vsdx ./rendered/report/             # папка (рекурсивно, *.png)
+idp-visio --out sheet.vsdx --mode sheet --columns 3 ./rendered/report/
+idp-visio --out a4.vsdx --page-size 8.27x11.69 ./rendered/report/
+idp-visio --bundle data/output/txts/report.pdf              # из бандла → reconstruct.vsdx
+```
+
+| Флаг | Действие |
+|---|---|
+| `--out <путь>` | куда писать `.vsdx` (по умолчанию — рядом с первой картинкой или `reconstruct.vsdx` в бандле) |
+| `--bundle <путь>` | взять картинки из бандла `txts/...` |
+| `--mode pages\|sheet` | отдельная страница на картинку (по умолчанию) или все картинки на одном листе |
+| `--dpi <N>` | DPI для расчёта размера страницы (по умолчанию `IDP_RENDER_DPI`, 200) |
+| `--page-size WxH` | фиксированный формат страницы в дюймах, картинка вписывается с сохранением пропорций |
+| `--columns <N>` | колонок в режиме `sheet` (по умолчанию — квадратная сетка) |
+| `--pattern <glob>` | маска файлов в папках (по умолчанию `*.png`) |
+| `--title <текст>` | заголовок документа в свойствах файла |
+
+После сборки команда проверяет структуру пакета (части, связи, типы содержимого,
+порядок элементов по схеме Visio) и печатает `structure check: ok`, если всё в порядке.
+Формат `.vsdx` собирается только стандартной библиотекой — новых пакетов в air-gapped образ не добавляется.
+
+Полная проверка по официальной схеме VisioSchema15 (`tests/schemas/visio.xsd`,
+собрана из фрагментов документации Microsoft) — офлайн, нужен только `lxml`:
+
+```bash
+python scripts/validate_visio_vsdx.py data/output/txts/report.pdf/reconstruct.vsdx
+```
+
+Скрипт проверяет well-formed XML всех частей, соответствие XSD и целостность OPC
+(типы содержимого, цели связей). Пересобрать саму схему из свежих фрагментов
+документации: `python scripts/build_visio_xsd.py <список .md> <каталог>`.
 
 ### CLI без GPU
 
@@ -384,7 +429,8 @@ python3 -m pytest tests/ -q --timeout 150 --timeout-method=thread
 Покрыто: сборка txts-бандлов и reconstruct.docx/pdf на заглушке (включая 40-страничный
 документ — все заголовки должны дожить до вывода), wide-таблицы (краш
 `text box must be finite and not empty`), склейка перенесённых ссылок, поток оператора
-(`--force`, EOF, пробелы), бенчмарк и веб-интерфейс (upload/process/formats/download).
+(`--force`, EOF, пробелы), бенчмарк и веб-интерфейс (upload/process/formats/download),
+экспорт PNG → Visio (структура `.vsdx`, страницы, связи, встроенные картинки).
 
 Заглушку можно запустить и вручную, чтобы дергать воркер/оператор без vLLM:
 
@@ -403,7 +449,7 @@ IDP_VL_ENDPOINTS=http://127.0.0.1:8123/v1 IDP_VL_MODEL=stub-vl idp --artifacts
 - `data/output/entities.json` — все сущности, сгруппированные по файлу (сбрасывается на диск раз в прогон и каждые 50 файлов)
 - `data/output/stats.jsonl` — статистика по обработке
 - `data/output/rendered/<путь>/<stem>/` — рендеры страниц PDF
-- `data/output/txts/<путь>/<stem>/` — бандл для восстановления DOCX/PDF: `text.txt` (текст + гиперссылки на картинки), `images/` (рендеры страниц и встроенные изображения), `tables.json`, `meta.json`, `reconstruct.docx`, `reconstruct.pdf`
+- `data/output/txts/<путь>/<stem>/` — бандл для восстановления DOCX/PDF/Visio: `text.txt` (текст + гиперссылки на картинки), `images/` (рендеры страниц и встроенные изображения), `tables.json`, `meta.json`, `reconstruct.docx`, `reconstruct.pdf`, `reconstruct.vsdx` (с `--visio`)
 - `data/output/entity_schema.json` — рабочая копия схемы сущностей (см. `IDP_ENTITY_SCHEMA_PATH`)
 
 Повторный запуск пропускает файлы, которые уже есть в `results.jsonl` со статусом
@@ -467,7 +513,7 @@ VLM размечает каждую картинку и рукописный ф�
 
 Шрифт для PDF — Liberation Serif (метрически совместим с Times New Roman, есть кириллица), лежит в `src/idp/fonts/`; при наличии системного Liberation/DejaVu Serif используется он.
 
-## Восстановление DOCX/PDF из бандлов
+## Восстановление DOCX/PDF/Visio из бандлов
 
 Каждый бандл `txts/<имя файла>/` после обработки автоматически собирается обратно в документы:
 
@@ -475,9 +521,13 @@ VLM размечает каждую картинку и рукописный ф�
 docker compose exec worker idp-reconstruct                     # все бандлы в data/output/txts
 docker compose exec worker idp-reconstruct --bundle data/output/txts/scan.pdf
 docker compose exec worker idp-reconstruct --format pdf        # только PDF (или docx)
+docker compose exec worker idp-reconstruct --format vsdx       # только Visio
 ```
 
 В бандле появятся `reconstruct.docx` и `reconstruct.pdf` с картинками по местам, заголовками, списками, таблицами (с повторением шапки при переносе) и разрывами страниц по маркерам `<!-- page N -->`.
+
+`reconstruct.vsdx` (формат `vsdx` или флаг `--visio` у воркера) — Visio-чертеж, в котором
+каждый рендер страницы становится отдельной страницей Visio с картинкой во весь лист.
 
 Отключить авто-сборку в воркере:
 
@@ -504,7 +554,8 @@ src/idp/           # Код пайплайна
   finetune_dataset.py # Датасет дообучения из коррекций
   metadata_extractor.py # Метаданные DOCX/PPTX
   txt_export.py    # Экспорт txts-бандлов с гиперссылками на картинки
-  reconstructor.py # Сборка DOCX/PDF из бандлов
+  visio_exporter.py # Сборка Visio-чертежей (.vsdx) из PNG
+  visio_cli.py     # CLI: idp-visio (PNG → .vsdx)  reconstructor.py # Сборка DOCX/PDF/Visio из бандлов
   operator_client.py # Терминальный инструмент review'а оператора
   webui.py         # Веб-интерфейс для отдельных файлов (stdlib http.server)
   prompts.py       # Промпты для VLM
@@ -516,10 +567,13 @@ infra/compose/
 scripts/
   download_vl_model.py # Скачивание модели (--repo/--model-dir для другой сборки)
   bench_vlm.py         # Замер скорости VLM (TTFT, tok/s, pages/s)
+  build_visio_xsd.py   # Сборка схемы VisioSchema15 из фрагментов документации MS
+  validate_visio_vsdx.py # Проверка .vsdx по схеме (XSD + OPC)
 
 tests/               # Офлайн-тесты: VLM-заглушка вместо GPU (tests/vlm_stub.py)
   fixtures.py       # Генераторы тестовых PDF/DOCX/HTML/PPTX
   conftest.py       # Старт заглушки и изолированные input/output
+  schemas/          # visio.xsd — официальная схема Visio (XSD-проверка .vsdx)
 
 data/
   input/           # Каталог входных файлов
