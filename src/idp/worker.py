@@ -40,7 +40,8 @@ from idp.vlm_client import (
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html", ".png", ".jpg", ".jpeg"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 
 @dataclass
@@ -87,7 +88,7 @@ class Worker:
         self.artifacts_mode = artifacts_mode or settings.artifacts_mode
         self.force = force
         self.visio_mode = visio_mode or settings.visio_mode
-        self.visio_content = (visio_content or settings.visio_content or "pages").lower()
+        self.visio_content = (visio_content or "").strip().lower()
         self._input_root: Path = settings.input_root
         self._processed: set[str] = set()
         self._stats_writer: StatsWriter | None = None
@@ -269,6 +270,10 @@ class Worker:
                     file_path, relative, output_md_tmp, output_md, timer,
                     file_type=file_path.suffix.lower().lstrip("."),
                 )
+            elif file_path.suffix.lower() in IMAGE_EXTENSIONS:
+                result = await self._process_image(
+                    file_path, relative, output_md_tmp, output_md, timer
+                )
             else:
                 result = self._skip_result(file_path, relative, timer, file_type)
                 pbar.set_postfix(file=file_path.name, stage="skip")
@@ -363,6 +368,50 @@ class Worker:
             all_entities, annotation, document_type, text=annotated_markdown,
         )
 
+    async def _process_image(
+        self,
+        file_path: Path,
+        relative: Path,
+        output_md_tmp: Path,
+        output_md: Path,
+        timer: FileTimer,
+    ) -> FileResult:
+        """Reconstruct a scan (PNG/JPEG) with the VLM into markdown.
+
+        The image is the only page of the document, so the reconstruction is
+        the same as for a one page PDF: the VLM returns the text, the tables
+        and the structure, and the Visio export turns them into editable
+        shapes instead of a picture of the scan.
+        """
+        png = await asyncio.to_thread(self._prepare_image, file_path, relative)
+        timer.pages = 1
+        vlm_markdown = await reconstruct_markdown([png])
+        clean_markdown = strip_bbox_annotations(vlm_markdown)
+        document_type = detect_document_type(file_path, clean_markdown)
+        text_entities = await extract_entities_from_text(
+            clean_markdown, model=settings.vl_model, document_type=document_type
+        )
+        image_entities = await extract_entities_from_images([png], document_type=document_type)
+        all_entities = self._aggregate_entities(text_entities + image_entities)
+        paragraphs = extract_paragraphs(clean_markdown)
+        annotation = await self._safe_annotation(text=clean_markdown)
+        final_markdown = self._normalize_markdown(clean_markdown)
+        annotated_markdown = self._normalize_markdown(vlm_markdown)
+        self._write_artifact(output_md_tmp, output_md, final_markdown)
+        return self._ok_result(
+            file_path, relative, timer, file_path.suffix.lower().lstrip("."),
+            annotated_markdown, paragraphs, all_entities, annotation, document_type,
+            text=annotated_markdown,
+        )
+
+    def _prepare_image(self, file_path: Path, relative: Path) -> Path:
+        """Put the scan into the rendered pages as a PNG the VLM can read."""
+        from idp.renderer import convert_image_to_png
+
+        target_dir = self._rendered_dir(relative)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return convert_image_to_png(file_path, target_dir / "page_00001.png")
+
     def _write_artifact(self, tmp: Path, final: Path, content: str) -> None:
         if self.artifacts_mode:
             tmp.parent.mkdir(parents=True, exist_ok=True)
@@ -433,7 +482,7 @@ class Worker:
         if formats:
             try:
                 await asyncio.to_thread(
-                    reconstruct_bundle, bundle_dir, formats, self.visio_content
+                    reconstruct_bundle, bundle_dir, formats, self._visio_content(file_path)
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Document reconstruction failed for %s: %s", file_path.name, exc)
@@ -444,6 +493,20 @@ class Worker:
         if self.visio_mode and "vsdx" not in formats:
             formats.append("vsdx")
         return formats
+
+    def _visio_content(self, file_path: Path) -> str:
+        """Content of the Visio drawing of a file.
+
+        The flag wins, then ``IDP_VISIO_CONTENT``. A scan (PNG/JPEG) is
+        rebuilt as an editable document by default: the picture of the scan
+        would be just the picture again.
+        """
+        if self.visio_content:
+            return self.visio_content
+        configured = (settings.visio_content or "pages").lower()
+        if configured == "pages" and file_path.suffix.lower() in IMAGE_EXTENSIONS:
+            return "document"
+        return configured
 
     def _skip_result(self, file_path: Path, relative: Path, timer: FileTimer, file_type: str) -> FileResult:
         return self._skip_result_from_data(file_path, relative, timer, file_type, "")

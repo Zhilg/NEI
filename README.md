@@ -122,10 +122,11 @@ docker compose -f infra/compose/local.yml up -d
 
 ## Подача документов
 
-Скопируй PDF или DOCX в `data/input/` до или во время работы контейнера. Worker автоматически обработает новые файлы.
+Скопируй PDF, DOCX, PPTX, HTML или PNG/JPEG (скан/фото документа) в `data/input/` до или во время работы контейнера. Worker автоматически обработает новые файлы.
 
 ```bash
 cp ~/Downloads/document.pdf data/input/
+cp ~/Downloads/scan.png data/input/
 docker compose -f infra/compose/local.yml up -d
 ```
 
@@ -170,6 +171,21 @@ idp-visio --text report.md --out report.vsdx
 таблицы — сеткой ячеек, рисунки — встроенными картинками. Содержимое чертежа
 выбирается переменной `IDP_VISIO_CONTENT` (`pages` — по умолчанию, `sheet`,
 `document`), она же действует для `idp-reconstruct --format vsdx`.
+
+### PNG → редактируемый Visio
+
+Скан или фотография документа в `data/input/` обрабатывается как обычный документ:
+VLM разбирает картинку на текст, таблицы и структуру, и в бандле появляется
+`reconstruct.vsdx` с редактируемыми фигурами — не сплошная картинка:
+
+```bash
+# data/input/scan.png -> data/output/txts/scan.png/reconstruct.vsdx
+docker compose -f infra/compose/local.yml run --rm worker idp --visio --force
+```
+
+PNG/JPEG в `data/input` воркер обрабатывает сам (в `pages`-режиме скан был бы
+просто картинкой в Visio, поэтому для изображений режим `document` включается
+автоматически; `--visio-content pages` это отменяет).
 
 В Docker код подхватывается из смонтированной папки репозитория (`/workspace/src`),
 так что пересборка образа не нужна — хватит `docker compose -f infra/compose/local.yml

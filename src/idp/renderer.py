@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import shutil
 import tempfile
 import threading
 from pathlib import Path
@@ -85,6 +86,28 @@ def render_pdf_to_pngs(pdf_path: Path, output_dir: Path) -> list[Path]:
     pngs = _render_all_pages(pdf_path, output_dir)
     logger.debug("Renderer: produced %d images", len(pngs))
     return pngs
+
+
+def convert_image_to_png(source: Path, target: Path) -> Path:
+    """Write an image as PNG (converted when it is not one already).
+
+    The VLM is fed PNG data, so a JPEG scan has to be converted first. The
+    written path is returned - it differs from ``target`` when the conversion
+    fails and the file is copied as it is.
+    """
+    if source.suffix.lower() == ".png":
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        return target
+    try:
+        with Image.open(source) as image:
+            image.convert("RGB").save(target, "PNG")
+        return target
+    except Exception as exc:  # noqa: BLE001 - keep the original file
+        logger.warning("Cannot convert %s to PNG: %s", source, exc)
+        fallback = target.with_suffix(source.suffix.lower() or ".img")
+        shutil.copyfile(source, fallback)
+        return fallback
 
 
 def _upscale_image(img: Image.Image, scale: int = 2) -> Image.Image:

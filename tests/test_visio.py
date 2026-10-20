@@ -275,6 +275,30 @@ def test_worker_visio_content_document(workspace, sample_pdf, stub_server):
     assert summary["texts"] > 0, "the drawing holds the text of the document"
 
 
+def test_worker_rebuilds_a_scan_as_an_editable_drawing(workspace, stub_server):
+    """A PNG in the input root becomes a Visio drawing with editable text."""
+    _make_png(workspace.input / "scan.png", 600, 800)
+    worker = Worker(artifacts_mode=True, visio_mode=True)
+    asyncio.run(worker.run())
+
+    bundle = workspace.output / "txts" / "scan.png"
+    assert (bundle / "text.txt").is_file()
+    assert (bundle / "images" / "page_00001.png").is_file()
+
+    vsdx = bundle / "reconstruct.vsdx"
+    assert vsdx.is_file()
+    assert validate_vsdx(vsdx) == []
+    summary = inspect_vsdx(vsdx)
+    assert summary["texts"] > 0, "the scan is rebuilt as text, not as a picture"
+    shapes = _shapes(vsdx)
+    texts = [
+        (shape.find(f"{{{VISIO_NS}}}Text").text or "")
+        for shape in shapes
+        if shape.get("Type") == "Shape" and shape.find(f"{{{VISIO_NS}}}Text") is not None
+    ]
+    assert any("Страница" in text for text in texts)
+
+
 DOCUMENT_TEXT = """<!-- page 1 -->
 ## Отчёт по объекту
 

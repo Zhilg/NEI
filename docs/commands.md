@@ -235,6 +235,23 @@ docker compose -f infra/compose/local.yml exec worker idp --artifacts     # в �
 Каталог задаётся переменной окружения: `IDP_INPUT_ROOT` / `IDP_OUTPUT_ROOT`
 (в `local.yml` это `/input` и `/output`, смонтированные из `data/input` и `data/output`).
 
+### PNG / JPEG в input
+
+Скан или фотография документа в `data/input/` обрабатывается как обычный документ:
+картинка уходит в VLM, тот возвращает markdown (заголовки, списки, таблицы),
+и в бандле появляется `reconstruct.vsdx` с **редактируемыми** фигурами Visio,
+а не картинка страницы:
+
+```bash
+docker compose -f infra/compose/local.yml run --rm worker idp --visio --force
+# data/input/scan.png -> data/output/txts/scan.png/reconstruct.vsdx
+```
+
+Для изображений режим `document` включается автоматически (в `pages`-режиме
+получился бы тот же сплошной PNG внутри Visio); `--visio-content pages`
+это отменяет. Области, которые VLM отметил на скане (рисунки, рукопись),
+вырезаются из картинки и попадают в чертёж отдельными фигурами.
+
 Код в контейнере берётся из монтируемой папки репозитория (`/workspace/src` в `PYTHONPATH`),
 поэтому правки `src/` видны сразу, без пересборки образа. Пересборка нужна только
 при изменении зависимостей (`pyproject.toml`, `Dockerfile`). Уже обработанные файлы
@@ -477,7 +494,8 @@ python3 -m pytest tests/ -q --timeout 150 --timeout-method=thread
 `text box must be finite and not empty`), склейка перенесённых ссылок, поток оператора
 (`--force`, EOF, пробелы), бенчмарк и веб-интерфейс (upload/process/formats/download),
 экспорт PNG → Visio (структура `.vsdx`, страницы, связи, встроенные картинки),
-документ → Visio (редактируемые текстовые фигуры, таблицы, разбивка по страницам).
+документ → Visio (редактируемые текстовые фигуры, таблицы, разбивка по страницам),
+скан PNG во входе → редактируемый чертёж (текст, таблицы, вырезанные области).
 
 Заглушку можно запустить и вручную, чтобы дергать воркер/оператор без vLLM:
 

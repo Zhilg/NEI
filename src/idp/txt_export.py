@@ -357,6 +357,8 @@ class TxtExporter:
             text = self._bundle_pptx(source, images_dir, text)
         elif file_type in ("html", "html_folder"):
             text = self._bundle_html(source, images_dir, text, folder=file_type == "html_folder")
+        elif file_type in ("png", "jpg", "jpeg", "image"):
+            text = self._bundle_image(source, images_dir, text)
 
         (bundle_dir / "text.txt").write_text(f"{text.strip()}\n", encoding="utf-8")
         (bundle_dir / "tables.json").write_text(
@@ -572,6 +574,32 @@ class TxtExporter:
         except Exception as exc:
             logger.warning("Cannot render pages of %s: %s", pdf_path, exc)
             return []
+
+    def _bundle_image(self, source: Path, images_dir: Path, text: str) -> str:
+        """Bundle of a scan: the picture is the only page of the document.
+
+        The scan is copied into ``images/`` as the page render, so the regions
+        the VLM marked (figures, handwriting) can be cut out of it just like
+        from a rendered PDF page.
+        """
+        from idp.renderer import convert_image_to_png
+
+        written = convert_image_to_png(source, images_dir / "page_00001.png")
+        name = written.name
+        page_images = {1: name}
+        size = _image_dimensions(images_dir / name)
+        self._regions.append({
+            "name": name,
+            "kind": "page",
+            "page": 1,
+            "bbox": [0.0, 0.0, 1.0, 1.0],
+            "width": size[0] if size else None,
+            "height": size[1] if size else None,
+        })
+        counter = {"figure": 0, "handwritten": 0}
+        return self._link_placeholders(
+            text, [1], {}, page_images, set(), images_dir, self._regions, counter
+        )
 
     def _bundle_docx(self, docx_path: Path, images_dir: Path, text: str) -> str:
         text, counter = _materialize_data_uris(images_dir, text, prefix="docx_image")
