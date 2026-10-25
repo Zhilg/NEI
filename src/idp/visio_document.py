@@ -353,6 +353,63 @@ def _add_paragraph(layout: _Layout, segments: list, base_dir: Path | None) -> No
             _add_text(layout, f"[{alt}]", name="Caption", space_after=PARAGRAPH_SPACE_AFTER)
 
 
+def build_layout_vsdx(
+    layout: dict,
+    out_path: Path,
+    *,
+    page_size: tuple[float, float] | None = None,
+    margin: float = DEFAULT_MARGIN,
+    title: str = "",
+    base_dir: Path | None = None,
+) -> Path:
+    """Write a Visio drawing with the layout the VLM produced.
+
+    ``layout`` is the JSON the VLM returned: ``{"blocks": [ ... ]}``. Every
+    block becomes one or more editable shapes, placed in reading order.
+    """
+    blocks = layout.get("blocks", []) if isinstance(layout, dict) else []
+    flow = _Layout(page_size or A4_SIZE, margin)
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "heading":
+            level = min(max(int(block.get("level", 1) or 1), 1), 6)
+            text = str(block.get("text", "")).strip()
+            flow.space(HEADING_SPACE_BEFORE.get(level, 0.10))
+            _add_text(
+                flow,
+                text,
+                size=HEADING_SIZES.get(level, BODY_SIZE),
+                bold=True,
+                name=f"Heading {level}",
+                space_after=HEADING_SPACE_AFTER,
+            )
+        elif kind == "paragraph":
+            text = str(block.get("text", "")).strip()
+            _add_text(flow, text, name="Paragraph", space_after=PARAGRAPH_SPACE_AFTER)
+        elif kind == "list":
+            for item in block.get("items", []) or []:
+                _add_text(
+                    flow,
+                    f"• {item}".strip(),
+                    indent=LIST_INDENT,
+                    hanging=LIST_HANGING,
+                    name="List",
+                    space_after=LIST_SPACE_AFTER,
+                )
+        elif kind == "table":
+            rows = block.get("rows", []) or []
+            _add_table(flow, [[str(cell) for cell in row] for row in rows])
+        elif kind == "image":
+            caption = str(block.get("caption", "")).strip()
+            if caption:
+                _add_text(flow, f"[{caption}]", name="Caption", space_after=PARAGRAPH_SPACE_AFTER)
+    if not flow.pages:
+        flow.start_page()
+    return write_drawing(flow.pages, out_path, title=title)
+
+
 def build_document_vsdx(
     blocks: list,
     out_path: Path,

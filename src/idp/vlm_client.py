@@ -17,6 +17,7 @@ from idp.feedback_store import FeedbackStore
 from idp.prompts import (
     annotation_system_prompt,
     entity_system_prompt,
+    layout_system_prompt,
     markdown_system_prompt,
 )
 
@@ -784,6 +785,54 @@ class VlmClient:
             marked.append(f"<!-- page {i + 1} -->\n{part}")
         return "\n\n".join(marked)
 
+    async def reconstruct_layout(self, images: list[Path]) -> dict:
+        if not images:
+            return {"blocks": []}
+        sys_prompt = layout_system_prompt()
+        http = self._http()
+        sem = self._semaphore()
+        max_tokens = self._test_max_tokens()
+
+        async def _process_chunk(chunk: list[Path]) -> dict:
+            async with sem:
+                user_content = [
+                    {"type": "text", "text": "Reconstruct the document layout as JSON."},
+                ]
+                for img in chunk:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                    })
+                payload = {
+                    "model": settings.vl_model,
+                    "messages": [
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": max_tokens,
+                    "include_reasoning": False,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                }
+                response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                content = _strip_code_fences(_strip_thinking_blocks(content))
+                try:
+                    parsed = _parse_vlm_json_response(content, "layout")
+                    if isinstance(parsed, dict) and isinstance(parsed.get("blocks"), list):
+                        return parsed
+                except Exception:
+                    pass
+                return {"blocks": []}
+
+        tasks = [_process_chunk(chunk) for chunk in self._chunked(images)]
+        parts = await asyncio.gather(*tasks)
+        blocks: list[dict] = []
+        for part in parts:
+            blocks.extend(part.get("blocks", []))
+        return {"blocks": blocks}
+
     async def extract_entities_from_text(
         self,
         text: str,
@@ -927,6 +976,10 @@ async def generate_document_annotation(
 
 async def reconstruct_markdown(images: list[Path]) -> str:
     return await _default_vlm_client.reconstruct_markdown(images)
+
+
+async def reconstruct_layout(images: list[Path]) -> dict:
+    return await _default_vlm_client.reconstruct_layout(images)
 
 
 async def extract_entities_from_text(

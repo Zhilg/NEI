@@ -64,6 +64,36 @@ class PromptBuilder:
             ),
         )
 
+    def layout(self) -> PromptTemplate:
+        if self.test:
+            return PromptTemplate(
+                name="layout_test",
+                content="Convert the document images to a JSON layout. Output only JSON.",
+            )
+        return PromptTemplate(
+            name="layout",
+            content=(
+                "Analyze the document image and return a structured JSON layout of its content.\n\n"
+                "Identify every block of the document in reading order: headings, paragraphs,\n"
+                "lists, tables and images. For each block output an object with a 'type' field.\n\n"
+                "Block types:\n"
+                '- {"type": "heading", "level": 1..6, "text": "..."}\n'
+                '- {"type": "paragraph", "text": "..."}\n'
+                '- {"type": "list", "items": ["...", "..."]}\n'
+                '- {"type": "table", "rows": [["cell", "cell"], ["cell", "cell"]]}\n'
+                '- {"type": "image", "caption": "..."}\n\n'
+                "Rules:\n"
+                "- Preserve the reading order of the blocks.\n"
+                "- Mark titles and section headings as headings (level 1 for the title, 2 for sections, 3 for subsections).\n"
+                "- Keep numbered and bulleted lists as lists.\n"
+                "- Preserve tables as rows of cells — read ALL columns.\n"
+                "- Describe every image, chart, diagram or figure as an image block with a caption.\n"
+                "- Exclude page numbers, headers, footers, watermarks, copyright notices.\n\n"
+                'Return a single JSON object: {"blocks": [ ... ]}\n'
+                "No explanations, no code fences, no extra text, no thinking blocks, no reasoning."
+            ),
+        )
+
     def entity(self) -> PromptTemplate:
         if self.test:
             return PromptTemplate(
@@ -147,6 +177,10 @@ def annotation_system_prompt() -> str:
 
 def markdown_system_prompt(test: bool = False) -> str:
     return PromptBuilder(test=test).markdown().content
+
+
+def layout_system_prompt(test: bool = False) -> str:
+    return PromptBuilder(test=test).layout().content
 
 
 def entity_system_prompt(

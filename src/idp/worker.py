@@ -33,6 +33,7 @@ from idp.vlm_client import (
     extract_entities_from_text,
     extract_paragraphs,
     generate_document_annotation,
+    reconstruct_layout,
     reconstruct_markdown,
     extract_entities_from_images,
     close_vlm_client,
@@ -84,11 +85,13 @@ class Worker:
         force: bool = False,
         visio_mode: bool = False,
         visio_content: str = "",
+        visio_layout: bool = False,
     ) -> None:
         self.artifacts_mode = artifacts_mode or settings.artifacts_mode
         self.force = force
         self.visio_mode = visio_mode or settings.visio_mode
         self.visio_content = (visio_content or "").strip().lower()
+        self.visio_layout = visio_layout
         self._input_root: Path = settings.input_root
         self._processed: set[str] = set()
         self._stats_writer: StatsWriter | None = None
@@ -213,6 +216,35 @@ class Worker:
         text = text.replace("—", "-")
         text = text.replace("…", "...")
         return text
+
+    @staticmethod
+    def _layout_to_markdown(layout: dict) -> str:
+        lines: list[str] = []
+        for block in layout.get("blocks", []) or []:
+            if not isinstance(block, dict):
+                continue
+            kind = block.get("type")
+            if kind == "heading":
+                level = min(max(int(block.get("level", 1) or 1), 1), 6)
+                lines.append(f"{chr(35) * level} {block.get('text', '')}")
+            elif kind == "paragraph":
+                lines.append(str(block.get("text", "")))
+            elif kind == "list":
+                for item in block.get("items", []) or []:
+                    lines.append(f"- {item}")
+            elif kind == "table":
+                rows = block.get("rows", []) or []
+                if rows:
+                    lines.append(" | ".join(str(c) for c in rows[0]))
+                    lines.append(" | ".join("---" for _ in rows[0]))
+                    for row in rows[1:]:
+                        lines.append(" | ".join(str(c) for c in row))
+            elif kind == "image":
+                caption = block.get("caption", "")
+                if caption:
+                    lines.append(f"[Image: {caption}]")
+            lines.append("")
+        return "\n".join(lines).strip()
 
     def _normalize_markdown(self, markdown: str) -> str:
         return self._normalize_typography(
@@ -385,8 +417,18 @@ class Worker:
         """
         png = await asyncio.to_thread(self._prepare_image, file_path, relative)
         timer.pages = 1
-        vlm_markdown = await reconstruct_markdown([png])
-        clean_markdown = strip_bbox_annotations(vlm_markdown)
+        layout = None
+        if self.visio_layout:
+            layout = await reconstruct_layout([png])
+            clean_markdown = self._layout_to_markdown(layout)
+            layout_path = self._rendered_dir(relative).parent / "layout.json"
+            try:
+                layout_path.write_text(json.dumps(layout, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+        else:
+            vlm_markdown = await reconstruct_markdown([png])
+            clean_markdown = strip_bbox_annotations(vlm_markdown)
         document_type = detect_document_type(file_path, clean_markdown)
         text_entities = await extract_entities_from_text(
             clean_markdown, model=settings.vl_model, document_type=document_type
@@ -396,13 +438,15 @@ class Worker:
         paragraphs = extract_paragraphs(clean_markdown)
         annotation = await self._safe_annotation(text=clean_markdown)
         final_markdown = self._normalize_markdown(clean_markdown)
-        annotated_markdown = self._normalize_markdown(vlm_markdown)
         self._write_artifact(output_md_tmp, output_md, final_markdown)
-        return self._ok_result(
+        result = self._ok_result(
             file_path, relative, timer, file_path.suffix.lower().lstrip("."),
-            annotated_markdown, paragraphs, all_entities, annotation, document_type,
-            text=annotated_markdown,
+            final_markdown, paragraphs, all_entities, annotation, document_type,
+            text=final_markdown,
         )
+        if layout is not None:
+            result._layout = layout
+        return result
 
     def _prepare_image(self, file_path: Path, relative: Path) -> Path:
         """Put the scan into the rendered pages as a PNG the VLM can read."""
@@ -464,6 +508,7 @@ class Worker:
         if result.status != "ok":
             return
         try:
+            layout = getattr(result, "_layout", None)
             bundle_dir = await asyncio.to_thread(
                 txt_exporter.export,
                 file_path,
@@ -474,6 +519,7 @@ class Worker:
                 document_type=result.document_type,
                 annotation=result.annotation,
                 metadata=result.metadata,
+                layout=layout,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Txt export failed for %s: %s", file_path.name, exc)
@@ -619,6 +665,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--visio-content", choices=("pages", "sheet", "document"), default="",
                         help="Content of the Visio drawing: page renders (default), "
                              "all renders on one sheet or the editable document")
+    parser.add_argument("--visio-layout", action="store_true",
+                        help="Have the VLM return a structured JSON layout instead of Markdown")
     return parser.parse_args()
 
 

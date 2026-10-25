@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from idp.config import settings
-from idp.visio_document import build_document_vsdx
+from idp.visio_document import build_document_vsdx, build_layout_vsdx
 from idp.visio_exporter import build_bundle_vsdx
 
 logger = logging.getLogger(__name__)
@@ -704,7 +704,15 @@ def build_visio(bundle_dir: Path, blocks: list[Block], content: str | None = Non
     """
     bundle_dir = Path(bundle_dir)
     target = bundle_dir / "reconstruct.vsdx"
+    layout_file = bundle_dir / "layout.json"
     content = (content or settings.visio_content or "pages").lower()
+    if layout_file.is_file():
+        import json
+        try:
+            layout = json.loads(layout_file.read_text(encoding="utf-8"))
+            return build_layout_vsdx(layout, target, title=bundle_dir.name, base_dir=bundle_dir)
+        except Exception:
+            pass
     if content == "document":
         return build_document_vsdx(
             blocks,

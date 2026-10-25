@@ -341,6 +341,7 @@ class TxtExporter:
         document_type: str = "other",
         annotation: str = "",
         metadata: dict | None = None,
+        layout: dict | None = None,
     ) -> Path:
         bundle_dir = self._bundle_dir(relative)
         images_dir = bundle_dir / "images"
@@ -365,6 +366,10 @@ class TxtExporter:
             json.dumps({"tables": parse_markdown_tables(text)}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        if layout is not None:
+            (bundle_dir / "layout.json").write_text(
+                json.dumps(layout, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
         self._write_meta(bundle_dir, source, relative, file_type, pages, document_type, annotation, metadata or {}, images_dir)
         return bundle_dir
 

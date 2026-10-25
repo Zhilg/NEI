@@ -299,6 +299,23 @@ def test_worker_rebuilds_a_scan_as_an_editable_drawing(workspace, stub_server):
     assert any("Страница" in text for text in texts)
 
 
+def test_worker_layout_mode_uses_the_vlm_json_layout(workspace, stub_server):
+    """--visio-layout makes the VLM return a structured layout instead of Markdown."""
+    _make_png(workspace.input / "scan.png", 600, 800)
+    worker = Worker(artifacts_mode=True, visio_mode=True, visio_layout=True)
+    asyncio.run(worker.run())
+
+    bundle = workspace.output / "txts" / "scan.png"
+    assert (bundle / "layout.json").is_file()
+    assert "blocks" in (bundle / "layout.json").read_text(encoding="utf-8")
+
+    vsdx = bundle / "reconstruct.vsdx"
+    assert vsdx.is_file()
+    assert validate_vsdx(vsdx) == []
+    summary = inspect_vsdx(vsdx)
+    assert summary["texts"] > 0, "the layout becomes editable shapes"
+
+
 DOCUMENT_TEXT = """<!-- page 1 -->
 ## Отчёт по объекту
 

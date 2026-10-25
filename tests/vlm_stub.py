@@ -34,6 +34,11 @@ MARKDOWN_SYSTEM_MARKERS = (
     "Convert the document images to Markdown",
     "Reconstruct as Markdown",
 )
+LAYOUT_SYSTEM_MARKERS = (
+    "structured JSON layout",
+    "Analyze the document image and return a structured JSON layout",
+    "Reconstruct the document layout as JSON",
+)
 ANNOTATION_MARKERS = ("Generate a brief annotation", "brief annotation")
 ENTITY_MARKERS = ("Extract entities", "Extract all entities")
 
@@ -64,7 +69,7 @@ def image_hash(data_url: str) -> str:
 def markdown_for_images(data_urls: list[str]) -> str:
     """One heading/paragraph/list/table block per page image in the request."""
     blocks: list[str] = []
-    for index, data_url in enumerate(data_urls, start=1):
+    for index, data_url in enumerate(data_urls, 1):
         digest = image_hash(data_url)
         blocks.append(
             f"## Страница {digest}\n\n"
@@ -85,6 +90,28 @@ def markdown_for_images(data_urls: list[str]) -> str:
     return "\n\n".join(blocks)
 
 
+def layout_for_images(data_urls: list[str]) -> str:
+    """One heading/paragraph/list/table block per page image as JSON."""
+    blocks: list[dict] = []
+    for index, data_url in enumerate(data_urls, 1):
+        digest = image_hash(data_url)
+        page_blocks = [
+            {"type": "heading", "level": 2, "text": f"Страница {digest}"},
+            {"type": "paragraph", "text": f"Содержание страницы {index}: сводные данные по объекту {digest} приведены в таблице ниже."},
+            {"type": "list", "items": [f"пункт {index}.1;", f"пункт {index}.2."]},
+            {"type": "table", "rows": [
+                ["Параметр", "Значение", "Ед. изм."],
+                [f"Масса {digest}", "12.5", "кг"],
+                [f"Длина {digest}", "3400", "мм"],
+            ]},
+        ]
+        if index == 1:
+            page_blocks.append({"type": "image", "caption": "chart: график выполнения"})
+            page_blocks.append({"type": "paragraph", "text": f"Уточнённое значение {digest} проставлено от руки."})
+        blocks.extend(page_blocks)
+    return json.dumps({"blocks": blocks}, ensure_ascii=False)
+
+
 def _request_images(payload: dict) -> list[str]:
     images: list[str] = []
     for message in payload.get("messages") or []:
@@ -101,6 +128,8 @@ def _request_images(payload: dict) -> list[str]:
 
 def _detect_kind(system: str, user_text: str) -> str:
     haystack = f"{system}\n{user_text}"
+    if any(marker in haystack for marker in LAYOUT_SYSTEM_MARKERS):
+        return "layout"
     if any(marker in haystack for marker in MARKDOWN_SYSTEM_MARKERS):
         return "markdown"
     if any(marker in haystack for marker in ANNOTATION_MARKERS):
@@ -177,7 +206,9 @@ def make_handler(state: StubState):
                 self._json({"error": "stub injected failure"}, status=503)
                 return
 
-            if kind == "markdown":
+            if kind == "layout":
+                content = layout_for_images(images)
+            elif kind == "markdown":
                 content = markdown_for_images(images)
             elif kind == "entities":
                 content = json.dumps({"entities": ENTITIES}, ensure_ascii=False)
