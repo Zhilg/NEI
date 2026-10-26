@@ -322,3 +322,70 @@ def _document_type_focus(document_type: str) -> str | None:
         ),
     }
     return focus_map.get(document_type)
+
+
+def visio_diagram_system_prompt(test: bool = False) -> str:
+    return visio_diagram_prompt(test=test).content
+
+
+def visio_diagram_prompt(test: bool = False) -> PromptTemplate:
+    if test:
+        return PromptTemplate(
+            name="visio_diagram_test",
+            content="Analyze the Visio diagram image and return JSON with shapes. Output only JSON.",
+        )
+    return PromptTemplate(
+        name="visio_diagram",
+        content=(
+            "Analyze this Visio diagram image and extract all shapes and connectors as structured JSON.\n\n"
+            "The diagram contains Visio shapes: rectangles, ellipses, diamonds, lines, connectors, "
+            "text boxes, and groups. Identify each shape and its properties.\n\n"
+            "Coordinate system: 0..1000, origin at TOP-LEFT of the image.\n\n"
+            "Return a single JSON object with this structure:\n"
+            "{\n"
+            '  "page": {"width": 1000, "height": 1000},\n'
+            '  "shapes": [\n'
+            "    {\n"
+            '      "id": "shape_1",\n'
+            '      "type": "rectangle|ellipse|diamond|line|connector|text|image|group",\n'
+            '      "x": 100,\n'
+            '      "y": 100,\n'
+            '      "width": 200,\n'
+            '      "height": 100,\n'
+            '      "text": "Shape text content",\n'
+            '      "font_size": 12,\n'
+            '      "bold": false,\n'
+            '      "italic": false,\n'
+            '      "fill": "#ffffff",\n'
+            '      "line_color": "#000000",\n'
+            '      "line_width": 1,\n'
+            '      "line_style": "solid|dashed|dotted",\n'
+            '      "rotation": 0\n'
+            "    },\n"
+            "    {\n"
+            '      "id": "shape_2",\n'
+            '      "type": "connector",\n'
+            '      "from": "shape_1",\n'
+            '      "to": "shape_3",\n'
+            '      "from_side": "right",\n'
+            '      "to_side": "left",\n'
+            '      "text": "Label",\n'
+            '      "line_style": "solid|dashed",\n'
+            '      "line_width": 1,\n'
+            '      "line_color": "#000000",\n'
+            '      "start_arrow": "none|arrow|open_arrow|dot",\n'
+            '      "end_arrow": "arrow|open_arrow|dot|none"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Rules:\n"
+            "- Detect ALL shapes: rectangles, rounded rectangles, ellipses, diamonds (decision), triangles, hexagons, text boxes, images.\n"
+            "- Detect connectors/lines between shapes with arrow directions.\n"
+            "- Extract text inside each shape (including multi-line).\n"
+            "- For groups, either flatten or include as a group with child shape IDs.\n"
+            "- Preserve fill color, line color, line width, line style, font properties.\n"
+            "- Coordinates are in 0..1000 space (top-left origin).\n"
+            "- If text is rotated, include rotation in degrees.\n"
+            "- Output ONLY valid JSON. No explanations, no code fences, no extra text."
+        ),
+    )

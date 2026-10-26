@@ -19,6 +19,7 @@ from idp.prompts import (
     entity_system_prompt,
     layout_system_prompt,
     markdown_system_prompt,
+    visio_diagram_system_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -833,6 +834,60 @@ class VlmClient:
             blocks.extend(part.get("blocks", []))
         return {"blocks": blocks}
 
+    async def reconstruct_visio_diagram(self, images: list[Path]) -> dict:
+        """Analyze Visio diagram images and return structured shape data."""
+        if not images:
+            return {"page": {"width": 1000, "height": 1000}, "shapes": []}
+        sys_prompt = visio_diagram_system_prompt(test=settings.test_mode)
+        http = self._http()
+        sem = self._semaphore()
+        max_tokens = self._test_max_tokens()
+
+        async def _process_chunk(chunk: list[Path]) -> dict:
+            async with sem:
+                user_content = [
+                    {"type": "text", "text": "Analyze this Visio diagram and extract all shapes and connectors as JSON."},
+                ]
+                for img in chunk:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                    })
+                payload = {
+                    "model": settings.vl_model,
+                    "messages": [
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": max_tokens,
+                    "include_reasoning": False,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                }
+                response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                content = _strip_code_fences(_strip_thinking_blocks(content))
+                try:
+                    parsed = _parse_vlm_json_response(content, "visio_diagram")
+                    if isinstance(parsed, dict) and "shapes" in parsed:
+                        return parsed
+                except Exception:
+                    pass
+                return {"page": {"width": 1000, "height": 1000}, "shapes": []}
+
+        tasks = [_process_chunk(chunk) for chunk in self._chunked(images)]
+        parts = await asyncio.gather(*tasks)
+        all_shapes: list[dict] = []
+        page_width = 1000
+        page_height = 1000
+        for part in parts:
+            if "page" in part:
+                page_width = part["page"].get("width", page_width)
+                page_height = part["page"].get("height", page_height)
+            all_shapes.extend(part.get("shapes", []))
+        return {"page": {"width": page_width, "height": page_height}, "shapes": all_shapes}
+
     async def extract_entities_from_text(
         self,
         text: str,
@@ -980,6 +1035,10 @@ async def reconstruct_markdown(images: list[Path]) -> str:
 
 async def reconstruct_layout(images: list[Path]) -> dict:
     return await _default_vlm_client.reconstruct_layout(images)
+
+
+async def reconstruct_visio_diagram(images: list[Path]) -> dict:
+    return await _default_vlm_client.reconstruct_visio_diagram(images)
 
 
 async def extract_entities_from_text(

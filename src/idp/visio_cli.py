@@ -18,6 +18,7 @@ from pathlib import Path
 
 from idp.config import settings
 from idp.visio_document import build_document_vsdx
+from idp.visio_diagram import build_visio_diagram, reconstruct_visio_diagram_from_png
 from idp.visio_exporter import (
     IMAGE_CONTENT_TYPES,
     build_bundle_vsdx,
@@ -77,9 +78,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--bundle", type=Path, help="txts bundle to convert (uses its images/)")
     parser.add_argument("--text", type=Path,
                         help="markdown file with the document text (document mode)")
-    parser.add_argument("--mode", choices=("pages", "sheet", "document"), default="pages",
-                        help="one Visio page per image (default), a single tiled sheet "
-                             "or the editable text of the document")
+    parser.add_argument("--mode", choices=("pages", "sheet", "document", "diagram"), default="pages",
+                        help="one Visio page per image (default), a single tiled sheet, "
+                             "the editable text of the document, or VLM-analyzed diagram")
     parser.add_argument("--dpi", type=int, default=0,
                         help=f"pixels per inch used for page size (default {settings.render_dpi})")
     parser.add_argument("--page-size", type=parse_page_size, default=None,
@@ -149,6 +150,25 @@ def main() -> None:
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
+    elif mode == "diagram":
+        import asyncio
+        images = collect_inputs(args.inputs, args.pattern)
+        if not images:
+            raise SystemExit("no images found for diagram mode (pass PNG files or a directory)")
+        if len(images) > 1:
+            logger.warning("diagram mode processes only the first image; ignoring %d others", len(images) - 1)
+        png_path = images[0]
+        if args.out is not None:
+            out_path = args.out
+        else:
+            out_path = png_path.with_suffix(".vsdx")
+        dpi = args.dpi or settings.render_dpi or 200
+        created = asyncio.run(reconstruct_visio_diagram_from_png(
+            png_path,
+            out_path,
+            title=args.title or png_path.stem,
+            dpi=dpi,
+        ))
     else:
         images = collect_inputs(args.inputs, args.pattern)
         if not images:
