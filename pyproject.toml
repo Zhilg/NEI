@@ -7,7 +7,7 @@ name = "offline-pdf-batch-pipeline"
 version = "0.1.0"
 description = "Air-gapped PDF batch-processing pipeline"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.14"
 dependencies = [
   "pymupdf>=1.26,<1.27",
   "pillow>=11.2,<12",

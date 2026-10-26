@@ -41,6 +41,7 @@ LAYOUT_SYSTEM_MARKERS = (
 )
 ANNOTATION_MARKERS = ("Generate a brief annotation", "brief annotation")
 ENTITY_MARKERS = ("Extract entities", "Extract all entities")
+VISIO_DIAGRAM_MARKERS = ("Analyze this Visio diagram", "extract all shapes and connectors as JSON")
 
 ENTITIES = [
     {"type": "person", "value": "Иванов И.И.", "page": 1, "paragraph": 1,
@@ -112,6 +113,84 @@ def layout_for_images(data_urls: list[str]) -> str:
     return json.dumps({"blocks": blocks}, ensure_ascii=False)
 
 
+def visio_diagram_for_images(data_urls: list[str]) -> str:
+    """Return a Visio diagram JSON with shapes and connectors per image."""
+    shapes: list[dict] = []
+    shape_id = 1
+    for index, data_url in enumerate(data_urls, 1):
+        digest = image_hash(data_url)
+        # Add a rectangle
+        shapes.append({
+            "id": f"rect_{shape_id}",
+            "type": "rectangle",
+            "x": 100 + (index - 1) * 200,
+            "y": 100,
+            "width": 180,
+            "height": 100,
+            "text": f"Process {digest[:6]}",
+            "font_size": 12,
+            "bold": True,
+            "fill": "#e8f5e9",
+            "line_color": "#2e7d32",
+            "line_width": 2,
+            "line_style": "solid",
+        })
+        shape_id += 1
+        # Add a diamond
+        shapes.append({
+            "id": f"diamond_{shape_id}",
+            "type": "diamond",
+            "x": 100 + (index - 1) * 200,
+            "y": 300,
+            "width": 120,
+            "height": 120,
+            "text": f"Decision {index}",
+            "font_size": 11,
+            "fill": "#fff3e0",
+            "line_color": "#ef6c00",
+            "line_width": 1,
+            "line_style": "dashed",
+        })
+        shape_id += 1
+        # Add a connector
+        shapes.append({
+            "id": f"conn_{shape_id}",
+            "type": "connector",
+            "x": 190 + (index - 1) * 200,
+            "y": 200,
+            "width": 0,
+            "height": 100,
+            "from": f"rect_{shape_id - 2}",
+            "to": f"diamond_{shape_id - 1}",
+            "from_side": "bottom",
+            "to_side": "top",
+            "text": "Yes",
+            "start_arrow": "none",
+            "end_arrow": "arrow",
+            "line_style": "solid",
+            "line_width": 1,
+            "line_color": "#000000",
+        })
+        shape_id += 1
+        # Add a text shape
+        shapes.append({
+            "id": f"text_{shape_id}",
+            "type": "text",
+            "x": 100 + (index - 1) * 200,
+            "y": 500,
+            "width": 300,
+            "height": 50,
+            "text": f"Annotation for page {index}",
+            "font_size": 10,
+            "italic": True,
+        })
+        shape_id += 1
+    return json.dumps({
+        "page": {"width": 1000, "height": 800},
+        "shapes": shapes
+    }, ensure_ascii=False)
+
+
 def _request_images(payload: dict) -> list[str]:
     images: list[str] = []
     for message in payload.get("messages") or []:
@@ -136,6 +215,8 @@ def _detect_kind(system: str, user_text: str) -> str:
         return "annotation"
     if any(marker in haystack for marker in ENTITY_MARKERS):
         return "entities"
+    if any(marker in haystack for marker in VISIO_DIAGRAM_MARKERS):
+        return "visio_diagram"
     return "annotation"
 
 
@@ -212,6 +293,8 @@ def make_handler(state: StubState):
                 content = markdown_for_images(images)
             elif kind == "entities":
                 content = json.dumps({"entities": ENTITIES}, ensure_ascii=False)
+            elif kind == "visio_diagram":
+                content = visio_diagram_for_images(images)
             else:
                 content = "Служебный документ с табличными данными и подписями."
 
