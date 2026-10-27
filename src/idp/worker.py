@@ -647,7 +647,6 @@ class Worker:
             pbar.close()
             result_writer.finalize()
             entity_store.flush()
-            await close_vlm_client()
 
         if new_entity_types:
             new_types = self._get_new_entity_types(new_entity_types, load_entity_schema())

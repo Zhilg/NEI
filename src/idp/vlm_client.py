@@ -120,15 +120,29 @@ class _HttpClient:
     _MAX_ATTEMPTS = 3
     _BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 
-    def __init__(self, client: httpx.AsyncClient, selector: RoundRobinEndpointSelector) -> None:
-        self.client = client
+    def __init__(self, selector: RoundRobinEndpointSelector) -> None:
         self.selector = selector
+        self._client: httpx.AsyncClient | None = None
+
+    async def __aenter__(self) -> "_HttpClient":
+        self._client = httpx.AsyncClient(
+            timeout=settings.vl_timeout_seconds,
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def post(self, url: str, payload: dict) -> httpx.Response:
+        if self._client is None:
+            raise RuntimeError("_HttpClient must be used as async context manager")
         last_error: Exception | None = None
         for attempt in range(self._MAX_ATTEMPTS):
             try:
-                response = await self.client.post(url, json=payload)
+                response = await self._client.post(url, json=payload)
             except (httpx.NetworkError, httpx.TimeoutException) as exc:
                 last_error = exc
                 logger.warning(
@@ -663,7 +677,7 @@ class VlmClient:
     def _http(self, endpoints: list[str] | None = None) -> _HttpClient:
         # Endpoints are resolved per call so runtime config changes (tests, UI) apply.
         selector = RoundRobinEndpointSelector(endpoints if endpoints is not None else get_vl_endpoints())
-        return _HttpClient(_shared_client(), selector)
+        return _HttpClient(selector)
 
     def _semaphore(self) -> asyncio.Semaphore:
         return asyncio.Semaphore(settings.vl_concurrency)
@@ -711,37 +725,37 @@ class VlmClient:
         if not images and not text:
             return ""
         model = self._model(model)
-        http = self._http([endpoint] if endpoint else None)
 
-        async with self._semaphore():
-            if text:
-                user_content = [
-                    {"type": "text", "text": f"Document text:\n{text}\n\nGenerate a brief annotation (1-2 sentences)."},
-                ]
-            else:
-                user_content = [
-                    {"type": "text", "text": "Generate a brief annotation (1-2 sentences) for this document page."},
-                ]
-                for img in (images or [])[:2]:
-                    user_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
-                    })
-            payload = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": annotation_system_prompt()},
-                    {"role": "user", "content": user_content},
-                ],
-                "temperature": 0.1,
-                "max_tokens": 200,
-                "include_reasoning": False,
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
-            }
-            response = await http.post(f"{http.selector.next()}/chat/completions", payload)
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            return _strip_code_fences(_strip_thinking_blocks(content)).strip()
+        async with self._http([endpoint] if endpoint else None) as http:
+            async with self._semaphore():
+                if text:
+                    user_content = [
+                        {"type": "text", "text": f"Document text:\n{text}\n\nGenerate a brief annotation (1-2 sentences)."},
+                    ]
+                else:
+                    user_content = [
+                        {"type": "text", "text": "Generate a brief annotation (1-2 sentences) for this document page."},
+                    ]
+                    for img in (images or [])[:2]:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
+                        })
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": annotation_system_prompt()},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 200,
+                    "include_reasoning": False,
+                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
+                }
+                response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                data = response.json()
+                content = data["choices"][0]["message"]["content"]
+                return _strip_code_fences(_strip_thinking_blocks(content)).strip()
 
     async def reconstruct_markdown(self, images: list[Path]) -> str:
         if not images:
@@ -749,10 +763,9 @@ class VlmClient:
         sys_prompt = with_feedback(markdown_system_prompt(**self._prompt_kwargs()))
         chunks = self._chunked(images)
         max_tokens = self._test_max_tokens()
-        http = self._http()
         sem = self._semaphore()
 
-        async def _process_chunk(chunk: list[Path]) -> str:
+        async def _process_chunk(chunk: list[Path], http: _HttpClient) -> str:
             async with sem:
                 user_content = [
                     {"type": "text", "text": "Reconstruct as Markdown."},
@@ -778,8 +791,9 @@ class VlmClient:
                 content = data["choices"][0]["message"]["content"]
                 return _strip_code_fences(_strip_thinking_blocks(content))
 
-        tasks = [_process_chunk(chunk) for chunk in chunks]
-        parts = await asyncio.gather(*tasks)
+        async with self._http() as http:
+            tasks = [_process_chunk(chunk, http) for chunk in chunks]
+            parts = await asyncio.gather(*tasks)
 
         marked = []
         for i, part in enumerate(parts):
@@ -790,11 +804,10 @@ class VlmClient:
         if not images:
             return {"blocks": []}
         sys_prompt = layout_system_prompt()
-        http = self._http()
         sem = self._semaphore()
         max_tokens = self._test_max_tokens()
 
-        async def _process_chunk(chunk: list[Path]) -> dict:
+        async def _process_chunk(chunk: list[Path], http: _HttpClient) -> dict:
             async with sem:
                 user_content = [
                     {"type": "text", "text": "Reconstruct the document layout as JSON."},
@@ -827,8 +840,9 @@ class VlmClient:
                     pass
                 return {"blocks": []}
 
-        tasks = [_process_chunk(chunk) for chunk in self._chunked(images)]
-        parts = await asyncio.gather(*tasks)
+        async with self._http() as http:
+            tasks = [_process_chunk(chunk, http) for chunk in self._chunked(images)]
+            parts = await asyncio.gather(*tasks)
         blocks: list[dict] = []
         for part in parts:
             blocks.extend(part.get("blocks", []))
@@ -839,11 +853,10 @@ class VlmClient:
         if not images:
             return {"page": {"width": 1000, "height": 1000}, "shapes": []}
         sys_prompt = visio_diagram_system_prompt(test=settings.test_mode)
-        http = self._http()
         sem = self._semaphore()
         max_tokens = self._test_max_tokens()
 
-        async def _process_chunk(chunk: list[Path]) -> dict:
+        async def _process_chunk(chunk: list[Path], http: _HttpClient) -> dict:
             async with sem:
                 user_content = [
                     {"type": "text", "text": "Analyze this Visio diagram and extract all shapes and connectors as JSON."},
@@ -876,8 +889,9 @@ class VlmClient:
                     pass
                 return {"page": {"width": 1000, "height": 1000}, "shapes": []}
 
-        tasks = [_process_chunk(chunk) for chunk in self._chunked(images)]
-        parts = await asyncio.gather(*tasks)
+        async with self._http() as http:
+            tasks = [_process_chunk(chunk, http) for chunk in self._chunked(images)]
+            parts = await asyncio.gather(*tasks)
         all_shapes: list[dict] = []
         page_width = 1000
         page_height = 1000
@@ -901,10 +915,9 @@ class VlmClient:
         max_chars = 500 if settings.test_mode else 6000
         chunks = _chunk_text(text, max_chars)
         markers = _page_markers(text)
-        http = self._http([endpoint] if endpoint else None)
         sem = self._semaphore()
 
-        async def _process_chunk(index: int, chunk: str, page: int) -> list[dict]:
+        async def _process_chunk(index: int, chunk: str, page: int, http: _HttpClient) -> list[dict]:
             async with sem:
                 prompt = f"Text:\n{chunk}\n\nExtract entities and return JSON only."
                 payload = {
@@ -930,11 +943,12 @@ class VlmClient:
                     parsed.get("entities", parsed.get("result", [])), chunk, page
                 )
 
-        tasks = [
-            _process_chunk(i, chunk, _page_at_offset(markers, offset))
-            for i, (chunk, offset) in enumerate(chunks)
-        ]
-        chunk_results = await asyncio.gather(*tasks)
+        async with self._http([endpoint] if endpoint else None) as http:
+            tasks = [
+                _process_chunk(i, chunk, _page_at_offset(markers, offset), http)
+                for i, (chunk, offset) in enumerate(chunks)
+            ]
+            chunk_results = await asyncio.gather(*tasks)
 
         all_entities: list[dict] = []
         for entities in chunk_results:
@@ -951,10 +965,9 @@ class VlmClient:
         sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=True, **test_kwargs))
         max_tokens = self._test_max_tokens()
         chunks = self._chunked(images)
-        http = self._http()
         sem = self._semaphore()
 
-        async def _process_chunk(index: int, chunk: list[Path], page: int) -> list[dict]:
+        async def _process_chunk(index: int, chunk: list[Path], page: int, http: _HttpClient) -> list[dict]:
             async with sem:
                 user_content = [
                     {"type": "text", "text": "Extract all entities from this document page image."},
@@ -984,11 +997,12 @@ class VlmClient:
                     return []
                 return self._collect_entities(parsed.get("entities", []), content, page)
 
-        tasks = [
-            _process_chunk(i, chunk, i * settings.vl_max_images + 1)
-            for i, chunk in enumerate(chunks)
-        ]
-        chunk_results = await asyncio.gather(*tasks)
+        async with self._http() as http:
+            tasks = [
+                _process_chunk(i, chunk, i * settings.vl_max_images + 1, http)
+                for i, chunk in enumerate(chunks)
+            ]
+            chunk_results = await asyncio.gather(*tasks)
 
         all_entities: list[dict] = []
         for entities in chunk_results:
@@ -1000,17 +1014,15 @@ _shared_httpx_client: httpx.AsyncClient | None = None
 
 
 def _shared_client() -> httpx.AsyncClient:
-    """One connection pool shared by every VLM request in this process."""
-    global _shared_httpx_client
-    if _shared_httpx_client is None or _shared_httpx_client.is_closed:
-        _shared_httpx_client = httpx.AsyncClient(
-            timeout=settings.vl_timeout_seconds,
-            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
-        )
-    return _shared_httpx_client
+    """Create a new connection pool for each request to avoid event loop issues."""
+    return httpx.AsyncClient(
+        timeout=settings.vl_timeout_seconds,
+        limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+    )
 
 
 async def close_vlm_client() -> None:
+    """No-op: clients are now per-request."""
     global _shared_httpx_client
     if _shared_httpx_client is not None and not _shared_httpx_client.is_closed:
         await _shared_httpx_client.aclose()
