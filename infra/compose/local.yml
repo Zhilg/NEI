@@ -169,7 +169,7 @@ services:
   web:
     image: ${IDP_APP_IMAGE:-local/idp-app:latest}
     pull_policy: never
-    command: ["idp-web", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "8067"]
+    command: ["idp-web", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "18067"]
     environment:
       PYTHONPATH: /workspace/src
       IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}
@@ -179,7 +179,7 @@ services:
       IDP_VISIO_MODE: ${IDP_VISIO_MODE:-false}
       IDP_VISIO_CONTENT: ${IDP_VISIO_CONTENT:-pages}
     ports:
-      - "8067:8067"
+      - "18067:18067"
     volumes:
       - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
       - ui_data:/data/ui

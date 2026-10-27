@@ -653,7 +653,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Single-file web UI for the IDP pipeline")
     parser.add_argument("--root", default="data/ui", help="working directory (uploads + output)")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--port", type=int, default=18067)
     parser.add_argument(
         "--stub",
         action="store_true",
