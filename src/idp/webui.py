@@ -361,6 +361,7 @@ class FileUIServer:
 
     def _process(self, file_id: str) -> None:
         from idp.worker import Worker
+        import time
 
         job = self._jobs.get(file_id)
         if job is None:
@@ -376,6 +377,9 @@ class FileUIServer:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         self._update(file_id, status="running", error="", files=[], bundle="")
+
+        # Allow Docker internal DNS to stabilize before first VLM call
+        time.sleep(2.0)
 
         saved = (settings.input_root, settings.output_root,
                  settings.artifacts_mode, settings.reconstruct_formats)

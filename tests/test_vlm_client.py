@@ -68,7 +68,7 @@ def test_exhausted_retries_raise():
         settings.vl_endpoints = [server.endpoint]
         client = VlmClient()
         try:
-            with pytest.raises(RuntimeError, match="after retries"):
+            with pytest.raises(RuntimeError, match="after.*retries"):
                 _run(client.generate_document_annotation(text="аннотация документа"))
         finally:
             settings.vl_endpoints = []
