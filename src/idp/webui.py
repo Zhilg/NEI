@@ -189,7 +189,7 @@ function render() {
   rows.innerHTML = '';
   for (const item of state.values()) {
     const tr = document.createElement('tr');
-    const running = item.status === 'running' || item.status === 'pending';
+    const running = item.status === 'running';
     const done = item.status === 'done';
 
     const name = document.createElement('td');
