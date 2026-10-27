@@ -166,6 +166,21 @@ services:
     networks:
       - idp_internal
 
+  stub:
+    image: ${IDP_APP_IMAGE:-local/idp-app:latest}
+    pull_policy: never
+    command: ["python", "-m", "tests.vlm_stub", "--host", "0.0.0.0", "--port", "8123", "--model", "stub-vl"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8123/v1/models', timeout=2)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    profiles:
+      - stub
+    networks:
+      - idp_internal
+
   web:
     image: ${IDP_APP_IMAGE:-local/idp-app:latest}
     pull_policy: never
@@ -183,6 +198,23 @@ services:
     volumes:
       - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
       - ui_data:/data/ui
+    networks:
+      - idp_internal
+
+  web-stub:
+    image: ${IDP_APP_IMAGE:-local/idp-app:latest}
+    pull_policy: never
+    command: ["idp-web", "--stub", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "18067"]
+    environment:
+      PYTHONPATH: /workspace/src
+      IDP_VL_MODEL: stub-vl
+    ports:
+      - "18067:18067"
+    volumes:
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+      - ui_data:/data/ui
+    profiles:
+      - stub
     networks:
       - idp_internal
 
