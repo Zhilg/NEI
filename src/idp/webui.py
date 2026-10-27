@@ -40,8 +40,8 @@ import shutil
 import sys
 import threading
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
