@@ -13,10 +13,10 @@ Everything is standard library (``http.server``) so the UI needs no extra
 packages inside the air-gapped image.
 
 Run (with a real vLLM endpoint):
-    idp-web --root data/ui --host 127.0.0.1 --port 8080
+    idp-web --root data/ui --host 127.0.0.1 --port 18067
 
 Run without a GPU (uses the deterministic VLM stub):
-    idp-web --stub --root data/ui --port 8080
+    idp-web --stub --root data/ui --port 18067
 
 Layout under ``--root``::
 
@@ -661,7 +661,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Single-file web UI for the IDP pipeline")
     parser.add_argument("--root", default="data/ui", help="working directory (uploads + output)")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--port", type=int, default=18067)
     parser.add_argument(
         "--stub",
         action="store_true",
