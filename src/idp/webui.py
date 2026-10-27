@@ -266,7 +266,10 @@ class FileUIServer:
         self.port = port
         self._lock = threading.Lock()
         self._jobs: dict[str, dict] = {}
-        self._server = ThreadingHTTPServer((host, port), self._make_handler())
+        # ThreadingHTTPServer calls socket.getfqdn() on host, which fails for "0.0.0.0"
+        # Use "" (empty string) to bind to all interfaces without reverse DNS lookup
+        bind_host = "" if host == "0.0.0.0" else host
+        self._server = ThreadingHTTPServer((bind_host, port), self._make_handler())
         def _serve():
             try:
                 self._server.serve_forever()
@@ -283,7 +286,9 @@ class FileUIServer:
         import time
         time.sleep(0.1)
         actual_host, actual_port = self._server.server_address[:2]
-        logger.info("HTTP server bound to %s:%d", actual_host, actual_port)
+        # Log with user-facing host
+        display_host = "localhost" if actual_host in ("0.0.0.0", "", "127.0.0.1") else actual_host
+        logger.info("HTTP server bound to %s:%d", display_host, actual_port)
         return self.url
 
     def stop(self) -> None:
@@ -293,8 +298,10 @@ class FileUIServer:
 
     @property
     def url(self) -> str:
-        host, port = self._server.server_address[:2]
-        return f"http://{host}:{port}"
+        # Return the user-facing host (not the internal bind host "")
+        display_host = "localhost" if self.host in ("0.0.0.0", "") else self.host
+        _, port = self._server.server_address[:2]
+        return f"http://{display_host}:{port}"
 
     def status(self) -> dict:
         with self._lock:
