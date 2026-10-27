@@ -40,6 +40,8 @@ import shutil
 import sys
 import threading
 import time
+import urllib.request
+import urllib.error
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -362,6 +364,8 @@ class FileUIServer:
     def _process(self, file_id: str) -> None:
         from idp.worker import Worker
         import time
+        import urllib.request
+        import urllib.error
 
         job = self._jobs.get(file_id)
         if job is None:
@@ -378,8 +382,23 @@ class FileUIServer:
 
         self._update(file_id, status="running", error="", files=[], bundle="")
 
-        # Allow Docker internal DNS to stabilize before first VLM call
-        time.sleep(5.0)
+        # Pre-flight check: verify VLM endpoints are reachable
+        vlm_endpoints = getattr(settings, 'vl_endpoints', []) or [getattr(settings, 'vl_endpoint', '')]
+        for endpoint in vlm_endpoints:
+            if not endpoint:
+                continue
+            models_url = endpoint.rstrip('/') + '/models'
+            for attempt in range(10):
+                try:
+                    with urllib.request.urlopen(models_url, timeout=5) as resp:
+                        if resp.status == 200:
+                            logger.info("VLM endpoint ready: %s", endpoint)
+                            break
+                except Exception as e:
+                    logger.warning("VLM endpoint not ready (attempt %d/10): %s - %s", attempt + 1, models_url, e)
+                    time.sleep(2.0)
+            else:
+                logger.error("VLM endpoint never became ready: %s", endpoint)
 
         saved = (settings.input_root, settings.output_root,
                  settings.artifacts_mode, settings.reconstruct_formats)
