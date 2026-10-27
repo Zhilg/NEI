@@ -117,8 +117,8 @@ class RoundRobinEndpointSelector:
 class _HttpClient:
     """POST helper with retries, backoff and endpoint rotation for VL calls."""
 
-    _MAX_ATTEMPTS = 3
-    _BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+    _MAX_ATTEMPTS = 6
+    _BACKOFF_SECONDS = (1.0, 2.0, 4.0, 8.0, 16.0, 32.0)
 
     def __init__(self, selector: RoundRobinEndpointSelector) -> None:
         self.selector = selector
@@ -136,24 +136,47 @@ class _HttpClient:
             await self._client.aclose()
             self._client = None
 
+    def _is_dns_error(self, exc: Exception) -> bool:
+        error_msg = str(exc).lower()
+        return any(keyword in error_msg for keyword in (
+            "name resolution",
+            "nodename nor servname",
+            "getaddrinfo",
+            "eai_again",
+            "temporary failure",
+        ))
+
     async def post(self, url: str, payload: dict) -> httpx.Response:
         if self._client is None:
             raise RuntimeError("_HttpClient must be used as async context manager")
         last_error: Exception | None = None
+        endpoints_tried_this_cycle: set[str] = set()
+        num_endpoints = len(self.selector._endpoints)
+
         for attempt in range(self._MAX_ATTEMPTS):
+            endpoint_host = url.split("/")[2] if "/" in url else url
+            endpoints_tried_this_cycle.add(endpoint_host)
+
             try:
                 response = await self._client.post(url, json=payload)
             except (httpx.NetworkError, httpx.TimeoutException) as exc:
                 last_error = exc
-                # Check for DNS resolution failure
-                error_msg = str(exc).lower()
-                if "name resolution" in error_msg or "nodename nor servname" in error_msg or "getaddrinfo" in error_msg:
+                is_dns = self._is_dns_error(exc)
+                if is_dns:
                     logger.error("VLM DNS resolution failed for %s: %s", url, exc)
-                    # Try next endpoint immediately for DNS failures
-                    if attempt < self._MAX_ATTEMPTS - 1:
-                        url = f"{self.selector.next()}/chat/completions"
-                        await asyncio.sleep(self._BACKOFF_SECONDS[attempt])
-                        continue
+                    # Check if we've tried all endpoints this cycle
+                    if len(endpoints_tried_this_cycle) >= num_endpoints:
+                        # All endpoints failed DNS - wait longer before next cycle
+                        endpoints_tried_this_cycle.clear()
+                        if attempt < self._MAX_ATTEMPTS - 1:
+                            logger.warning("All %d endpoints failed DNS, waiting %.1fs before retry cycle", num_endpoints, self._BACKOFF_SECONDS[attempt])
+                            await asyncio.sleep(self._BACKOFF_SECONDS[attempt])
+                            continue
+                    else:
+                        # Try next endpoint immediately for DNS failures
+                        if attempt < self._MAX_ATTEMPTS - 1:
+                            url = f"{self.selector.next()}/chat/completions"
+                            continue
                 logger.warning(
                     "VLM network error (attempt %d/%d): %s", attempt + 1, self._MAX_ATTEMPTS, exc
                 )
@@ -169,7 +192,7 @@ class _HttpClient:
             if attempt < self._MAX_ATTEMPTS - 1:
                 url = f"{self.selector.next()}/chat/completions"
                 await asyncio.sleep(self._BACKOFF_SECONDS[attempt])
-        raise RuntimeError(f"VLM request failed after retries: {last_error}")
+        raise RuntimeError(f"VLM request failed after {self._MAX_ATTEMPTS} retries: {last_error}")
 
 
 def _repair_json(text: str) -> str:
