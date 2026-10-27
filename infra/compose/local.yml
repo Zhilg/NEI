@@ -183,11 +183,6 @@ services:
     volumes:
       - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
       - ui_data:/data/ui
-    depends_on:
-      vllm-vl-0:
-        condition: service_healthy
-      vllm-vl-1:
-        condition: service_healthy
     networks:
       - idp_internal
 
