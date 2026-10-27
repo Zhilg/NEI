@@ -267,12 +267,23 @@ class FileUIServer:
         self._lock = threading.Lock()
         self._jobs: dict[str, dict] = {}
         self._server = ThreadingHTTPServer((host, port), self._make_handler())
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        def _serve():
+            try:
+                self._server.serve_forever()
+            except Exception:
+                logger.exception("HTTP server thread crashed")
+        self._thread = threading.Thread(target=_serve, daemon=True)
 
     # ------------------------------------------------------------------ api
 
     def start(self) -> str:
+        logger.info("Starting HTTP server on %s:%d", self.host, self.port or 0)
         self._thread.start()
+        # Give the thread a moment to bind
+        import time
+        time.sleep(0.1)
+        actual_host, actual_port = self._server.server_address[:2]
+        logger.info("HTTP server bound to %s:%d", actual_host, actual_port)
         return self.url
 
     def stop(self) -> None:
