@@ -50,8 +50,8 @@ from idp.reconstructor import reconstruct_bundle
 
 logger = logging.getLogger(__name__)
 
-FORMAT_LABELS = {"md": "Markdown", "txt": "TXT (bundle)", "docx": "DOCX", "pdf": "PDF"}
-DEFAULT_FORMATS = ["docx", "pdf"]
+FORMAT_LABELS = {"md": "Markdown", "txt": "TXT (bundle)", "docx": "DOCX", "pdf": "PDF", "vsdx": "VSDX"}
+DEFAULT_FORMATS = ["docx", "pdf", "vsdx"]
 MAX_UPLOAD_BYTES = 512 * 1024 * 1024
 
 INDEX_HTML = """<!doctype html>
@@ -215,7 +215,7 @@ function render() {
     process.disabled = running;
     process.onclick = () => act(item.id, 'process');
     actions.appendChild(process);
-    for (const format of ['docx', 'pdf', 'txt']) {
+    for (const format of ['docx', 'pdf', 'vsdx', 'txt']) {
       const button = document.createElement('button');
       button.textContent = format.toUpperCase();
       button.title = 'пересобрать ' + format.toUpperCase() + ' из bundle';
@@ -338,7 +338,7 @@ class FileUIServer:
             return
         if action == "process":
             self._process(file_id)
-        elif action in {"docx", "pdf", "txt"}:
+        elif action in {"docx", "pdf", "vsdx", "txt"}:
             self._rebuild_format(file_id, action)
         else:
             self._update(file_id, status="error", error=f"неизвестное действие: {action}")
@@ -408,7 +408,10 @@ class FileUIServer:
             return
         self._update(file_id, status="running", error="")
         try:
-            written = reconstruct_bundle(bundle, [fmt])
+            if fmt == "vsdx":
+                written = reconstruct_bundle(bundle, [fmt], content="document")
+            else:
+                written = reconstruct_bundle(bundle, [fmt])
         except Exception as exc:  # noqa: BLE001
             logger.exception("Reconstruction failed for %s", fmt)
             self._update(file_id, status="error", error=str(exc)[:500])
@@ -429,7 +432,7 @@ class FileUIServer:
             text = bundle / "text.txt"
             if text.is_file():
                 entries.append({"label": "TXT (bundle)", "path": str(text.relative_to(output))})
-            for fmt in ("docx", "pdf"):
+            for fmt in ("docx", "pdf", "vsdx"):
                 artifact = bundle / f"reconstruct.{fmt}"
                 if artifact.is_file():
                     entries.append({"label": fmt.upper(), "path": str(artifact.relative_to(output))})
