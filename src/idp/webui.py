@@ -379,7 +379,7 @@ class FileUIServer:
         self._update(file_id, status="running", error="", files=[], bundle="")
 
         # Allow Docker internal DNS to stabilize before first VLM call
-        time.sleep(2.0)
+        time.sleep(5.0)
 
         saved = (settings.input_root, settings.output_root,
                  settings.artifacts_mode, settings.reconstruct_formats)
