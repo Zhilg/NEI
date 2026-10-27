@@ -478,7 +478,7 @@ class FileUIServer:
             protocol_version = "HTTP/1.1"
 
             def log_message(self, fmt: str, *args: object) -> None:  # silence
-                logger.debug("webui: " + fmt, *args)
+                logger.info("webui: " + fmt, *args)
 
             # ------------------------------------------------------ helpers
 
@@ -497,48 +497,56 @@ class FileUIServer:
             # -------------------------------------------------------- routes
 
             def do_GET(self) -> None:  # noqa: N802
-                parsed = urlparse(self.path)
-                if parsed.path == "/":
-                    body = INDEX_HTML.encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-                    return
-                if parsed.path == "/api/status":
-                    self._send_json(server.status())
-                    return
-                if parsed.path == "/download":
-                    query = parse_qs(parsed.query)
-                    file_id = (query.get("id") or [""])[0]
-                    relative = (query.get("path") or [""])[0]
-                    path = server.resolve_download(file_id, relative)
-                    if path is None:
-                        self._send_json({"error": "not found"}, status=404)
+                try:
+                    parsed = urlparse(self.path)
+                    if parsed.path == "/":
+                        body = INDEX_HTML.encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/html; charset=utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
                         return
-                    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-                    data = path.read_bytes()
-                    self.send_response(200)
-                    self.send_header("Content-Type", mime)
-                    self.send_header("Content-Length", str(len(data)))
-                    self.send_header(
-                        "Content-Disposition", f'attachment; filename="{path.name}"'
-                    )
-                    self.end_headers()
-                    self.wfile.write(data)
-                    return
-                self._send_json({"error": "not found"}, status=404)
+                    if parsed.path == "/api/status":
+                        self._send_json(server.status())
+                        return
+                    if parsed.path == "/download":
+                        query = parse_qs(parsed.query)
+                        file_id = (query.get("id") or [""])[0]
+                        relative = (query.get("path") or [""])[0]
+                        path = server.resolve_download(file_id, relative)
+                        if path is None:
+                            self._send_json({"error": "not found"}, status=404)
+                            return
+                        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                        data = path.read_bytes()
+                        self.send_response(200)
+                        self.send_header("Content-Type", mime)
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header(
+                            "Content-Disposition", f'attachment; filename="{path.name}"'
+                        )
+                        self.end_headers()
+                        self.wfile.write(data)
+                        return
+                    self._send_json({"error": "not found"}, status=404)
+                except Exception as e:
+                    logger.exception("GET %s failed", self.path)
+                    self._send_json({"error": str(e)}, status=500)
 
             def do_POST(self) -> None:  # noqa: N802
-                parsed = urlparse(self.path)
-                if parsed.path == "/upload":
-                    self._handle_upload()
-                    return
-                if parsed.path == "/action":
-                    self._handle_action()
-                    return
-                self._send_json({"error": "not found"}, status=404)
+                try:
+                    parsed = urlparse(self.path)
+                    if parsed.path == "/upload":
+                        self._handle_upload()
+                        return
+                    if parsed.path == "/action":
+                        self._handle_action()
+                        return
+                    self._send_json({"error": "not found"}, status=404)
+                except Exception as e:
+                    logger.exception("POST %s failed", self.path)
+                    self._send_json({"error": str(e)}, status=500)
 
             # ----------------------------------------------------- handlers
 
