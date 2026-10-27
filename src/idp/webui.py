@@ -509,6 +509,12 @@ class FileUIServer:
                         self.end_headers()
                         self.wfile.write(body)
                         return
+                    if parsed.path == "/health":
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json; charset=utf-8")
+                        self.end_headers()
+                        self.wfile.write(b'{"status":"ok"}')
+                        return
                     if parsed.path == "/api/status":
                         self._send_json(server.status())
                         return
@@ -653,6 +659,7 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logger.info("Starting IDP web UI on %s:%d", args.host, args.port)
     stub: StubServer | None = None
     if args.stub:
         try:
@@ -664,6 +671,7 @@ def main() -> None:
 
     server = FileUIServer(Path(args.root), host=args.host, port=args.port)
     url = server.start()
+    logger.info("Server started at %s (root: %s)", url, Path(args.root).resolve())
     print(f"IDP web UI on {url}  (root: {Path(args.root).resolve()})")
     if stub:
         print(f"VLM stub active at {stub.endpoint}")
