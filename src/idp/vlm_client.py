@@ -145,6 +145,15 @@ class _HttpClient:
                 response = await self._client.post(url, json=payload)
             except (httpx.NetworkError, httpx.TimeoutException) as exc:
                 last_error = exc
+                # Check for DNS resolution failure
+                error_msg = str(exc).lower()
+                if "name resolution" in error_msg or "nodename nor servname" in error_msg or "getaddrinfo" in error_msg:
+                    logger.error("VLM DNS resolution failed for %s: %s", url, exc)
+                    # Try next endpoint immediately for DNS failures
+                    if attempt < self._MAX_ATTEMPTS - 1:
+                        url = f"{self.selector.next()}/chat/completions"
+                        await asyncio.sleep(self._BACKOFF_SECONDS[attempt])
+                        continue
                 logger.warning(
                     "VLM network error (attempt %d/%d): %s", attempt + 1, self._MAX_ATTEMPTS, exc
                 )
