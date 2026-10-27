@@ -191,4 +191,3 @@ volumes:
 
 networks:
   idp_internal:
-    internal: true
