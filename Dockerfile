@@ -15,4 +15,6 @@ COPY src ./src
 COPY tests ./tests
 RUN pip install ".[dev]"
 
+EXPOSE 8067
+
 CMD ["idp"]
