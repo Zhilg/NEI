@@ -86,15 +86,27 @@ INDEX_HTML = """<!doctype html>
   .status.done { color: #1c7a3d; }
   .status.error { color: #b3261e; }
   button { font: inherit; border: 1px solid #c3cbd8; background: #fff; border-radius: 7px;
-           padding: 5px 11px; margin: 1px 2px; cursor: pointer; }
+           padding: 5px 11px; margin: 1px 2px; cursor: pointer; transition: all .15s; }
   button:hover:not(:disabled) { border-color: #2f6fe4; color: #2f6fe4; }
   button.primary { background: #2f6fe4; border-color: #2f6fe4; color: #fff; }
   button.primary:hover:not(:disabled) { background: #2559b8; color: #fff; }
-  button:disabled { opacity: .45; cursor: default; }
+  button:disabled { opacity: .45; cursor: not-allowed; background: #f0f2f5; border-color: #d0d5dd; color: #66707f; }
+  button.secondary { background: #fff; border-color: #c3cbd8; color: #1c1e21; }
+  button.secondary:hover:not(:disabled) { border-color: #2f6fe4; color: #2f6fe4; background: #f7faff; }
   a.dl { color: #2f6fe4; text-decoration: none; margin-right: 10px; font-size: 13px; }
   a.dl:hover { text-decoration: underline; }
   .error { color: #b3261e; font-size: 12px; }
   .files { font-size: 13px; color: #3d4652; }
+  .status-badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+  .status-badge.pending { background: #fff3e0; color: #e65100; }
+  .status-badge.running { background: #e3f2fd; color: #1565c0; }
+  .status-badge.done { background: #e8f5e9; color: #2e7d32; }
+  .status-badge.error { background: #fdeaea; color: #c62828; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #e0e0e0; border-top-color: #2f6fe4; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .format-btns { display: flex; flex-wrap: wrap; gap: 4px; }
+  .download-links { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .no-results { color: #99a2ad; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -109,8 +121,8 @@ INDEX_HTML = """<!doctype html>
   <p id="processAllHint" class="hint" style="display:none; margin-top:-10px;">Выбросьте файлы или выберите их — нажмите кнопку, чтобы обработать все сразу</p>
   <table>
     <thead><tr>
-      <th style="width:34%">Файл</th><th style="width:14%">Статус</th>
-      <th style="width:30%">Действия</th><th>Результат</th>
+      <th style="width:30%">Файл</th><th style="width:12%">Статус</th>
+      <th style="width:28%">Действия</th><th>Результат</th>
     </tr></thead>
     <tbody id="rows"></tbody>
   </table>
@@ -191,8 +203,9 @@ function render() {
   rows.innerHTML = '';
   for (const item of state.values()) {
     const tr = document.createElement('tr');
-    const running = item.status === 'running' || item.status === 'pending';
+    const running = item.status === 'running';
     const done = item.status === 'done';
+    const hasBundle = !!item.bundle;
 
     const name = document.createElement('td');
     name.className = 'name';
@@ -200,8 +213,15 @@ function render() {
     tr.appendChild(name);
 
     const status = document.createElement('td');
-    status.className = 'status ' + item.status;
-    status.textContent = { pending: 'в очереди', running: 'обработка…', done: 'готово', error: 'ошибка' }[item.status] || item.status;
+    const badge = document.createElement('span');
+    badge.className = 'status-badge ' + item.status;
+    badge.textContent = { pending: 'в очереди', running: 'обработка…', done: 'готово', error: 'ошибка' }[item.status] || item.status;
+    if (running) {
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      badge.prepend(spinner);
+    }
+    status.appendChild(badge);
     if (item.error) {
       const err = document.createElement('div');
       err.className = 'error';
@@ -211,31 +231,58 @@ function render() {
     tr.appendChild(status);
 
     const actions = document.createElement('td');
-    const process = document.createElement('button');
-    process.textContent = 'Обработать';
-    process.className = 'primary';
-    process.disabled = running;
-    process.onclick = () => act(item.id, 'process');
-    actions.appendChild(process);
-    for (const format of ['docx', 'pdf', 'vsdx', 'txt']) {
-      const button = document.createElement('button');
-      button.textContent = format.toUpperCase();
-      button.title = 'пересобрать ' + format.toUpperCase() + ' из bundle';
-      button.disabled = running || !item.bundle;
-      button.onclick = () => act(item.id, format);
-      actions.appendChild(button);
+    if (!done && !running) {
+      const process = document.createElement('button');
+      process.textContent = 'Обработать';
+      process.className = 'primary';
+      process.disabled = running;
+      process.onclick = () => act(item.id, 'process');
+      actions.appendChild(process);
+    }
+    if (done && hasBundle) {
+      const wrap = document.createElement('div');
+      wrap.className = 'format-btns';
+      for (const format of ['docx', 'pdf', 'vsdx', 'txt']) {
+        const button = document.createElement('button');
+        button.textContent = format.toUpperCase();
+        button.className = 'secondary';
+        button.title = 'пересобрать ' + format.toUpperCase() + ' из bundle';
+        button.onclick = () => act(item.id, format);
+        wrap.appendChild(button);
+      }
+      actions.appendChild(wrap);
+    } else if (running) {
+      const span = document.createElement('span');
+      span.className = 'no-results';
+      span.textContent = '—';
+      actions.appendChild(span);
+    } else if (hasBundle) {
+      const btn = document.createElement('button');
+      btn.textContent = 'Обработать';
+      btn.className = 'primary';
+      btn.onclick = () => act(item.id, 'process');
+      actions.appendChild(btn);
     }
     tr.appendChild(actions);
 
     const result = document.createElement('td');
-    result.className = 'files';
-    for (const file of item.files || []) {
-      const link = document.createElement('a');
-      link.className = 'dl';
-      link.href = 'download?id=' + encodeURIComponent(item.id) + '&path=' + encodeURIComponent(file.path);
-      link.textContent = file.label;
-      link.download = '';
-      result.appendChild(link);
+    if (done && item.files && item.files.length) {
+      const wrap = document.createElement('div');
+      wrap.className = 'download-links';
+      for (const file of item.files) {
+        const link = document.createElement('a');
+        link.className = 'dl';
+        link.href = 'download?id=' + encodeURIComponent(item.id) + '&path=' + encodeURIComponent(file.path);
+        link.textContent = file.label;
+        link.download = '';
+        wrap.appendChild(link);
+      }
+      result.appendChild(wrap);
+    } else {
+      const span = document.createElement('span');
+      span.className = 'no-results';
+      span.textContent = '—';
+      result.appendChild(span);
     }
     tr.appendChild(result);
     rows.appendChild(tr);
