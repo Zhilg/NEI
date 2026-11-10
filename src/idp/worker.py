@@ -309,9 +309,10 @@ class Worker:
                 result = self._skip_result(file_path, relative, timer, file_type)
                 pbar.set_postfix(file=file_path.name, stage="skip")
                 return result.to_dict()
-            await self._export_txt_bundle(file_path, relative, result, txt_exporter)
-            pbar.set_postfix(file=file_path.name, stage="done")
-            return result.to_dict()
+        await self._export_txt_bundle(file_path, relative, result, txt_exporter)
+        self._write_entities(relative, result.entities)
+        pbar.set_postfix(file=file_path.name, stage="done")
+        return result.to_dict()
         except Exception as exc:
             if output_md_tmp.exists():
                 output_md_tmp.unlink()
@@ -462,6 +463,17 @@ class Worker:
             tmp.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(content, encoding="utf-8")
             os.replace(tmp, final)
+
+    def _write_entities(self, relative: Path, entities: list[dict]) -> None:
+        if not self.artifacts_mode:
+            return
+        output_md = settings.output_root / relative.parent / f"{relative.stem}.md"
+        entities_path = output_md.parent / "entities.json"
+        output_md.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            entities_path.write_text(json.dumps(entities, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Cannot write entities %s: %s", entities_path, exc)
 
     async def _safe_annotation(self, text: str | None = None, images: list[Path] | None = None) -> str:
         try:

@@ -519,6 +519,9 @@ class FileUIServer:
         md = next(iter(sorted(output.rglob("*.md"))), None)
         if md is not None:
             entries.append({"label": "Markdown", "path": str(md.relative_to(output))})
+        entities = output / "entities.json"
+        if entities.is_file():
+            entries.append({"label": "Entities (JSON)", "path": str(entities.relative_to(output))})
         bundle = self._bundle_dir(file_id)
         if bundle is not None:
             text = bundle / "text.txt"
