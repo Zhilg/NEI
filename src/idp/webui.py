@@ -478,11 +478,19 @@ class FileUIServer:
              settings.artifacts_mode, settings.reconstruct_formats) = saved
 
         bundle = self._bundle_dir(file_id)
+        result_files = self._collect_files(file_id)
+        if not result_files and bundle is None:
+            self._update(
+                file_id,
+                status="error",
+                error="Обработка завершилась, но результатов не найдено. Проверьте, что файл имеет поддерживаемое расширение (.pdf, .docx, .pptx, .html, .png, .jpg, .jpeg) и что VLM endpoint доступен.",
+            )
+            return
         self._update(
             file_id,
             status="done",
             bundle=str(bundle) if bundle else "",
-            files=self._collect_files(file_id),
+            files=result_files,
         )
 
     def _rebuild_format(self, file_id: str, fmt: str) -> None:
@@ -508,7 +516,7 @@ class FileUIServer:
     def _collect_files(self, file_id: str) -> list[dict]:
         output = self._file_output_dir(file_id)
         entries: list[dict] = []
-        md = next(iter(sorted(output.glob("*.md"))), None)
+        md = next(iter(sorted(output.rglob("*.md"))), None)
         if md is not None:
             entries.append({"label": "Markdown", "path": str(md.relative_to(output))})
         bundle = self._bundle_dir(file_id)

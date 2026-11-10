@@ -628,6 +628,15 @@ class Worker:
             pending.append(file_path)
         pending.sort(key=lambda p: p.stat().st_size if p.is_file() else 0)
 
+        logger.info("Found %d file(s), %d pending after cache check", len(files), len(pending))
+
+        if not pending:
+            logger.warning("No pending files to process in %s", root)
+            result_writer.finalize()
+            entity_store.flush()
+            self._stats_writer.flush()
+            return
+
         pbar = tqdm(total=len(pending), desc="Files", unit="file")
         file_semaphore = asyncio.Semaphore(settings.vl_concurrency)
         new_entity_types: set[str] = set()
@@ -662,6 +671,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="IDP pipeline: extract entities from documents")
     parser.add_argument("--artifacts", action="store_true", help="Save markdown artifacts to output directory")
     parser.add_argument("--force", action="store_true", help="Ignore processed cache and reprocess all files")
+    parser.add_argument("--input", type=Path, default=None, help="Input directory (overrides IDP_INPUT_ROOT)")
     parser.add_argument("--visio", action="store_true",
                         help="Also build a Visio drawing (.vsdx) from the rendered pages")
     parser.add_argument("--visio-content", choices=("pages", "sheet", "document"), default="",
@@ -682,7 +692,7 @@ async def _main() -> None:
         visio_mode=args.visio,
         visio_content=args.visio_content,
     )
-    await worker.run()
+    await worker.run(input_root=args.input)
 
 
 def main() -> None:
