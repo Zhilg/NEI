@@ -790,10 +790,10 @@ class VlmClient:
                     ],
                     "temperature": 0.1,
                     "max_tokens": 200,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                 }
                 response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                if response.status_code != 200:
+                    raise RuntimeError(f"vLLM {response.status_code}: {response.text[:1000]}")
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 return _strip_code_fences(_strip_thinking_blocks(content)).strip()
@@ -824,10 +824,10 @@ class VlmClient:
                     ],
                     "temperature": 0.1,
                     "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                 }
                 response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                if response.status_code != 200:
+                    raise RuntimeError(f"vLLM {response.status_code}: {response.text[:1000]}")
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 return _strip_code_fences(_strip_thinking_blocks(content))
@@ -866,10 +866,10 @@ class VlmClient:
                     ],
                     "temperature": 0.1,
                     "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                 }
                 response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                if response.status_code != 200:
+                    raise RuntimeError(f"vLLM {response.status_code}: {response.text[:1000]}")
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 content = _strip_code_fences(_strip_thinking_blocks(content))
@@ -915,10 +915,10 @@ class VlmClient:
                     ],
                     "temperature": 0.1,
                     "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                 }
                 response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                if response.status_code != 200:
+                    raise RuntimeError(f"vLLM {response.status_code}: {response.text[:1000]}")
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 content = _strip_code_fences(_strip_thinking_blocks(content))
@@ -969,11 +969,11 @@ class VlmClient:
                     ],
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                 }
                 url = f"{http.selector.next()}/chat/completions"
                 response = await http.post(url, payload)
+                if response.status_code != 200:
+                    raise RuntimeError(f"vLLM {response.status_code}: {response.text[:1000]}")
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 content = _strip_thinking_blocks(content)
@@ -1026,10 +1026,10 @@ class VlmClient:
                     ],
                     "temperature": 0.0,
                     "max_tokens": max_tokens,
-                    "include_reasoning": False,
-                    "extra_body": {"chat_template_kwargs": {"enable_thinking": False}, "top_k": 20},
                 }
                 response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                if response.status_code != 200:
+                    raise RuntimeError(f"vLLM {response.status_code}: {response.text[:1000]}")
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 content = _strip_thinking_blocks(content)
