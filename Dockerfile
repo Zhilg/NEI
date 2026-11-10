@@ -1,21 +1,26 @@
-ARG PYTHON_IMAGE=python:3.12-slim
-FROM ${PYTHON_IMAGE}
+FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+WORKDIR /workspace
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        nano \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir \
+    pydantic \
+    pydantic-settings \
+    httpx \
+    tqdm \
+    PyMuPDF \
+    Pillow \
+    python-docx \
+    python-pptx \
+    beautifulsoup4 \
+    lxml \
+    huggingface_hub \
+    uvicorn \
+    fastapi
 
-WORKDIR /app
-COPY pyproject.toml README.md ./
-COPY src ./src
-COPY tests ./tests
-RUN pip install ".[dev]"
+COPY src /workspace/src
+COPY scripts /workspace/scripts
+COPY tests /workspace/tests
 
-EXPOSE 18067
+ENV PYTHONPATH=/workspace/src
 
 CMD ["idp"]

@@ -4,9 +4,6 @@ services:
   worker:
     image: ${IDP_APP_IMAGE:-local/idp-app:latest}
     pull_policy: never
-    build:
-      context: ${IDP_SOURCE_ROOT:-../../}
-      dockerfile: Dockerfile
     command: ["idp"]
 
     environment:
