@@ -418,11 +418,8 @@ class FileUIServer:
     def _bundle_dir(self, file_id: str) -> Path | None:
         output = self._file_output_dir(file_id)
         candidate = next((path for path in sorted(output.rglob("text.txt"))
-                          if path.parent.name != "txts" or True), None)
+                          if (path.parent / "meta.json").is_file()), None)
         if candidate is None:
-            for path in sorted(output.rglob("text.txt")):
-                if (path.parent / "meta.json").is_file():
-                    return path.parent
             return None
         return candidate.parent
 
@@ -431,7 +428,6 @@ class FileUIServer:
         import time
         import urllib.request
         import urllib.error
-
         job = self._jobs.get(file_id)
         if job is None:
             return

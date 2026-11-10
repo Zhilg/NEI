@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODEL="${1:-qwen}"
+
+case "$MODEL" in
+  qwen)  ENV_FILE=".env.qwen"; MODEL_DIR="new_vl"  ;;
+  xiaomi) ENV_FILE=".env.xiaomi"; MODEL_DIR="xiaomi-ocr-0" ;;
+  *) echo "Использование: ./dl [qwen|xiaomi]"; exit 1 ;;
+esac
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Конфиг $ENV_FILE не найден"; exit 1
+fi
+
+# Читаем репозиторий модели из env-файла (запасной вариант по умолчанию)
+MODEL_REPO=$(grep '^IDP_VL_MODEL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
+case "$MODEL" in
+  qwen)  MODEL_REPO="${MODEL_REPO:-cyankiwi/Qwen3.8-27B-AWQ-INT4}" ;;
+  xiaomi) MODEL_REPO="${MODEL_REPO:-xiaomi-research/Xiaomi-OCR-0}" ;;
+esac
+
+MODEL_PATH="transfer/models/$MODEL_DIR"
+
+if [ -d "$MODEL_PATH" ] && [ -n "$(ls -A "$MODEL_PATH" 2>/dev/null)" ]; then
+  echo "Модель уже есть: $MODEL_PATH"
+  exit 0
+fi
+
+echo "Скачиваю $MODEL_REPO в $MODEL_PATH ..."
+mkdir -p transfer/models
+python scripts/download_vl_model.py --repo "$MODEL_REPO" --model-dir "$MODEL_DIR"

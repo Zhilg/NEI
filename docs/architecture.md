@@ -53,8 +53,6 @@ flowchart TB
 
 - `vllm-vl-0`, `vllm-vl-1` — два инстанса vLLM с одной VL-моделью, по одному на GPU;
   worker балансирует запросы round-robin (`IDP_VL_ENDPOINTS`).
-- `infra/compose/sglang.yml` — оверлей поверх `local.yml`, переключает те же сервисы
-  на SGLang (порты и имена не меняются).
 
 Параметры инференса (квантизация, длина контекста, KV-cache) задаются в compose,
 не в Python-коде.

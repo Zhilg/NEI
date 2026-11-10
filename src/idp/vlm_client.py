@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -123,6 +124,7 @@ class _HttpClient:
     def __init__(self, selector: RoundRobinEndpointSelector) -> None:
         self.selector = selector
         self._client: httpx.AsyncClient | None = None
+        self._cache: dict[str, httpx.Response] = {}
 
     async def __aenter__(self) -> "_HttpClient":
         self._client = httpx.AsyncClient(
@@ -149,6 +151,9 @@ class _HttpClient:
     async def post(self, url: str, payload: dict) -> httpx.Response:
         if self._client is None:
             raise RuntimeError("_HttpClient must be used as async context manager")
+        cache_key = _cache_key(url, payload)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         last_error: Exception | None = None
         endpoints_tried_this_cycle: set[str] = set()
         num_endpoints = len(self.selector._endpoints)
@@ -164,16 +169,13 @@ class _HttpClient:
                 is_dns = self._is_dns_error(exc)
                 if is_dns:
                     logger.error("VLM DNS resolution failed for %s: %s", url, exc)
-                    # Check if we've tried all endpoints this cycle
                     if len(endpoints_tried_this_cycle) >= num_endpoints:
-                        # All endpoints failed DNS - wait longer before next cycle
                         endpoints_tried_this_cycle.clear()
                         if attempt < self._MAX_ATTEMPTS - 1:
                             logger.warning("All %d endpoints failed DNS, waiting %.1fs before retry cycle", num_endpoints, self._BACKOFF_SECONDS[attempt])
                             await asyncio.sleep(self._BACKOFF_SECONDS[attempt])
                             continue
                     else:
-                        # Try next endpoint immediately for DNS failures
                         if attempt < self._MAX_ATTEMPTS - 1:
                             url = f"{self.selector.next()}/chat/completions"
                             continue
@@ -182,6 +184,7 @@ class _HttpClient:
                 )
             else:
                 if response.status_code == 200:
+                    self._cache[cache_key] = response
                     return response
                 message = f"VLM request failed: {response.status_code} {response.text[:500]}"
                 last_error = RuntimeError(message)
@@ -195,6 +198,13 @@ class _HttpClient:
         raise RuntimeError(f"VLM request failed after {self._MAX_ATTEMPTS} retries: {last_error}")
 
 
+def _cache_key(url: str, payload: dict) -> str:
+    h = hashlib.sha256()
+    h.update(url.encode("utf-8"))
+    h.update(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+    return h.hexdigest()
+
+
 def _repair_json(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = text.split("\n")
@@ -206,9 +216,8 @@ def _repair_json(text: str) -> str:
             continue
         if repaired:
             prev = repaired[-1].rstrip()
-            if prev and not prev.endswith((',', '{', '[', ':', '}', ']')):
-                if re.match(r'^\s*"(?:\w|[-_])+"\s*:', stripped):
-                    repaired[-1] = prev + ','
+            if prev and not prev.endswith((',', '{', '[', ':', '}', ']')) and re.match(r'^\s*"(?:\w|[-_])+"\s*:', stripped):
+                repaired[-1] = prev + ','
         repaired.append(line)
     return "\n".join(repaired)
 
@@ -665,8 +674,8 @@ def _write_trash(context: str, content: str) -> None:
                 "context": context,
                 "raw": content,
             }, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to write trash for %s: %s", context, exc)
 
 
 def normalize_entities(entities: list[dict], document_type: str = "other") -> list[dict]:

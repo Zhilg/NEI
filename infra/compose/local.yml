@@ -65,17 +65,27 @@ services:
       - --port
       - "8000"
       - --quantization
-      - compressed-tensors
+      - ${IDP_VLLM_QUANTIZATION:-compressed-tensors}
       - --dtype
       - half
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
+      - --kv-cache-dtype
+      - ${IDP_VLLM_KV_CACHE_DTYPE:-auto}
+      - --max-num-seqs
+      - ${IDP_VLLM_MAX_NUM_SEQS:-256}
+      - --max-num-batched-tokens
+      - ${IDP_VLLM_MAX_NUM_BATCHED_TOKENS:-8192}
       - --limit-mm-per-prompt
       - '{"vision": 3}'
       - --default-chat-template-kwargs
       - '{"enable_thinking": false}'
+      - --enable-prefix-caching
+      - --async-scheduling
+      - --attention-backend
+      - ${IDP_VLLM_ATTENTION_BACKEND:-auto}
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
@@ -89,6 +99,9 @@ services:
       VLLM_IMAGE_MAX_PIXELS: "6000000"
       VLLM_IMAGE_MIN_PIXELS: "1003520"
       VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
+      OMP_NUM_THREADS: ${IDP_VLLM_OMP_NUM_THREADS:-1}
+      VLLM_ENABLE_STARTUP_PLAN: ${IDP_VLLM_ENABLE_STARTUP_PLAN:-1}
+      VLLM_CACHE_ROOT: ${IDP_VLLM_CACHE_ROOT:-/models/hf-cache}
 
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models
@@ -128,17 +141,27 @@ services:
       - --port
       - "8001"
       - --quantization
-      - compressed-tensors
+      - ${IDP_VLLM_QUANTIZATION:-compressed-tensors}
       - --dtype
       - half
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
       - ${IDP_VLLM_MAX_MODEL_LEN:-32678}
+      - --kv-cache-dtype
+      - ${IDP_VLLM_KV_CACHE_DTYPE:-auto}
+      - --max-num-seqs
+      - ${IDP_VLLM_MAX_NUM_SEQS:-256}
+      - --max-num-batched-tokens
+      - ${IDP_VLLM_MAX_NUM_BATCHED_TOKENS:-8192}
       - --limit-mm-per-prompt
       - '{"vision": 3}'
       - --default-chat-template-kwargs
       - '{"enable_thinking": false}'
+      - --enable-prefix-caching
+      - --async-scheduling
+      - --attention-backend
+      - ${IDP_VLLM_ATTENTION_BACKEND:-auto}
       - --trust-remote-code
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
@@ -152,6 +175,9 @@ services:
       VLLM_IMAGE_MAX_PIXELS: "6000000"
       VLLM_IMAGE_MIN_PIXELS: "1003520"
       VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
+      OMP_NUM_THREADS: ${IDP_VLLM_OMP_NUM_THREADS:-1}
+      VLLM_ENABLE_STARTUP_PLAN: ${IDP_VLLM_ENABLE_STARTUP_PLAN:-1}
+      VLLM_CACHE_ROOT: ${IDP_VLLM_CACHE_ROOT:-/models/hf-cache}
 
     volumes:
       - ${IDP_MODELS_ROOT:-../../transfer/models}:/models

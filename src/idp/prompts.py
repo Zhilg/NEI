@@ -1,244 +1,177 @@
-"""Declarative prompt templates for VLM interactions."""
+"""Declarative prompt templates for VLM interactions.
+
+Каждая функция возвращает готовый system-prompt строку.
+Публичный API оставлен прежним:
+    markdown_system_prompt(test=False)
+    layout_system_prompt(test=False)
+    entity_system_prompt(document_type, visual, test)
+    combined_system_prompt(document_type, test)
+    annotation_system_prompt()
+    visio_diagram_system_prompt(test=False)
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from idp.entity_schema import build_entity_type_descriptions
 
+# ---------------------------------------------------------------------------
+# Общие фрагменты правил (используются в нескольких промптах)
+# ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class PromptTemplate:
-    name: str
-    content: str
+_NOISE_RULES = """STRICTLY EXCLUDE the following noise elements:
+- Page numbers
+- Running headers and footers
+- Journal names, magazine titles, publication names at page bottom or top
+- Watermarks
+- Copyright notices
+- URLs and email addresses not part of the main content area
+- Any decorative or boilerplate text outside the main content area
 
+"""
 
-@dataclass
-class PromptBuilder:
-    test: bool = False
-    document_type: str = "other"
-    visual: bool = False
+_MARKDOWN_STRUCTURE_RULES = """Preserve the actual document content in reading order.
+Split text into paragraphs. Separate paragraphs with a blank line.
+Mark the document title and every section/chapter heading with Markdown headings
+(# for the title, ## for sections, ### for subsections) — never leave a heading as
+a plain paragraph.
+Keep numbered and bulleted lists as Markdown lists.
+Preserve tables as Markdown tables.
+When a table has many columns, read ALL columns — do not truncate to the first column.
+If a horizontal table is too wide to read in full, note: 'Table too wide, truncated at <column name>'.
 
-    def markdown(self) -> PromptTemplate:
-        if self.test:
-            return PromptTemplate(
-                name="markdown_test",
-                content="Convert the document images to Markdown. Output only Markdown.",
-            )
-        return PromptTemplate(
-            name="markdown",
-            content=(
-                "Reconstruct the document page as clean Markdown.\n\n"
-                "STRICTLY EXCLUDE the following noise elements:\n"
-                "- Page numbers\n"
-                "- Running headers and footers\n"
-                "- Journal names, magazine titles, publication names at page bottom or top\n"
-                "- Watermarks\n"
-                "- Copyright notices\n"
-                "- URLs and email addresses not part of the main content\n"
-                "- Any decorative or boilerplate text outside the main content area\n\n"
-                "Preserve the actual document content in reading order.\n"
-                "Split text into paragraphs. Separate paragraphs with a blank line.\n"
-                "Mark the document title and every section/chapter heading with Markdown headings "
-                "(# for the title, ## for sections, ### for subsections) — never leave a heading as "
-                "a plain paragraph.\n"
-                "Keep numbered and bulleted lists as Markdown lists.\n"
-                "Preserve tables as Markdown tables.\n"
-                "When a table has many columns, read ALL columns — do not truncate to the first column.\n"
-                "If a horizontal table is too wide to read in full, note: 'Table too wide, truncated at <column name>'.\n"
-                "Describe every image, chart, diagram, figure, photo, stamp or signature inline with "
-                "[Image: <kind>: <detailed description of what is shown> | bbox: <x1> <y1> <x2> <y2>], where "
-                "<kind> is one of: photo, chart, diagram, screenshot, stamp, signature, table, other. "
-                "bbox is the rectangle of that visual on the page image in a 0..1000 coordinate system with the "
-                "origin in the top-left corner of the page image. "
-                "If your request contains several page images, also append '| img: <N>', where N is the 1-based "
-                "number of the page image the visual belongs to. "
-                "If a page contains no images, do not add any image placeholder.\n\n"
-                "HANDWRITING DETECTION:\n"
-                "If any text is handwritten (cursive, ink, marker, different from printed text), wrap it in "
-                "[HANDWRITTEN: ... | bbox: <x1> <y1> <x2> <y2>]. Give the bbox of the handwritten fragment on the "
-                "page image (0..1000, origin top-left) and, for several page images in one request, also "
-                "'| img: <N>' with the 1-based page image number.\n"
-                "Example: 'The price is [HANDWRITTEN: 5000 | bbox: 610 420 760 455] rubles.'\n\n"
-                "Output ONLY the Markdown text. No explanations. No thinking blocks. No reasoning."
-            ),
-        )
+"""
 
-    def layout(self) -> PromptTemplate:
-        if self.test:
-            return PromptTemplate(
-                name="layout_test",
-                content="Convert the document images to a JSON layout. Output only JSON.",
-            )
-        return PromptTemplate(
-            name="layout",
-            content=(
-                "Analyze the document image and return a structured JSON layout of its content.\n\n"
-                "Identify every block of the document in reading order: headings, paragraphs,\n"
-                "lists, tables and images. For each block output an object with a 'type' field.\n\n"
-                "Block types:\n"
-                '- {"type": "heading", "level": 1..6, "text": "..."}\n'
-                '- {"type": "paragraph", "text": "..."}\n'
-                '- {"type": "list", "items": ["...", "..."]}\n'
-                '- {"type": "table", "rows": [["cell", "cell"], ["cell", "cell"]]}\n'
-                '- {"type": "image", "caption": "..."}\n\n'
-                "Rules:\n"
-                "- Preserve the reading order of the blocks.\n"
-                "- Mark titles and section headings as headings (level 1 for the title, 2 for sections, 3 for subsections).\n"
-                "- Keep numbered and bulleted lists as lists.\n"
-                "- Preserve tables as rows of cells — read ALL columns.\n"
-                "- Describe every image, chart, diagram or figure as an image block with a caption.\n"
-                "- Exclude page numbers, headers, footers, watermarks, copyright notices.\n\n"
-                'Return a single JSON object: {"blocks": [ ... ]}\n'
-                "No explanations, no code fences, no extra text, no thinking blocks, no reasoning."
-            ),
-        )
+_IMAGE_ANNOTATION_RULES = """Describe every image, chart, diagram, figure, photo, stamp or signature inline with
+[Image: <kind>: <detailed description of what is shown> | bbox: <x1> <y1> <x2> <y2>], where
+<kind> is one of: photo, chart, diagram, screenshot, stamp, signature, table, other.
+bbox is the rectangle of that visual on the page image in a 0..1000 coordinate system with the
+origin in the top-left corner of the page image.
+If your request contains several page images, also append '| img: <N>', where N is the 1-based
+number of the page image the visual belongs to.
+If a page contains no images, do not add any image placeholder.
 
-    def entity(self) -> PromptTemplate:
-        if self.test:
-            return PromptTemplate(
-                name="entity_test",
-                content=(
-                    "Extract entities from the text. Return only JSON with an 'entities' array. "
-                    "For each entity, also include a 'comment' field with a brief explanation in Russian when confidence is below 0.5."
-                    "\n\n"
-                    + _confidence_guidance()
-                ),
-            )
+"""
 
-        intro = (
-            "Extract atomic metadata entities from this document page image.\n\n"
-            if self.visual
-            else "Extract atomic metadata entities from the provided text.\n\n"
-        )
-        rules = _entity_common_rules()
-        output = _entity_output_instruction()
-        focus = _document_type_focus(self.document_type)
+_HANDWRITTEN_RULES = """HANDWRITING DETECTION:
+If any text is handwritten (cursive, ink, marker, different from printed text), wrap it in
+[HANDWRITTEN: ... | bbox: <x1> <y1> <x2> <y2>]. Give the bbox of the handwritten fragment on the
+page image (0..1000, origin top-left) and, for several page images in one request, also
+'| img: <N>' with the 1-based page image number.
+Example: 'The price is [HANDWRITTEN: 5000 | bbox: 610 420 760 455] rubles.'
 
-        if focus:
-            return PromptTemplate(
-                name=f"entity_{self.document_type}",
-                content=intro + focus + rules + output,
-            )
-        return PromptTemplate(
-            name="entity_generic",
-            content=intro + rules + output,
-        )
+"""
 
-    def combined(self) -> PromptTemplate:
-        if self.test:
-            return PromptTemplate(
-                name="combined_test",
-                content=(
-                    "Process the document images. Reconstruct as Markdown and extract entities. "
-                    "Return a single JSON object with 'markdown' and 'entities' keys. "
-                    "For entities with confidence below 0.5, include a 'comment' field with a brief explanation in Russian. No extra text."
-                    "\n\n"
-                    + _confidence_guidance()
-                ),
-            )
-        return PromptTemplate(
-            name="combined",
-            content=(
-                "You are a document analysis assistant. Process the document images and do BOTH tasks:\n\n"
-                "1. Reconstruct the document page as clean Markdown.\n"
-                "2. Extract all entities from the document.\n\n"
-                "For task 1, follow these rules:\n"
-                "- Exclude page numbers, headers, footers, watermarks, copyright notices, decorative text\n"
-                "- Preserve tables as Markdown tables\n"
-                "- Read ALL columns of every table — never truncate to only the first column\n"
-                "- Mark titles and section headings with Markdown headings (# for the title, ## for "
-                "sections, ### for subsections)\n"
-                "- Keep numbered and bulleted lists as Markdown lists\n"
-                "- Describe every image, chart, diagram, figure, photo, stamp or signature inline with "
-                "[Image: <kind>: <detailed description> | bbox: <x1> <y1> <x2> <y2>] using a 0..1000 page "
-                "coordinate system with the origin in the top-left corner, plus '| img: <N>' with the 1-based "
-                "page image number when several page images are sent\n"
-                "- Wrap handwritten text in [HANDWRITTEN: ... | bbox: <x1> <y1> <x2> <y2>] (0..1000, origin top-left)\n"
-                "- Output ONLY the Markdown text\n\n"
-                "For task 2, extract ONLY atomic metadata entities.\n"
-                "ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value. "
-                "FORBIDDEN: full sentences, generic words like 'приказ' without number/date, boilerplate phrases, values > 150 chars.\n\n"
-                "For each entity provide: type, value, normalized_value (if applicable), page, paragraph, evidence, confidence (0.0-1.0), handwritten (true/false).\n\n"
-                "Return a single JSON object with TWO keys:\n"
-                '{"markdown": "<reconstructed markdown>", "entities": [<entity objects>]}\n'
-                "No explanations, no code fences, no extra text, no thinking blocks, no reasoning."
-            ),
-        )
+_TAIL_RULES = "Output ONLY the Markdown text. No explanations. No thinking blocks. No reasoning."
 
 
-def annotation_system_prompt() -> str:
+def _markdown_body(test: bool) -> str:
+    if test:
+        return "Convert the document images to Markdown. Output only Markdown."
     return (
-        "Create a brief annotation (1-2 sentences) for this document. "
-        "Identify the document type, main topic, and key entities. "
-        "Output only the annotation text in Russian. No markdown, no quotes, no explanations."
+        "Reconstruct the document page as clean Markdown.\n\n"
+        + _NOISE_RULES
+        + _MARKDOWN_STRUCTURE_RULES
+        + _IMAGE_ANNOTATION_RULES
+        + _HANDWRITTEN_RULES
+        + _TAIL_RULES
     )
+
+
+# ---------------------------------------------------------------------------
+# Markdown reconstruction
+# ---------------------------------------------------------------------------
 
 
 def markdown_system_prompt(test: bool = False) -> str:
-    return PromptBuilder(test=test).markdown().content
+    return _markdown_body(test)
+
+
+# ---------------------------------------------------------------------------
+# Layout (JSON)
+# ---------------------------------------------------------------------------
 
 
 def layout_system_prompt(test: bool = False) -> str:
-    return PromptBuilder(test=test).layout().content
+    if test:
+        return "Convert the document images to a JSON layout. Output only JSON."
+    return """Analyze the document image and return a structured JSON layout of its content.
+
+Identify every block of the document in reading order: headings, paragraphs,
+lists, tables and images. For each block output an object with a 'type' field.
+
+Block types:
+- {"type": "heading", "level": 1..6, "text": "..."}
+- {"type": "paragraph", "text": "..."}
+- {"type": "list", "items": ["...", "..."]}
+- {"type": "table", "rows": [["cell", "cell"], ["cell", "cell"]]}
+- {"type": "image", "caption": "..."}
+
+Rules:
+- Preserve the reading order of the blocks.
+- Mark titles and section headings as headings (level 1 for the title, 2 for sections, 3 for subsections).
+- Keep numbered and bulleted lists as lists.
+- Preserve tables as rows of cells — read ALL columns.
+- Describe every image, chart, diagram or figure as an image block with a caption.
+- Exclude page numbers, headers, footers, watermarks, copyright notices.
+
+Return a single JSON object: {"blocks": [ ... ]}
+No explanations, no code fences, no extra text, no thinking blocks, no reasoning."""
 
 
-def entity_system_prompt(
-    document_type: str = "other",
-    visual: bool = False,
-    test: bool = False,
-) -> str:
-    return PromptBuilder(test=test, document_type=document_type, visual=visual).entity().content
-
-
-def combined_system_prompt(document_type: str = "other", test: bool = False) -> str:
-    return PromptBuilder(test=test, document_type=document_type, visual=True).combined().content
+# ---------------------------------------------------------------------------
+# Confidence guidance (shared by entity prompts)
+# ---------------------------------------------------------------------------
 
 
 def _confidence_guidance() -> str:
-    return (
-        "CONFIDENCE ESTIMATION (CRITICAL): Estimate confidence (0.0-1.0) based on the actual visual quality "
-        "of the source: handwriting legibility, blur, contrast, character ambiguity, and stroke clarity. "
-        "Do NOT default to 1.0 for handwriting. "
-        "Use 0.9-1.0 only for perfectly crisp printed text that you can read with zero doubt. "
-        "Use 0.5-0.8 for clearly readable handwriting. "
-        "Use 0.3-0.5 for blurred, low-contrast, or ambiguous handwriting. "
-        "Use 0.0-0.3 for illegible handwriting or characters you had to guess. "
-        "Digits vs letters and Cyrillic vs Latin confusions in handwriting must lower confidence.\n"
-    )
+    return """CONFIDENCE ESTIMATION (CRITICAL): Estimate confidence (0.0-1.0) based on the actual visual quality
+of the source: handwriting legibility, blur, contrast, character ambiguity, and stroke clarity.
+Do NOT default to 1.0 for handwriting.
+Use 0.9-1.0 only for perfectly crisp printed text that you can read with zero doubt.
+Use 0.5-0.8 for clearly readable handwriting.
+Use 0.3-0.5 for blurred, low-contrast, or ambiguous handwriting.
+Use 0.0-0.3 for illegible handwriting or characters you had to guess.
+Digits vs letters and Cyrillic vs Latin confusions in handwriting must lower confidence."""
+
+
+# ---------------------------------------------------------------------------
+# Entity extraction
+# ---------------------------------------------------------------------------
 
 
 def _entity_common_rules() -> str:
-    return (
-        "ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value. "
-        "Valid examples: dates, amounts, phone numbers, INN, OGRN, names, addresses, document numbers, codes.\n\n"
-        "PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context. "
-        "This includes:\n"
-        "- Names with titles/positions: 'И. И. Иванов, ведущий научный сотрудник'\n"
-        "- Names without any title or context: just 'Сталин' or 'Иванов'\n"
-        "- Names in lists: 'И. И. Иванов, Д. Д. Дятлов, В.В. Должанский'\n"
-        "- Names in signatures: 'В. Лаптев'\n"
-        "- Names in documents: 'И.В. Сталин'\n\n"
-        "For person entities, extract the FULL NAME as it appears in the text. "
-        "If initials are used (e.g., 'И.В. Сталин'), keep them as-is. "
-        "If only last name appears (e.g., 'Сталин'), extract it as the value.\n\n"
-        "FORBIDDEN (do NOT extract these):\n"
-        "- Full sentences or clauses\n"
-        "- Paragraphs or headings\n"
-        "- Generic document type words without specific value (e.g., just 'приказ', 'договор', 'акт')\n"
-        "- Boilerplate phrases like 'см. приложение', 'без изменений', 'ответственный'\n"
-        "- Values longer than 150 characters\n"
-        "- Values that are identical to the surrounding sentence\n\n"
-        "For each entity provide:\n"
-        "- type: one of the schema types below, or 'other' if none matches\n"
-        "- value: exact short text from the document\n"
-        "- normalized_value: normalized form if applicable, otherwise omit\n"
-        "- page: 1-based page number\n"
-        "- paragraph: 1-based paragraph number within the page\n"
-        "- evidence: exact short snippet containing the entity\n"
-        "- confidence: float 0.0-1.0\n"
-        "- handwritten: true if handwritten, false otherwise\n\n"
-    )
+    return """ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value.
+Valid examples: dates, amounts, phone numbers, INN, OGRN, names, addresses, document numbers, codes.
+
+PERSON NAMES (CRITICAL): Extract ALL person names (ФИО) regardless of context.
+This includes:
+- Names with titles/positions: 'И. И. Иванов, ведущий научный сотрудник'
+- Names without any title or context: just 'Сталин' or 'Иванов'
+- Names in lists: 'И. И. Иванов, Д. Д. Дятлов, В.В. Должанский'
+- Names in signatures: 'В. Лаптев'
+- Names in documents: 'И.В. Сталин'
+
+For person entities, extract the FULL NAME as it appears in the text.
+If initials are used (e.g., 'И.В. Сталин'), keep them as-is.
+If only last name appears (e.g., 'Сталин'), extract it as the value.
+
+FORBIDDEN (do NOT extract these):
+- Full sentences or clauses
+- Paragraphs or headings
+- Generic document type words without specific value (e.g., just 'приказ', 'договор', 'акт')
+- Boilerplate phrases like 'см. приложение', 'без изменений', 'ответственный'
+- Values longer than 150 characters
+- Values that are identical to the surrounding sentence
+
+For each entity provide:
+- type: one of the schema types below, or 'other' if none matches
+- value: exact short text from the document
+- normalized_value: normalized form if applicable, otherwise omit
+- page: 1-based page number
+- paragraph: 1-based paragraph number within the page
+- evidence: exact short snippet containing the entity
+- confidence: float 0.0-1.0
+- handwritten: true if handwritten, false otherwise"""
 
 
 def _entity_output_instruction() -> str:
@@ -251,141 +184,219 @@ def _entity_output_instruction() -> str:
 
 def _document_type_focus(document_type: str) -> str | None:
     focus_map = {
-        "directive": (
-            "Extract atomic metadata entities from this directive document (order/instruction/recommendation).\n\n"
-            "Focus on:\n"
-            "- Directive type and number\n"
-            "- Date\n"
-            "- Addressee (whom it is addressed to: subdivision, position, name)\n"
-            "- Signer (who signed: position, name)\n"
-            "- Basis/reference document\n"
-            "- Item numbers and task descriptions\n"
-            "- Deadlines/dates\n"
-            "- Control officer\n\n"
-        ),
-        "certificate": (
-            "Extract atomic metadata entities from this certificate/statement document.\n\n"
-            "Focus on:\n"
-            "- Certificate type, number, issue date\n"
-            "- To whom issued (ФИО, status)\n"
-            "- Issuer (organization, position, name)\n"
-            "- Basis document\n"
-            "- Status facts (has/does not have, working/studying, etc.)\n"
-            "- Periods and dates (pay attention to AS_OF vs FOR_PERIOD)\n"
-            "- Amounts, rates, codes\n\n"
-        ),
-        "ttkh": (
-            "Extract atomic metadata entities from this tactical-technical characteristics (ТТХ) document.\n\n"
-            "Focus on:\n"
-            "- Object/equipment name and model\n"
-            "- Mass, dimensions\n"
-            "- Crew/size\n"
-            "- Armament/equipment\n"
-            "- Range, speed, endurance\n"
-            "- Engine/powerplant\n"
-            "- Armor/protection\n"
-            "- Electronics/systems\n"
-            "- Dates and versions\n\n"
-            "Preserve units and measurements exactly as written. "
-            "Do NOT normalize technical parameters to generic placeholders.\n\n"
-            "FORBIDDEN:\n"
-            "- Full sentences or clauses\n"
-            "- Generic words like 'характеристики' without value\n"
-            "- Values longer than 150 characters\n\n"
-        ),
-        "ttz": (
-            "Extract atomic metadata entities from this technical specification (ТТЗ) document.\n\n"
-            "Focus on:\n"
-            "- Requirement numbers (e.g., 3.2.1)\n"
-            "- Requirement text (functional, non-functional, constraints)\n"
-            "- Quantitative norms: time, temperature, ranges, probabilities\n"
-            "- Standards (ГОСТ, ISO, IEEE, ТУ)\n"
-            "- Deadline/dates\n"
-            "- Executors/responsible persons\n\n"
-        ),
-        "summary": (
-            "Extract atomic metadata entities from this operational/financial/epidemiological summary.\n\n"
-            "Focus on:\n"
-            "- Summary type and period\n"
-            "- Dates and times\n"
-            "- Locations/regions/objects\n"
-            "- Statuses and categories\n"
-            "- Quantities, counts, amounts\n"
-            "- Identifiers and codes\n"
-            "- Responsible persons/units\n\n"
-            "Preserve exact status wording (e.g., 'ликвидировано', 'в работе'). "
-            "Do NOT lemmatize or normalize statuses.\n\n"
-            "FORBIDDEN:\n"
-            "- Full sentences or clauses\n"
-            "- Generic words like 'сводка' without specifics\n"
-            "- Values longer than 150 characters\n\n"
-        ),
+        "directive": """Extract atomic metadata entities from this directive document (order/instruction/recommendation).
+
+Focus on:
+- Directive type and number
+- Date
+- Addressee (whom it is addressed to: subdivision, position, name)
+- Signer (who signed: position, name)
+- Basis/reference document
+- Item numbers and task descriptions
+- Deadlines/dates
+- Control officer""",
+        "certificate": """Extract atomic metadata entities from this certificate/statement document.
+
+Focus on:
+- Certificate type, number, issue date
+- To whom issued (ФИО, status)
+- Issuer (organization, position, name)
+- Basis document
+- Status facts (has/does not have, working/studying, etc.)
+- Periods and dates (pay attention to AS_OF vs FOR_PERIOD)
+- Amounts, rates, codes""",
+        "ttkh": """Extract atomic metadata entities from this tactical-technical characteristics (ТТХ) document.
+
+Focus on:
+- Object/equipment name and model
+- Mass, dimensions
+- Crew/size
+- Armament/equipment
+- Range, speed, endurance
+- Engine/powerplant
+- Armor/protection
+- Electronics/systems
+- Dates and versions
+
+Preserve units and measurements exactly as written.
+Do NOT normalize technical parameters to generic placeholders.
+
+FORBIDDEN:
+- Full sentences or clauses
+- Generic words like 'характеристики' without value
+- Values longer than 150 characters""",
+        "ttz": """Extract atomic metadata entities from this technical specification (ТТЗ) document.
+
+Focus on:
+- Requirement numbers (e.g., 3.2.1)
+- Requirement text (functional, non-functional, constraints)
+- Quantitative norms: time, temperature, ranges, probabilities
+- Standards (ГОСТ, ISO, IEEE, ТУ)
+- Deadline/dates
+- Executors/responsible persons""",
+        "summary": """Extract atomic metadata entities from this operational/financial/epidemiological summary.
+
+Focus on:
+- Summary type and period
+- Dates and times
+- Locations/regions/objects
+- Statuses and categories
+- Quantities, counts, amounts
+- Identifiers and codes
+- Responsible persons/units
+
+Preserve exact status wording (e.g., 'ликвидировано', 'в работе').
+Do NOT lemmatize or normalize statuses.
+
+FORBIDDEN:
+- Full sentences or clauses
+- Generic words like 'сводка' without specifics
+- Values longer than 150 characters""",
     }
     return focus_map.get(document_type)
 
 
-def visio_diagram_system_prompt(test: bool = False) -> str:
-    return visio_diagram_prompt(test=test).content
-
-
-def visio_diagram_prompt(test: bool = False) -> PromptTemplate:
+def entity_system_prompt(
+    document_type: str = "other",
+    visual: bool = False,
+    test: bool = False,
+) -> str:
     if test:
-        return PromptTemplate(
-            name="visio_diagram_test",
-            content="Analyze the Visio diagram image and return JSON with shapes. Output only JSON.",
+        return (
+            "Extract entities from the text. Return only JSON with an 'entities' array. "
+            "For each entity, also include a 'comment' field with a brief explanation in Russian when confidence is below 0.5.\n\n"
+            + _confidence_guidance()
         )
-    return PromptTemplate(
-        name="visio_diagram",
-        content=(
-            "Analyze this Visio diagram image and extract all shapes and connectors as structured JSON.\n\n"
-            "The diagram contains Visio shapes: rectangles, ellipses, diamonds, lines, connectors, "
-            "text boxes, and groups. Identify each shape and its properties.\n\n"
-            "Coordinate system: 0..1000, origin at TOP-LEFT of the image.\n\n"
-            "Return a single JSON object with this structure:\n"
-            "{\n"
-            '  "page": {"width": 1000, "height": 1000},\n'
-            '  "shapes": [\n'
-            "    {\n"
-            '      "id": "shape_1",\n'
-            '      "type": "rectangle|ellipse|diamond|line|connector|text|image|group",\n'
-            '      "x": 100,\n'
-            '      "y": 100,\n'
-            '      "width": 200,\n'
-            '      "height": 100,\n'
-            '      "text": "Shape text content",\n'
-            '      "font_size": 12,\n'
-            '      "bold": false,\n'
-            '      "italic": false,\n'
-            '      "fill": "#ffffff",\n'
-            '      "line_color": "#000000",\n'
-            '      "line_width": 1,\n'
-            '      "line_style": "solid|dashed|dotted",\n'
-            '      "rotation": 0\n'
-            "    },\n"
-            "    {\n"
-            '      "id": "shape_2",\n'
-            '      "type": "connector",\n'
-            '      "from": "shape_1",\n'
-            '      "to": "shape_3",\n'
-            '      "from_side": "right",\n'
-            '      "to_side": "left",\n'
-            '      "text": "Label",\n'
-            '      "line_style": "solid|dashed",\n'
-            '      "line_width": 1,\n'
-            '      "line_color": "#000000",\n'
-            '      "start_arrow": "none|arrow|open_arrow|dot",\n'
-            '      "end_arrow": "arrow|open_arrow|dot|none"\n'
-            "    }\n"
-            "  ]\n"
-            "}\n\n"
-            "Rules:\n"
-            "- Detect ALL shapes: rectangles, rounded rectangles, ellipses, diamonds (decision), triangles, hexagons, text boxes, images.\n"
-            "- Detect connectors/lines between shapes with arrow directions.\n"
-            "- Extract text inside each shape (including multi-line).\n"
-            "- For groups, either flatten or include as a group with child shape IDs.\n"
-            "- Preserve fill color, line color, line width, line style, font properties.\n"
-            "- Coordinates are in 0..1000 space (top-left origin).\n"
-            "- If text is rotated, include rotation in degrees.\n"
-            "- Output ONLY valid JSON. No explanations, no code fences, no extra text."
-        ),
+
+    intro = (
+        "Extract atomic metadata entities from this document page image.\n\n"
+        if visual
+        else "Extract atomic metadata entities from the provided text.\n\n"
     )
+    rules = _entity_common_rules()
+    output = _entity_output_instruction()
+    focus = _document_type_focus(document_type)
+
+    if focus:
+        return intro + focus + "\n\n" + rules + "\n\n" + output
+    return intro + rules + "\n\n" + output
+
+
+# ---------------------------------------------------------------------------
+# Combined (markdown + entities)
+# ---------------------------------------------------------------------------
+
+
+def combined_system_prompt(document_type: str = "other", test: bool = False) -> str:
+    if test:
+        return (
+            "Process the document images. Reconstruct as Markdown and extract entities. "
+            "Return a single JSON object with 'markdown' and 'entities' keys. "
+            "For entities with confidence below 0.5, include a 'comment' field with a brief explanation in Russian. No extra text.\n\n"
+            + _confidence_guidance()
+        )
+
+    return f"""You are a document analysis assistant. Process the document images and do BOTH tasks:
+
+1. Reconstruct the document page as clean Markdown.
+2. Extract all entities from the document.
+
+For task 1, follow these rules:
+- {_NOISE_RULES.strip()}
+- Preserve tables as Markdown tables
+- Read ALL columns of every table — never truncate to only the first column
+- Mark titles and section headings with Markdown headings (# for the title, ## for sections, ### for subsections)
+- Keep numbered and bulleted lists as Markdown lists
+- Describe every image, chart, diagram, figure, photo, stamp or signature inline with
+  [Image: <kind>: <detailed description> | bbox: <x1> <y1> <x2> <y2>] using a 0..1000 page
+  coordinate system with the origin in the top-left corner, plus '| img: <N>' with the 1-based
+  page image number when several page images are sent
+- Wrap handwritten text in [HANDWRITTEN: ... | bbox: <x1> <y1> <x2> <y2>] (0..1000, origin top-left)
+- Output ONLY the Markdown text
+
+For task 2, extract ONLY atomic metadata entities.
+ENTITY DEFINITION: An entity is a discrete, structured fact with a short specific value.
+FORBIDDEN: full sentences, generic words like 'приказ' without number/date, boilerplate phrases, values > 150 chars.
+
+For each entity provide: type, value, normalized_value (if applicable), page, paragraph, evidence, confidence (0.0-1.0), handwritten (true/false).
+
+Return a single JSON object with TWO keys:
+{{"markdown": "<reconstructed markdown>", "entities": [<entity objects>]}}
+No explanations, no code fences, no extra text, no thinking blocks, no reasoning."""
+
+
+# ---------------------------------------------------------------------------
+# Annotation
+# ---------------------------------------------------------------------------
+
+
+def annotation_system_prompt() -> str:
+    return (
+        "Create a brief annotation (1-2 sentences) for this document. "
+        "Identify the document type, main topic, and key entities. "
+        "Output only the annotation text in Russian. No markdown, no quotes, no explanations."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Visio diagram
+# ---------------------------------------------------------------------------
+
+
+def visio_diagram_system_prompt(test: bool = False) -> str:
+    if test:
+        return "Analyze the Visio diagram image and return JSON with shapes. Output only JSON."
+    return """Analyze this Visio diagram image and extract all shapes and connectors as structured JSON.
+
+The diagram contains Visio shapes: rectangles, ellipses, diamonds, lines, connectors,
+text boxes, and groups. Identify each shape and its properties.
+
+Coordinate system: 0..1000, origin at TOP-LEFT of the image.
+
+Return a single JSON object with this structure:
+{
+  "page": {"width": 1000, "height": 1000},
+  "shapes": [
+    {
+      "id": "shape_1",
+      "type": "rectangle|ellipse|diamond|line|connector|text|image|group",
+      "x": 100,
+      "y": 100,
+      "width": 200,
+      "height": 100,
+      "text": "Shape text content",
+      "font_size": 12,
+      "bold": false,
+      "italic": false,
+      "fill": "#ffffff",
+      "line_color": "#000000",
+      "line_width": 1,
+      "line_style": "solid|dashed|dotted",
+      "rotation": 0
+    },
+    {
+      "id": "shape_2",
+      "type": "connector",
+      "from": "shape_1",
+      "to": "shape_3",
+      "from_side": "right",
+      "to_side": "left",
+      "text": "Label",
+      "line_style": "solid|dashed",
+      "line_width": 1,
+      "line_color": "#000000",
+      "start_arrow": "none|arrow|open_arrow|dot",
+      "end_arrow": "arrow|open_arrow|dot|none"
+    }
+  ]
+}
+
+Rules:
+- Detect ALL shapes: rectangles, rounded rectangles, ellipses, diamonds (decision), triangles, hexagons, text boxes, images.
+- Detect connectors/lines between shapes with arrow directions.
+- Extract text inside each shape (including multi-line).
+- For groups, either flatten or include as a group with child shape IDs.
+- Preserve fill color, line color, line width, line style, font properties.
+- Coordinates are in 0..1000 space (top-left origin).
+- If text is rotated, include rotation in degrees.
+- Output ONLY valid JSON. No explanations, no code fences, no extra text."""

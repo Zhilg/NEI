@@ -39,11 +39,17 @@ class ResultWriter:
 
     def write(self, record: dict[str, Any]) -> None:
         self._buffer.append(record)
+
+    def flush(self) -> None:
+        if not self._buffer:
+            return
         with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            f.writelines(json.dumps(record, ensure_ascii=False) + "\n" for record in self._buffer)
+        self._buffer.clear()
 
     def finalize(self) -> None:
-        """Rewrite the pretty JSON once per run instead of once per file."""
+        """Write buffered records and rewrite the pretty JSON once per run."""
+        self.flush()
         if self.pretty_path is None:
             return
         merged: dict[str, dict[str, Any]] = {}

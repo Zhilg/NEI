@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Union
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class Settings(BaseSettings):
     upscale_factor: int = Field(default=1, ge=1, le=4)
     max_image_dimension: int = Field(default=2048, ge=512, le=4096)
     vl_endpoint: str = "http://vllm-vl:8000/v1"
-    vl_endpoints: Union[str, list[str]] = Field(default="")
+    vl_endpoints: str | list[str] = Field(default="")
     vl_model: str = "Qwen3.8-27B"
     vl_timeout_seconds: float = Field(default=600, gt=0, le=3600)
     vl_max_tokens: int = Field(default=16384, ge=1, le=65536)
@@ -36,10 +35,10 @@ class Settings(BaseSettings):
     artifacts_mode: bool = Field(default=False)
     visio_mode: bool = Field(default=False)
     visio_content: str = Field(default="pages")
-    entity_schema_path: Union[str, Path, None] = Field(default=None)
+    entity_schema_path: str | Path | None = Field(default=None)
     trash_path: str = Field(default="")
     min_entity_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
-    reconstruct_formats: Union[str, list[str]] = Field(default="docx,pdf")
+    reconstruct_formats: str | list[str] = Field(default="docx,pdf")
 
     vllm_quantization: str = Field(default="awq")
     vllm_dtype: str = Field(default="half")

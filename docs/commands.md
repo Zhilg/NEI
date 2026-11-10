@@ -50,22 +50,7 @@ curl http://localhost:8001/v1/models
 
 ## Запуск через SGLang
 
-SGLang может дать более высокий throughput при той же модели. Для этого используйте дополнительный compose-файл поверх `infra/compose/local.yml`:
-
-```bash
-docker compose -f infra/compose/local.yml -f infra/compose/sglang.yml up -d
-```
-
-По умолчанию используется образ `${IDP_SGLANG_IMAGE:-lmsysorg/sglang:latest}`. Модель лежит в `transfer/models/new_vl/`, внутри контейнера это `/models/new_vl`.
-
-Этот оверлей переключает существующие сервисы `vllm-vl-0` и `vllm-vl-1` на SGLang, не создавая дополнительных контейнеров. Порты остаются `8000` и `8001`.
-
-### Проверка
-
-```bash
-curl http://localhost:8000/v1/models
-curl http://localhost:8001/v1/models
-```
+Удалён. В проекте остался только vLLM-стек (`infra/compose/local.yml`).
 
 ## Модель
 
@@ -87,9 +72,9 @@ IDP_VL_MODEL_DIR=new_vl_7b IDP_VL_MODEL=Qwen3.8-7B \\
   docker compose -f infra/compose/local.yml up -d
 ```
 
-`IDP_VL_MODEL_DIR` переключает папку `/models/<dir>` в обоих инстансах vLLM/SGLang
+`IDP_VL_MODEL_DIR` переключает папку `/models/<dir>` в обоих инстансах vLLM
 (и их `HF_HOME`), `IDP_VL_MODEL` — имя модели, которое воркер подставляет в запросы.
-Оба параметра работают и для оверлея `sglang.yml`.
+Оба параметра работают только для `local.yml`.
 
 Сравнить поведение моделей (latency, decode tok/s, страницы/с) можно бенчмарком:
 

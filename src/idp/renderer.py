@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import os
 import shutil
 import tempfile
 import threading
@@ -63,10 +64,11 @@ def _render_single_page(
 
 def _render_all_pages(pdf_path: Path, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        doc = fitz.open(pdf_path)
-        num_pages = len(doc)
-        doc.close()
+    doc = fitz.open(pdf_path)
+    num_pages = len(doc)
+    doc.close()
+    max_workers = min(os.cpu_count() or 4, num_pages, 8)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(
                 _render_single_page,

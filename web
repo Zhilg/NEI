@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODEL="${1:-qwen}"
+
+case "$MODEL" in
+  qwen) cp .env.qwen .env ;;
+  xiaomi) cp .env.xiaomi .env ;;
+  *) echo "Использование: ./web [qwen|xiaomi]"; exit 1 ;;
+esac
+
+docker compose -f infra/compose/local.yml --env-file .env up -d web
+echo "Веб-интерфейс: http://localhost:18067 (модель: $MODEL)"

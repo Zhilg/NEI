@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODEL="${1:-qwen}"
+
+case "$MODEL" in
+  qwen) cp .env.qwen .env ;;
+  xiaomi) cp .env.xiaomi .env ;;
+  *) echo "Использование: ./up [qwen|xiaomi]"; exit 1 ;;
+esac
+
+MODEL_DIR=$(grep '^IDP_VL_MODEL_DIR=' .env | cut -d= -f2-)
+MODEL_PATH="transfer/models/$MODEL_DIR"
+if [ ! -d "$MODEL_PATH" ] || [ -z "$(ls -A "$MODEL_PATH" 2>/dev/null)" ]; then
+  echo "ОШИБКА: папка модели '$MODEL_PATH' пуста или не существует."
+  echo "Сначала скачайте модель: ./dl $MODEL"
+  exit 1
+fi
+
+docker compose -f infra/compose/local.yml --env-file .env up -d --build
+
+echo ""
+echo "=== data/input/ ==="
+if [ -d data/input ] && [ -n "$(ls -A data/input 2>/dev/null)" ]; then
+  ls -la data/input
+else
+  echo "(пусто — кидай сюда PDF/DOCX/сканы)"
+fi
+echo ""
+echo "Веб-интерфейс: http://localhost:18067 (модель: $MODEL)"
+echo "Обработка: ./go [--force]      Логи: ./logs      Стоп: ./down"

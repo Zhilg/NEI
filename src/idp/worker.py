@@ -16,27 +16,26 @@ from tqdm import tqdm
 
 from idp.config import settings
 from idp.document_classifier import detect_document_type
-from idp.entity_schema import load_entity_schema, update_entity_schema
 from idp.docx_converter import convert_docx_to_markdown
+from idp.entity_schema import load_entity_schema, update_entity_schema
+from idp.entity_store import EntityStore
 from idp.html_converter import convert_html_folder_to_markdown, convert_html_to_markdown
 from idp.metadata_extractor import extract_metadata
 from idp.pptx_converter import convert_pptx_to_markdown
-from idp.renderer import extract_pdf_text_and_visual_pages
-from idp.entity_store import EntityStore
 from idp.reconstructor import reconstruct_bundle
+from idp.renderer import extract_pdf_text_and_visual_pages
 from idp.result_writer import ResultWriter
 from idp.stats_writer import FileTimer, StatsWriter
 from idp.txt_export import TxtExporter
 from idp.vlm_client import (
     clean_ocr_artifacts,
-    strip_bbox_annotations,
+    extract_entities_from_images,
     extract_entities_from_text,
     extract_paragraphs,
     generate_document_annotation,
     reconstruct_layout,
     reconstruct_markdown,
-    extract_entities_from_images,
-    close_vlm_client,
+    strip_bbox_annotations,
 )
 
 logger = logging.getLogger(__name__)
@@ -313,7 +312,7 @@ class Worker:
             await self._export_txt_bundle(file_path, relative, result, txt_exporter)
             pbar.set_postfix(file=file_path.name, stage="done")
             return result.to_dict()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if output_md_tmp.exists():
                 output_md_tmp.unlink()
             pbar.set_postfix(file=file_path.name, stage="error")
@@ -387,8 +386,10 @@ class Worker:
         vlm_markdown = await reconstruct_markdown(pngs)
         clean_markdown = strip_bbox_annotations(vlm_markdown)
         document_type = detect_document_type(file_path, clean_markdown)
-        text_entities = await extract_entities_from_text(clean_markdown, model=settings.vl_model, document_type=document_type)
-        image_entities = await extract_entities_from_images(pngs, document_type=document_type)
+        text_entities, image_entities = await asyncio.gather(
+            extract_entities_from_text(clean_markdown, model=settings.vl_model, document_type=document_type),
+            extract_entities_from_images(pngs, document_type=document_type),
+        )
         all_entities = self._aggregate_entities(text_entities + image_entities)
         paragraphs = extract_paragraphs(clean_markdown)
         annotation = await self._safe_annotation(text=clean_markdown)
@@ -430,10 +431,10 @@ class Worker:
             vlm_markdown = await reconstruct_markdown([png])
             clean_markdown = strip_bbox_annotations(vlm_markdown)
         document_type = detect_document_type(file_path, clean_markdown)
-        text_entities = await extract_entities_from_text(
-            clean_markdown, model=settings.vl_model, document_type=document_type
+        text_entities, image_entities = await asyncio.gather(
+            extract_entities_from_text(clean_markdown, model=settings.vl_model, document_type=document_type),
+            extract_entities_from_images([png], document_type=document_type),
         )
-        image_entities = await extract_entities_from_images([png], document_type=document_type)
         all_entities = self._aggregate_entities(text_entities + image_entities)
         paragraphs = extract_paragraphs(clean_markdown)
         annotation = await self._safe_annotation(text=clean_markdown)
@@ -465,7 +466,7 @@ class Worker:
     async def _safe_annotation(self, text: str | None = None, images: list[Path] | None = None) -> str:
         try:
             return await generate_document_annotation(text=text, images=images)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("Annotation generation failed: %s", exc)
             return ""
 
@@ -521,7 +522,7 @@ class Worker:
                 metadata=result.metadata,
                 layout=layout,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("Txt export failed for %s: %s", file_path.name, exc)
             return
         formats = self._reconstruct_formats()
@@ -530,7 +531,7 @@ class Worker:
                 await asyncio.to_thread(
                     reconstruct_bundle, bundle_dir, formats, self._visio_content(file_path)
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Document reconstruction failed for %s: %s", file_path.name, exc)
 
     def _reconstruct_formats(self) -> list[str]:
@@ -625,6 +626,7 @@ class Worker:
             if self._already_processed(file_path):
                 continue
             pending.append(file_path)
+        pending.sort(key=lambda p: p.stat().st_size if p.is_file() else 0)
 
         pbar = tqdm(total=len(pending), desc="Files", unit="file")
         file_semaphore = asyncio.Semaphore(settings.vl_concurrency)
@@ -647,6 +649,7 @@ class Worker:
             pbar.close()
             result_writer.finalize()
             entity_store.flush()
+            self._stats_writer.flush()
 
         if new_entity_types:
             new_types = self._get_new_entity_types(new_entity_types, load_entity_schema())

@@ -21,7 +21,6 @@ DOCX конвертируется в Markdown через `mammoth`.
 | Сервис | Назначение | GPU |
 |---|---|
 | `vllm-vl` | Локальный vLLM/vLLM-совместимый бэкенд с VL-моделью | GPU0 |
-| `sglang-vl` | Альтернативный SGLang-бэкенд для ускорения инференса | GPU0/GPU1 |
 | `worker` | Python-код, монтируемый в контейнер | CPU |
 
 ## Результаты
@@ -90,7 +89,6 @@ $env:HF_TOKEN = "hf_..."
 Скрипт собирает:
 - `local/idp-app:latest` — worker с кодом
 - `local/vllm-vl:latest` — vLLM VL с последней версией transformers
-- `local/sglang:latest` — SGLang VL для ускоренного инференса
 
 Все образы сохраняются в `transfer/idp-images-linux.tar`.
 
@@ -116,7 +114,6 @@ chmod +x scripts/import-images-linux.sh
 ```bash
 docker build -t local/idp-app:latest .
 docker build -t local/vllm-vl:latest ./infra/dockerfiles/vllm-vl
-docker build -t local/sglang:latest ./infra/dockerfiles/sglang
 docker compose -f infra/compose/local.yml up -d
 ```
 
@@ -202,14 +199,6 @@ VLM подменяется заглушкой, тесты идут без вид
 
 ```bash
 python3 -m pytest tests/ -q --timeout 150 --timeout-method=thread
-```
-
-## Запуск через SGLang
-
-Для ускорения инференса можно использовать SGLang вместо vLLM. Поднимите основной стек, а поверх него добавьте `infra/compose/sglang.yml`:
-
-```bash
-docker compose -f infra/compose/local.yml -f infra/compose/sglang.yml up -d
 ```
 
 ## Мониторинг

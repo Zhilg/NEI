@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="${1:-.env}"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Env-файл не найден: $ENV_FILE"; exit 1
+fi
+
+set -a
+. "$ENV_FILE"
+set +a
+
+ENDPOINTS="${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}"
+MODEL_NAME="${IDP_VL_MODEL:-Qwen3.8-27B}"
+
+echo "Проверка здоровья стека ($ENV_FILE)..."
+IFS=',' read -ra EPS <<< "$ENDPOINTS"
+all_ok=1
+for ep in "${EPS[@]}"; do
+  ep="${ep// /}"
+  url="$ep/v1/models"
+  code=$(curl -s -o /tmp/kilo_status_models.json -w "%{http_code}" --max-time 5 "$url" 2>/dev/null || echo "000")
+  if [ "$code" = "200" ]; then
+    if grep -q "$MODEL_NAME" /tmp/kilo_status_models.json 2>/dev/null; then
+      echo "  OK  $ep  (модель '$MODEL_NAME' загружена)"
+    else
+      echo "  WARN $ep  (ответ получен, но модель '$MODEL_NAME' не найдена в списке)"
+      all_ok=0
+    fi
+  else
+    echo "  FAIL $ep  (HTTP $code)"
+    all_ok=0
+  fi
+done
+rm -f /tmp/kilo_status_models.json
+
+echo ""
+docker compose -f infra/compose/local.yml --env-file "$ENV_FILE" ps 2>/dev/null || true
+
+if [ "$all_ok" -eq 1 ]; then
+  echo ""
+  echo "Все эндпоинтыhealthy — стек готов к работе."
+else
+  echo ""
+  echo "Не все эндпоинтыhealthy — проверьте логи: ./logs"
+  exit 1
+fi

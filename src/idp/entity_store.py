@@ -26,7 +26,8 @@ class EntityStore:
             with open(self.path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return data if isinstance(data, dict) else {}
-        except Exception:
+        except Exception as exc:
+            logger.warning("Cannot load entity store %s: %s", self.path, exc)
             return {}
 
     def append(self, source_file: str, paragraphs: list[dict[str, Any]], entities: list[dict[str, Any]], annotation: str = "") -> None:
