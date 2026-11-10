@@ -308,11 +308,10 @@ class Worker:
             else:
                 result = self._skip_result(file_path, relative, timer, file_type)
                 pbar.set_postfix(file=file_path.name, stage="skip")
-                return result.to_dict()
-        await self._export_txt_bundle(file_path, relative, result, txt_exporter)
-        self._write_entities(relative, result.entities)
-        pbar.set_postfix(file=file_path.name, stage="done")
-        return result.to_dict()
+            await self._export_txt_bundle(file_path, relative, result, txt_exporter)
+            self._write_entities(relative, result.entities)
+            pbar.set_postfix(file=file_path.name, stage="done")
+            return result.to_dict()
         except Exception as exc:
             if output_md_tmp.exists():
                 output_md_tmp.unlink()
