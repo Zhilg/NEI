@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir \
     lxml \
     huggingface_hub \
     uvicorn \
-    fastapi
+    fastapi \
+    opencv-python-headless
 
 COPY src /workspace/src
 COPY scripts /workspace/scripts

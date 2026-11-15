@@ -89,6 +89,7 @@ services:
 
     environment:
       NVIDIA_DRIVER_CAPABILITIES: all
+      IDP_VLLM_QUANTIZATION: ${IDP_VLLM_QUANTIZATION:-compressed-tensors}
       HF_HOME: /models/${IDP_VL_MODEL_DIR:-new_vl}/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -165,6 +166,7 @@ services:
 
     environment:
       NVIDIA_DRIVER_CAPABILITIES: all
+      IDP_VLLM_QUANTIZATION: ${IDP_VLLM_QUANTIZATION:-compressed-tensors}
       HF_HOME: /models/${IDP_VL_MODEL_DIR:-new_vl}/hf-cache
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"

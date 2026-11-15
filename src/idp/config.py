@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     vllm_max_model_len: int = Field(default=32768, ge=1024)
     vllm_kv_cache_memory: str = Field(default="15000000000")
 
+    # Image preprocessing for poor-quality scans (Xiaomi camera docs, low res,
+    # rotated pages, shadows). Disabled by default so clean born-digital PDFs
+    # are rendered untouched.
+    preprocess_enabled: bool = Field(default=False)
+    preprocess_steps: str = Field(default="upscale,denoise,shadows,clahe,deskew")
+    preprocess_upscale: int = Field(default=2, ge=1, le=4)
+    preprocess_binarize: bool = Field(default=False)
+
     finetune_feedback_enabled: bool = Field(default=True)
     finetune_feedback_dir: Path = Field(default=Path("/output/finetune"))
     finetune_max_feedback_examples: int = Field(default=10, ge=0, le=100)

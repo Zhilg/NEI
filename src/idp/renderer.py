@@ -14,6 +14,7 @@ import fitz
 from PIL import Image, ImageEnhance
 
 from idp.config import settings
+from idp.image_preprocess import preprocess_for_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,19 @@ def _render_single_page(
     logger.debug("Renderer: page %d raw size: %dx%d", page_index + 1, pix.width, pix.height)
     img = _upscale_image(img, scale=upscale_factor)
     img = _resize_to_max_dimension(img, max_image_dimension)
+    if settings.preprocess_enabled:
+        img = preprocess_for_ocr(
+            img,
+            steps=settings.preprocess_steps,
+            upscale_factor=1,
+            binarize_enabled=settings.preprocess_binarize,
+        )
+        logger.debug(
+            "Renderer: page %d preprocessed size: %dx%d",
+            page_index + 1,
+            img.width,
+            img.height,
+        )
     logger.debug("Renderer: page %d final size: %dx%d", page_index + 1, img.width, img.height)
     out_path = output_dir / f"page_{page_index + 1:05d}.png"
     img.save(out_path, "PNG")
@@ -93,17 +107,30 @@ def render_pdf_to_pngs(pdf_path: Path, output_dir: Path) -> list[Path]:
 def convert_image_to_png(source: Path, target: Path) -> Path:
     """Write an image as PNG (converted when it is not one already).
 
-    The VLM is fed PNG data, so a JPEG scan has to be converted first. The
-    written path is returned - it differs from ``target`` when the conversion
-    fails and the file is copied as it is.
+    The VLM is fed PNG data, so a JPEG scan has to be converted first. When
+    image preprocessing is enabled (poor-quality scans), the page is
+    denoised, shadow-flattened, contrast-boosted and deskewed before saving.
+    The written path is returned - it differs from ``target`` when the
+    conversion fails and the file is copied as it is.
     """
-    if source.suffix.lower() == ".png":
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
-        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
     try:
         with Image.open(source) as image:
-            image.convert("RGB").save(target, "PNG")
+            img = image.convert("RGB")
+            if settings.preprocess_enabled:
+                img = preprocess_for_ocr(
+                    img,
+                    steps=settings.preprocess_steps,
+                    upscale_factor=settings.preprocess_upscale,
+                    binarize_enabled=settings.preprocess_binarize,
+                )
+                logger.debug(
+                    "Renderer: preprocessed scan %s -> %dx%d",
+                    source.name,
+                    img.width,
+                    img.height,
+                )
+            img.save(target, "PNG")
         return target
     except Exception as exc:  # noqa: BLE001 - keep the original file
         logger.warning("Cannot convert %s to PNG: %s", source, exc)
