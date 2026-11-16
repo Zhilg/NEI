@@ -984,6 +984,12 @@ class VlmClient:
 
         async def _process_chunk(index: int, chunk: str, page: int, http: _HttpClient) -> list[dict]:
             async with sem:
+                if len(chunk) > settings.vl_max_context_chars:
+                    logger.warning(
+                        "Chunk still too large: %d chars -> %d chars (forcing truncate)",
+                        len(chunk), settings.vl_max_context_chars,
+                    )
+                    chunk = chunk[: settings.vl_max_context_chars]
                 prompt = f"Text:\n{chunk}\n\nExtract entities and return JSON only."
                 payload = {
                     "model": model,
