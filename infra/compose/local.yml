@@ -21,8 +21,8 @@ services:
       IDP_VL_MAX_IMAGES: ${IDP_VL_MAX_IMAGES:-2}
 
       IDP_VL_TIMEOUT_SECONDS: ${IDP_VL_TIMEOUT_SECONDS:-600}
-      IDP_VL_MAX_TOKENS: ${IDP_VL_MAX_TOKENS:-2048}
-      IDP_VL_MAX_CONTEXT_CHARS: ${IDP_VL_MAX_CONTEXT_CHARS:-4000}
+      IDP_VL_MAX_TOKENS: ${IDP_VL_MAX_TOKENS:-1024}
+      IDP_VL_MAX_CONTEXT_CHARS: ${IDP_VL_MAX_CONTEXT_CHARS:-1500}
       IDP_VL_ENDPOINT: ${IDP_VL_ENDPOINT:-http://vllm-vl:8000/v1}
 
       IDP_VL_CONCURRENCY: ${IDP_VL_CONCURRENCY:-8}
@@ -88,7 +88,7 @@ services:
       - --gpu-memory-utilization
       - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
-      - ${IDP_VLLM_MAX_MODEL_LEN:-32768}
+      - ${IDP_VLLM_MAX_MODEL_LEN:-65536}
       - --kv-cache-dtype
       - ${IDP_VLLM_KV_CACHE_DTYPE:-fp8}
       - --max-num-seqs
