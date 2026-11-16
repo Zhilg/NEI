@@ -53,6 +53,7 @@ case "$cmd" in
     docker compose -f "$COMPOSE_FILE" ps
     ;;
   process)
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d vllm-vl
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm worker idp "$@"
     ;;
   web)
