@@ -787,7 +787,9 @@ class VlmClient:
                 "Annotation text truncated: %d chars -> %d chars (Qwen context window)",
                 len(text), settings.vl_max_context_chars,
             )
-            text = text[: settings.vl_max_context_chars]
+            head = text[: settings.vl_max_context_chars // 2]
+            tail = text[-(settings.vl_max_context_chars // 2):]
+            text = head + "\n...\n[текст обрезан для контекста]\n...\n" + tail
 
         async with self._http([endpoint] if endpoint else None) as http:
             async with self._semaphore():
