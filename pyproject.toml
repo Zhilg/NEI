@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
   "pymupdf>=1.26,<1.27",
   "pillow>=11.2,<12",
+  "numpy>=1.24,<3",
   "mammoth>=1.8,<2",
   "python-pptx>=1.0,<2",
   "python-docx>=1.1,<2",

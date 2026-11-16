@@ -53,14 +53,14 @@ case "$cmd" in
     docker compose -f "$COMPOSE_FILE" ps
     ;;
   process)
-    docker compose -f "$COMPOSE_FILE" run --rm worker idp "$@"
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm worker idp "$@"
     ;;
   web)
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d web
     echo "Веб-интерфейс: http://localhost:18067"
     ;;
   web-stub)
-    docker compose -f "$COMPOSE_FILE" --profile stub up -d web-stub
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile stub up -d web-stub
     echo "Веб-интерфейс (stub): http://localhost:18067"
     ;;
   model)
@@ -90,7 +90,7 @@ case "$cmd" in
     python3 -m pytest tests/ -q --timeout 150 --timeout-method=thread
     ;;
   shell)
-    docker compose -f "$COMPOSE_FILE" run --rm --no-deps worker bash
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm --no-deps worker bash
     ;;
   help|--help|-h|"")
     usage
