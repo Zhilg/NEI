@@ -88,7 +88,7 @@ services:
       - --dtype
       - half
       - --gpu-memory-utilization
-      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.9}
+      - ${IDP_VLLM_GPU_MEMORY_UTILIZATION:-0.5}
       - --max-model-len
       - ${IDP_VLLM_MAX_MODEL_LEN:-32768}
       - --kv-cache-dtype
