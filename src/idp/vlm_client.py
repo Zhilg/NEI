@@ -148,6 +148,18 @@ class _HttpClient:
             "temporary failure",
         ))
 
+    @staticmethod
+    def _is_context_length_error(response: httpx.Response) -> bool:
+        body = response.text.lower()
+        return any(keyword in body for keyword in (
+            "context length",
+            "maximum context",
+            "context_window",
+            "exceeds the maximum",
+            "maximum sequence length",
+            "too many tokens",
+        ))
+
     async def post(self, url: str, payload: dict) -> httpx.Response:
         if self._client is None:
             raise RuntimeError("_HttpClient must be used as async context manager")
@@ -190,6 +202,9 @@ class _HttpClient:
                 last_error = RuntimeError(message)
                 if response.status_code == 429 or 500 <= response.status_code < 600:
                     logger.warning("%s (attempt %d/%d)", message, attempt + 1, self._MAX_ATTEMPTS)
+                elif self._is_context_length_error(response):
+                    logger.error("Qwen context window overflow: %s", message)
+                    raise RuntimeError(message)
                 else:
                     raise RuntimeError(message)
             if attempt < self._MAX_ATTEMPTS - 1:
@@ -767,6 +782,13 @@ class VlmClient:
             return ""
         model = self._model(model)
 
+        if text is not None and len(text) > settings.vl_max_context_chars:
+            logger.warning(
+                "Annotation text truncated: %d chars -> %d chars (Qwen context window)",
+                len(text), settings.vl_max_context_chars,
+            )
+            text = text[: settings.vl_max_context_chars]
+
         async with self._http([endpoint] if endpoint else None) as http:
             async with self._semaphore():
                 if text:
@@ -953,7 +975,7 @@ class VlmClient:
         model = self._model(model)
         sys_prompt = with_feedback(entity_system_prompt(document_type=document_type, visual=False, **self._prompt_kwargs()))
         max_tokens = self._test_max_tokens()
-        max_chars = 500 if settings.test_mode else 6000
+        max_chars = settings.vl_max_context_chars
         chunks = _chunk_text(text, max_chars)
         markers = _page_markers(text)
         sem = self._semaphore()

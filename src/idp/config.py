@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     vl_timeout_seconds: float = Field(default=600, gt=0, le=3600)
     vl_max_tokens: int = Field(default=16384, ge=1, le=65536)
     vl_max_images: int = Field(default=2, gt=0)
+    vl_max_context_chars: int = Field(default=4000, ge=500, le=50000)
     vl_concurrency: int = Field(default=12, ge=1, le=64)
 
     test_mode: bool = Field(default=False)
