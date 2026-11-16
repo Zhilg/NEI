@@ -20,16 +20,16 @@ class Settings(BaseSettings):
 
     input_root: Path = Field(default=Path("/input"))
     output_root: Path = Field(default=Path("/output"))
-    render_dpi: int = Field(default=150, ge=72, le=600)
+    render_dpi: int = Field(default=200, ge=72, le=600)
     upscale_factor: int = Field(default=1, ge=1, le=4)
-    max_image_dimension: int = Field(default=1024, ge=512, le=4096)
+    max_image_dimension: int = Field(default=2048, ge=512, le=4096)
     vl_endpoint: str = "http://vllm-vl:8000/v1"
     vl_endpoints: str | list[str] = Field(default="")
     vl_model: str = "Qwen3.8-27B"
     vl_timeout_seconds: float = Field(default=600, gt=0, le=3600)
-    vl_max_tokens: int = Field(default=8192, ge=1, le=65536)
-    vl_max_images: int = Field(default=1, gt=0)
-    vl_max_context_chars: int = Field(default=8000, ge=1000, le=100000)
+    vl_max_tokens: int = Field(default=16384, ge=1, le=65536)
+    vl_max_images: int = Field(default=2, gt=0)
+    vl_max_context_chars: int = Field(default=16000, ge=1000, le=100000)
     vl_concurrency: int = Field(default=12, ge=1, le=64)
 
     test_mode: bool = Field(default=False)
