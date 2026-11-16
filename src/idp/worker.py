@@ -662,6 +662,7 @@ class Worker:
                 result = await coro
                 pbar.update(1)
                 result_writer.write(result)
+                result_writer.flush()
                 for entity in result.get("entities", []):
                     if isinstance(entity, dict) and entity.get("type"):
                         new_entity_types.add(str(entity["type"]))
