@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir \
     tqdm \
     PyMuPDF \
     Pillow \
+    numpy \
     python-docx \
     python-pptx \
     beautifulsoup4 \
