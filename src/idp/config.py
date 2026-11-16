@@ -20,9 +20,9 @@ class Settings(BaseSettings):
 
     input_root: Path = Field(default=Path("/input"))
     output_root: Path = Field(default=Path("/output"))
-    render_dpi: int = Field(default=200, ge=72, le=600)
+    render_dpi: int = Field(default=150, ge=72, le=600)
     upscale_factor: int = Field(default=1, ge=1, le=4)
-    max_image_dimension: int = Field(default=2048, ge=512, le=4096)
+    max_image_dimension: int = Field(default=1024, ge=512, le=4096)
     vl_endpoint: str = "http://vllm-vl:8000/v1"
     vl_endpoints: str | list[str] = Field(default="")
     vl_model: str = "Qwen3.8-27B"

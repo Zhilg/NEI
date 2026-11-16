@@ -30,9 +30,9 @@ services:
       IDP_TEST_MODE: ${IDP_TEST_MODE:-false}
       IDP_ARTIFACTS_MODE: ${IDP_ARTIFACTS_MODE:-false}
 
-      IDP_RENDER_DPI: ${IDP_RENDER_DPI:-200}
+      IDP_RENDER_DPI: ${IDP_RENDER_DPI:-150}
       IDP_UPSCALE_FACTOR: ${IDP_UPSCALE_FACTOR:-1}
-      IDP_MAX_IMAGE_DIMENSION: ${IDP_MAX_IMAGE_DIMENSION:-2048}
+      IDP_MAX_IMAGE_DIMENSION: ${IDP_MAX_IMAGE_DIMENSION:-1024}
 
       IDP_VISIO_MODE: ${IDP_VISIO_MODE:-false}
       IDP_VISIO_CONTENT: ${IDP_VISIO_CONTENT:-pages}
@@ -44,7 +44,7 @@ services:
       IDP_FINETUNE_FEEDBACK_ENABLED: ${IDP_FINETUNE_FEEDBACK_ENABLED:-true}
 
     volumes:
-      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace
       - ${IDP_INPUT_ROOT:-../../data/input}:/input:ro
       - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
 
@@ -241,7 +241,7 @@ services:
     ports:
       - "18067:18067"
     volumes:
-      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace
       - ui_data:/data/ui
     networks:
       - idp_internal
@@ -256,7 +256,7 @@ services:
     ports:
       - "18067:18067"
     volumes:
-      - ${IDP_SOURCE_ROOT:-../..}:/workspace:ro
+      - ${IDP_SOURCE_ROOT:-../..}:/workspace
       - ui_data:/data/ui
     profiles:
       - stub
