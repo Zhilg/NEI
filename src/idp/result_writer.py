@@ -49,11 +49,12 @@ class ResultWriter:
 
     def finalize(self) -> None:
         """Write buffered records and rewrite the pretty JSON once per run."""
+        pending = list(self._buffer)
         self.flush()
         if self.pretty_path is None:
             return
         merged: dict[str, dict[str, Any]] = {}
-        for record in self._existing + self._buffer:
+        for record in self._existing + pending:
             key = str(record.get("file", id(record)))
             merged[key] = record
         tmp = self.pretty_path.with_suffix(".tmp")
