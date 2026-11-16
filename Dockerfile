@@ -23,6 +23,7 @@ COPY src /workspace/src
 COPY scripts /workspace/scripts
 COPY tests /workspace/tests
 COPY pyproject.toml /workspace/pyproject.toml
+COPY README.md /workspace/README.md
 
 ENV PYTHONPATH=/workspace/src
 
