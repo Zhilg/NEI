@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir \
     PyMuPDF \
     Pillow \
     numpy \
+    mammoth \
     python-docx \
     python-pptx \
     beautifulsoup4 \
