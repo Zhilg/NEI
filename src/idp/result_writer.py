@@ -49,18 +49,17 @@ class ResultWriter:
 
     def finalize(self) -> None:
         """Write buffered records and rewrite the pretty JSON once per run."""
-        pending = list(self._buffer)
         self.flush()
         if self.pretty_path is None:
             return
-        merged: dict[str, dict[str, Any]] = {}
-        for record in self._existing + pending:
-            key = str(record.get("file", id(record)))
-            merged[key] = record
+        # Перечитываем results.jsonl целиком, чтобы pretty-файл всегда был
+        # синхронизирован с файлом результатов, даже если часть записей не
+        # попала в буфер (например, после падения процесса между write и flush).
+        records = self._load_existing()
         tmp = self.pretty_path.with_suffix(".tmp")
         try:
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(list(merged.values()), f, ensure_ascii=False, indent=2)
+                json.dump(records, f, ensure_ascii=False, indent=2)
                 f.write("\n")
             tmp.replace(self.pretty_path)
         except OSError as exc:
