@@ -27,9 +27,9 @@ class Settings(BaseSettings):
     vl_endpoints: str | list[str] = Field(default="")
     vl_model: str = "Qwen3.8-27B"
     vl_timeout_seconds: float = Field(default=600, gt=0, le=3600)
-    vl_max_tokens: int = Field(default=4096, ge=1, le=65536)
+    vl_max_tokens: int = Field(default=2048, ge=1, le=65536)
     vl_max_images: int = Field(default=2, gt=0)
-    vl_max_context_chars: int = Field(default=6000, ge=1000, le=100000)
+    vl_max_context_chars: int = Field(default=4000, ge=1000, le=100000)
     vl_concurrency: int = Field(default=12, ge=1, le=64)
 
     test_mode: bool = Field(default=False)
