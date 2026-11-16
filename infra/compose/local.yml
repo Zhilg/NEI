@@ -49,9 +49,7 @@ services:
       - ${IDP_OUTPUT_ROOT:-../../data/output}:/output
 
     depends_on:
-      vllm-vl-0:
-        condition: service_healthy
-      vllm-vl-1:
+      vllm-vl:
         condition: service_healthy
 
     networks:

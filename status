@@ -10,7 +10,7 @@ set -a
 . "$ENV_FILE"
 set +a
 
-ENDPOINTS="${IDP_VL_ENDPOINTS:-http://vllm-vl-0:8000/v1,http://vllm-vl-1:8001/v1}"
+ENDPOINTS="${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1}"
 MODEL_NAME="${IDP_VL_MODEL:-Qwen3.8-27B}"
 
 echo "Проверка здоровья стека ($ENV_FILE)..."

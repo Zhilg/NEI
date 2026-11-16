@@ -7,7 +7,7 @@ Measures, for a fixed set of page images:
   - aggregate pages/s at a given concurrency
 
 Usage:
-    python3 scripts/bench_vlm.py --endpoint http://vllm-vl-0:8000/v1 --model Qwen3.8-27B \
+    python3 scripts/bench_vlm.py --endpoint http://vllm-vl:8000/v1 --model Qwen3.8-27B \
         --pages path/to/page_*.png --images-per-request 2 --concurrency 8 --repeat 3
 
     # offline self-test against the deterministic stub (no GPU):
