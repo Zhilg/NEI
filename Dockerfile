@@ -22,7 +22,10 @@ RUN pip install --no-cache-dir \
 COPY src /workspace/src
 COPY scripts /workspace/scripts
 COPY tests /workspace/tests
+COPY pyproject.toml /workspace/pyproject.toml
 
 ENV PYTHONPATH=/workspace/src
+
+RUN pip install -e /workspace --no-deps --no-cache-dir
 
 CMD ["idp"]
