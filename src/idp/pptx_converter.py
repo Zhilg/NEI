@@ -106,3 +106,25 @@ def convert_pptx_to_markdown(pptx_path: Path) -> str:
         parts.append(f"<!-- slide {i} -->\n" + "\n\n".join(block_parts))
     text = "\n\n".join(parts)
     return _clean_noise(text)
+
+
+def extract_pptx_text(pptx_path: Path) -> str:
+    """Extract plain text from a PPTX file (slide text only)."""
+    try:
+        prs = Presentation(str(pptx_path))
+    except Exception:
+        return ""
+    parts: list[str] = []
+    for index, slide in enumerate(prs.slides, 1):
+        slide_parts: list[str] = [f"Слайд {index}"]
+        for shape in slide.shapes:
+            try:
+                if not hasattr(shape, "text"):
+                    continue
+                text = shape.text.strip()
+                if text:
+                    slide_parts.append(text)
+            except Exception:
+                continue
+        parts.append("\n".join(slide_parts))
+    return "\n\n".join(parts).strip()

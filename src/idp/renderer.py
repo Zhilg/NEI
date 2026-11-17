@@ -184,3 +184,23 @@ def extract_pdf_text_and_visual_pages(
     visual_page_indices = list(range(num_pages))
     logger.debug("Renderer: produced %d images", len(pngs))
     return "", pngs, visual_page_indices
+
+
+def extract_pdf_text(pdf_path: Path) -> tuple[str, int]:
+    """Extract plain text from all pages of a PDF using the embedded text layer.
+
+    Returns ``(text, page_count)``.  Pages are separated by a form-feed
+    character so callers can split by page when needed.
+    """
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception:
+        return "", 0
+    parts: list[str] = []
+    try:
+        for page in doc:
+            parts.append(page.get_text())
+    finally:
+        doc.close()
+    text = "\f".join(parts)
+    return text, len(parts)

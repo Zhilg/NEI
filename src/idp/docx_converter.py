@@ -70,3 +70,22 @@ def convert_docx_to_markdown(docx_path: Path) -> str:
     except Exception:
         pass
     return text.strip()
+
+
+def extract_docx_text(docx_path: Path) -> str:
+    """Extract plain text from a DOCX file (paragraphs and tables only)."""
+    try:
+        doc = Document(str(docx_path))
+    except Exception:
+        return ""
+    parts: list[str] = []
+    for paragraph in doc.paragraphs:
+        text = paragraph.text.strip()
+        if text:
+            parts.append(text)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts).strip()

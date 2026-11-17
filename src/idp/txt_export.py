@@ -1,50 +1,31 @@
-"""Export per-file text bundles with hyperlinks to images for DOCX/PDF reconstruction.
+"""Export plain-text bundles for processed documents.
 
 Every processed document gets its own folder inside ``<output_root>/txts/``,
 mirroring the document's path relative to the input root:
 
     txts/
       <relative dir>/<file name>/
-        text.txt      document text with hyperlinks to its images
-        images/      page renders and embedded pictures of the document
-        tables.json  structured markdown tables (rows/cells)
-        meta.json    source info and image inventory
+        text.txt   plain document content (no Markdown, no headings)
+        meta.json  source info, document type and extracted rubricators
 
-Tables are kept as Markdown tables in ``text.txt`` (so ``pandoc text.txt -o out.docx``
-rebuilds them) and additionally mirrored as structured rows in ``tables.json``.
-Handwritten fragments are referenced as hyperlinks to the page image, because
-manuscripts are preserved as images instead of unreliable text.
+Only the recognised text content is written — no tables, no images, no
+Markdown artefacts.  Rubricator codes (УДК, ГРНТИ, ГНТИ with numbers) are
+stored in ``meta.json``.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
-import os
 import re
 import shutil
-import zipfile
 from pathlib import Path
-from urllib.parse import unquote
 
 from idp.config import settings
 
 logger = logging.getLogger(__name__)
 
-_PAGE_MARKER_RE = re.compile(r"<!--\s*page\s+(\d+)\s*-->")
-_SLIDE_MARKER_RE = re.compile(r"<!--\s*slide\s+(\d+)\s*-->")
-_FILE_MARKER_RE = re.compile(r"<!--\s*file:\s*(.+?)\s*-->")
-_IMAGE_PLACEHOLDER_RE = re.compile(r"\[Image:\s*([^\]]*)\]")
-_HANDWRITTEN_RE = re.compile(r"\[HANDWRITTEN:\s*([^\]]*)\]")
-_REGION_RE = re.compile(r"\s*\|\s*bbox:\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)", re.IGNORECASE)
-_IMG_INDEX_RE = re.compile(r"\s*\|\s*img:\s*(\d+)", re.IGNORECASE)
-_MIN_REGION_PX = 12
-_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
-_DATA_URI_RE = re.compile(r"!\[([^\]]*)\]\(data:image/([A-Za-z0-9.+-]+);base64,([^)\s]+)\)")
-_TABLE_SEPARATOR_RE = re.compile(r"^:?-+:?$")
 _UNSAFE_NAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
-_MAX_EMBEDDED_IMAGES = 500
 
 
 def _sanitize_name(name: str) -> str:
@@ -52,283 +33,12 @@ def _sanitize_name(name: str) -> str:
     return cleaned or "unnamed"
 
 
-def _link_or_copy(source: Path, target: Path) -> None:
-    try:
-        os.link(source, target)
-    except OSError:
-        shutil.copy2(source, target)
-
-
-def _image_extension(extension: str) -> str:
-    cleaned = (extension or "").lower().lstrip(".")
-    if cleaned in ("jpeg", "jpg"):
-        return "jpg"
-    if cleaned == "svg+xml":
-        return "svg"
-    return cleaned or "png"
-
-
-def _is_remote(source: str) -> bool:
-    return source.startswith(("http://", "https://", "ftp://", "//", "data:", "mailto:"))
-
-
-def _resolve_local_source(source: str, base_dirs: list[Path]) -> Path | None:
-    cleaned = unquote(source.split("?", 1)[0].split("#", 1)[0]).strip()
-    if not cleaned:
-        return None
-    candidate = Path(cleaned)
-    if candidate.is_absolute() and candidate.is_file():
-        return candidate
-    for base in base_dirs:
-        if base is None:
-            continue
-        resolved = base / cleaned
-        if resolved.is_file():
-            return resolved
-    return None
-
-
-def _materialize_data_uris(images_dir: Path, text: str, prefix: str, counter: int = 0) -> tuple[str, int]:
-    def _replace(match: re.Match) -> str:
-        nonlocal counter
-        alt = match.group(1).strip()
-        extension = _image_extension(match.group(2))
-        try:
-            data = base64.b64decode(match.group(3))
-        except Exception:
-            return match.group(0)
-        counter += 1
-        name = f"{prefix}_{counter:04d}.{extension}"
-        (images_dir / name).write_bytes(data)
-        return f"![{alt or 'Image'}](images/{name})"
-
-    return _DATA_URI_RE.sub(_replace, text), counter
-
-
-def _rewrite_local_image_refs(
-    text: str,
-    base_dirs: list[Path],
-    images_dir: Path,
-    prefix: str,
-    counter: int = 0,
-) -> tuple[str, int]:
-    def _replace(match: re.Match) -> str:
-        nonlocal counter
-        alt = match.group(1).strip()
-        source = match.group(2).strip()
-        if _is_remote(source):
-            return match.group(0)
-        resolved = _resolve_local_source(source, base_dirs)
-        if resolved is None:
-            return match.group(0)
-        counter += 1
-        name = f"{prefix}_{counter:04d}.{_image_extension(resolved.suffix)}"
-        _link_or_copy(resolved, images_dir / name)
-        return f"![{alt or resolved.stem}](images/{name})"
-
-    return _MD_IMAGE_RE.sub(_replace, text), counter
-
-
-def _extract_pdf_embedded_images(pdf_path: Path, images_dir: Path) -> tuple[dict[int, list[str]], dict[str, list[float]]]:
-    result: dict[int, list[str]] = {}
-    rects: dict[str, list[float]] = {}
-    try:
-        import fitz
-    except ImportError:
-        return result, rects
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception:
-        return result, rects
-    by_xref: dict[int, str] = {}
-    try:
-        for page_index in range(len(doc)):
-            try:
-                infos = doc.load_page(page_index).get_images(full=True)
-            except Exception:
-                continue
-            names: list[str] = []
-            page = doc.load_page(page_index)
-            for info in infos:
-                xref = info[0] if info else 0
-                if not xref:
-                    continue
-                placements = _image_placements(page, xref)
-                if xref in by_xref:
-                    names.append(by_xref[xref])
-                    if placements and by_xref[xref] not in rects:
-                        rects[by_xref[xref]] = placements[0]
-                    continue
-                if len(by_xref) >= _MAX_EMBEDDED_IMAGES:
-                    continue
-                if _page_covering_rect(page, xref) is not None:
-                    continue
-                try:
-                    extracted = doc.extract_image(xref)
-                except Exception:
-                    continue
-                data = extracted.get("image")
-                if not data:
-                    continue
-                name = f"img_{len(by_xref) + 1:04d}.{_image_extension(extracted.get('ext', 'png'))}"
-                (images_dir / name).write_bytes(data)
-                by_xref[xref] = name
-                names.append(name)
-                if placements:
-                    rects[name] = placements[0]
-            if names:
-                result[page_index + 1] = names
-    finally:
-        doc.close()
-    return result, rects
-
-
-def _image_placements(page, xref: int) -> list[list[float]]:
-    if not xref:
-        return []
-    try:
-        placements = page.get_image_rects(xref)
-    except Exception:
-        return []
-    if page.rect.width <= 0 or page.rect.height <= 0:
-        return []
-    return [
-        [
-            round(max(0.0, rect.x0 / page.rect.width), 4),
-            round(max(0.0, rect.y0 / page.rect.height), 4),
-            round(min(1.0, rect.x1 / page.rect.width), 4),
-            round(min(1.0, rect.y1 / page.rect.height), 4),
-        ]
-        for rect in placements or []
-    ]
-
-
-def _page_covering_rect(page, xref: int) -> list[float] | None:
-    """Rect of an embedded image that covers the whole page (a page scan)."""
-    for rect in _image_placements(page, xref):
-        if rect[2] - rect[0] >= 0.9 and rect[3] - rect[1] >= 0.9:
-            return rect
-    return None
-
-
-def _iter_pptx_shapes(shapes):
-    for shape in shapes:
-        yield shape
-        nested = getattr(shape, "shapes", None)
-        if nested is not None:
-            yield from _iter_pptx_shapes(nested)
-
-
-def _extract_pptx_images(pptx_path: Path, images_dir: Path) -> dict[int, list[str]]:
-    result: dict[int, list[str]] = {}
-    try:
-        from pptx import Presentation
-    except ImportError:
-        return result
-    try:
-        presentation = Presentation(str(pptx_path))
-    except Exception:
-        return result
-    for slide_no, slide in enumerate(presentation.slides, 1):
-        names: list[str] = []
-        for shape in _iter_pptx_shapes(slide.shapes):
-            try:
-                image = shape.image
-            except Exception:
-                continue
-            try:
-                data = image.blob
-            except Exception:
-                continue
-            if not data:
-                continue
-            try:
-                extension = image.ext
-            except Exception:
-                extension = "png"
-            name = f"slide_{slide_no:04d}_image_{len(names) + 1}.{_image_extension(extension)}"
-            (images_dir / name).write_bytes(data)
-            names.append(name)
-        if names:
-            result[slide_no] = names
-    return result
-
-
-def parse_markdown_tables(text: str) -> list[dict]:
-    tables: list[dict] = []
-    page: int | None = None
-    rows: list[list[str]] = []
-
-    def _flush() -> None:
-        nonlocal rows
-        if rows:
-            tables.append({"page": page, "rows": rows})
-            rows = []
-
-    for line in text.splitlines():
-        page_match = _PAGE_MARKER_RE.search(line)
-        if page_match is not None:
-            _flush()
-            page = int(page_match.group(1))
-            continue
-        stripped = line.strip()
-        if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2:
-            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-            if all(_TABLE_SEPARATOR_RE.match(cell) for cell in cells if cell):
-                continue
-            rows.append(cells)
-            continue
-        _flush()
-    _flush()
-    return tables
-
-
-def _image_dimensions(path: Path) -> tuple[int, int] | None:
-    try:
-        from PIL import Image
-
-        with Image.open(path) as image:
-            return image.size
-    except Exception:
-        return None
-
-
-def _crop_region(render_path: Path, bbox: list[float], target: Path) -> bool:
-    """Cut a normalized [x1, y1, x2, y2] region out of a page render."""
-    try:
-        from PIL import Image
-
-        with Image.open(render_path) as image:
-            width, height = image.size
-            x1 = max(0.0, min(1.0, bbox[0]))
-            y1 = max(0.0, min(1.0, bbox[1]))
-            x2 = max(0.0, min(1.0, bbox[2]))
-            y2 = max(0.0, min(1.0, bbox[3]))
-            if x2 <= x1 or y2 <= y1:
-                return False
-            pad_x = (x2 - x1) * 0.02
-            pad_y = (y2 - y1) * 0.02
-            box = (
-                int(max(0, (x1 - pad_x) * width)),
-                int(max(0, (y1 - pad_y) * height)),
-                int(min(width, (x2 + pad_x) * width)),
-                int(min(height, (y2 + pad_y) * height)),
-            )
-            if box[2] - box[0] < _MIN_REGION_PX or box[3] - box[1] < _MIN_REGION_PX:
-                return False
-            image.crop(box).save(target)
-        return True
-    except Exception:
-        return False
-
-
 class TxtExporter:
-    """Writes one ``txts/<relative dir>/<file name>/`` bundle per processed document."""
+    """Writes one ``txts/<relative dir>/<file name>/`` bundle per document."""
 
     def __init__(self, output_root: Path | None = None) -> None:
         self.root = (output_root or settings.output_root) / "txts"
         self._used: set[str] = set()
-        self._regions: list[dict] = []
 
     def export(
         self,
@@ -339,46 +49,29 @@ class TxtExporter:
         relative: Path,
         pages: int | None = None,
         document_type: str = "other",
-        annotation: str = "",
-        metadata: dict | None = None,
-        layout: dict | None = None,
+        rubricators: list[dict] | None = None,
     ) -> Path:
         bundle_dir = self._bundle_dir(relative)
-        images_dir = bundle_dir / "images"
-        self._reset_regions()
         shutil.rmtree(bundle_dir, ignore_errors=True)
-        images_dir.mkdir(parents=True, exist_ok=True)
+        bundle_dir.mkdir(parents=True, exist_ok=True)
 
-        text = text or ""
-        if file_type == "pdf":
-            text = self._bundle_pdf(source, images_dir, text, rendered_dir=self._rendered_dir(source, relative))
-        elif file_type == "docx":
-            text = self._bundle_docx(source, images_dir, text)
-        elif file_type == "pptx":
-            text = self._bundle_pptx(source, images_dir, text)
-        elif file_type in ("html", "html_folder"):
-            text = self._bundle_html(source, images_dir, text, folder=file_type == "html_folder")
-        elif file_type in ("png", "jpg", "jpeg", "image"):
-            text = self._bundle_image(source, images_dir, text)
+        text = (text or "").strip()
+        (bundle_dir / "text.txt").write_text(f"{text}\n", encoding="utf-8")
 
-        (bundle_dir / "text.txt").write_text(f"{text.strip()}\n", encoding="utf-8")
-        (bundle_dir / "tables.json").write_text(
-            json.dumps({"tables": parse_markdown_tables(text)}, ensure_ascii=False, indent=2) + "\n",
+        meta = {
+            "source": str(relative),
+            "type": file_type,
+            "size_bytes": source.stat().st_size if source.is_file() else None,
+            "pages": pages,
+            "document_type": document_type,
+            "text_file": "text.txt",
+            "rubricators": rubricators or [],
+        }
+        (bundle_dir / "meta.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        if layout is not None:
-            (bundle_dir / "layout.json").write_text(
-                json.dumps(layout, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
-        self._write_meta(bundle_dir, source, relative, file_type, pages, document_type, annotation, metadata or {}, images_dir)
         return bundle_dir
-
-    def _rendered_dir(self, source: Path, relative: Path) -> Path:
-        stem = source.stem if source.is_file() else source.name
-        return settings.output_root / "rendered" / relative.parent / stem
-
-    def _reset_regions(self) -> None:
-        self._regions = []
 
     def _bundle_dir(self, relative: Path) -> Path:
         parts = [_sanitize_name(part) for part in relative.parts if part not in (".", "..")]
@@ -395,327 +88,3 @@ class TxtExporter:
     @staticmethod
     def _bundle_key(directory: Path, name: str) -> str:
         return str(directory / name).lower()
-
-    def _bundle_pdf(self, pdf_path: Path, images_dir: Path, text: str, rendered_dir: Path | None = None) -> str:
-        page_images = self._copy_page_images(pdf_path, images_dir, rendered_dir)
-        embedded, embedded_rects = _extract_pdf_embedded_images(pdf_path, images_dir)
-        if not page_images and not embedded:
-            return text
-
-        markers = [int(value) for value in _PAGE_MARKER_RE.findall(text)]
-        total_pages = len(page_images)
-        pages_per_marker = 1
-        if markers and total_pages and len(markers) < total_pages:
-            pages_per_marker = max(1, settings.vl_max_images)
-
-        preamble: list[str] = []
-        sections: list[tuple[list[str], list[int]]] = []
-        current_lines: list[str] | None = None
-        current_pages: list[int] = []
-
-        for line in text.splitlines():
-            marker = _PAGE_MARKER_RE.search(line)
-            if marker is not None:
-                if current_lines is not None:
-                    sections.append((current_lines, current_pages))
-                current_lines = [line]
-                current_pages = self._marker_pages(int(marker.group(1)), pages_per_marker, total_pages)
-                continue
-            if current_lines is None:
-                preamble.append(line)
-            else:
-                current_lines.append(line)
-        if current_lines is not None:
-            sections.append((current_lines, current_pages))
-
-        regions: list[dict] = []
-        for page in sorted(page_images):
-            render_name = page_images[page]
-            size = _image_dimensions(images_dir / render_name)
-            regions.append({
-                "name": render_name,
-                "kind": "page",
-                "page": page,
-                "bbox": [0.0, 0.0, 1.0, 1.0],
-                "width": size[0] if size else None,
-                "height": size[1] if size else None,
-            })
-
-        consumed: set[str] = set()
-        counter = {"figure": 0, "handwritten": 0}
-        out: list[str] = list(preamble)
-        for lines, pages in sections:
-            out.extend(lines[:1])
-            if len(lines) > 1:
-                out.extend(
-                    self._link_placeholders(
-                        "\n".join(lines[1:]), pages, embedded, page_images, consumed, images_dir, regions, counter
-                    ).split("\n")
-                )
-            for page in pages:
-                for name in embedded.get(page, []):
-                    if name not in consumed:
-                        consumed.add(name)
-                        out.append(f"![Image on page {page}](images/{name})")
-
-        for page in sorted(embedded):
-            for name in embedded[page]:
-                size = _image_dimensions(images_dir / name)
-                regions.append({
-                    "name": name,
-                    "kind": "embedded",
-                    "page": page,
-                    "bbox": embedded_rects.get(name, [0.0, 0.0, 1.0, 1.0]),
-                    "width": size[0] if size else None,
-                    "height": size[1] if size else None,
-                })
-        self._regions = regions
-        return "\n".join(out)
-
-    @staticmethod
-    def _marker_pages(marker: int, pages_per_marker: int, total_pages: int) -> list[int]:
-        start = (marker - 1) * pages_per_marker + 1
-        end = min(marker * pages_per_marker, total_pages) if total_pages else start
-        if end < start:
-            end = start
-        return list(range(start, end + 1))
-
-    def _link_placeholders(
-        self,
-        block: str,
-        pages: list[int],
-        embedded: dict[int, list[str]],
-        page_images: dict[int, str],
-        consumed: set[str],
-        images_dir: Path,
-        regions: list[dict],
-        counter: dict[str, int],
-    ) -> str:
-        def _target_page(match: re.Match) -> int | None:
-            index_match = _IMG_INDEX_RE.search(match.group(1))
-            if index_match is not None and pages:
-                offset = int(index_match.group(1)) - 1
-                return pages[offset] if 0 <= offset < len(pages) else pages[0]
-            return pages[0] if pages else None
-
-        def _crop(kind: str, description: str, bbox: list[float], page: int) -> str | None:
-            render = page_images.get(page)
-            if render is None:
-                return None
-            counter[kind] += 1
-            name = f"{kind}_{counter[kind]:04d}.png"
-            if not _crop_region(images_dir / render, bbox, images_dir / name):
-                return None
-            size = _image_dimensions(images_dir / name)
-            regions.append({
-                "name": name,
-                "kind": kind,
-                "page": page,
-                "bbox": bbox,
-                "width": size[0] if size else None,
-                "height": size[1] if size else None,
-            })
-            return name
-
-        def _image_sub(match: re.Match) -> str:
-            raw = match.group(1)
-            bbox_match = _REGION_RE.search(raw)
-            description = _REGION_RE.sub("", raw)
-            description = _IMG_INDEX_RE.sub("", description).strip(" |") or "Image"
-            if bbox_match is not None:
-                page = _target_page(match)
-                bbox = [float(value) / 1000.0 for value in bbox_match.groups()]
-                if page is not None:
-                    name = _crop("figure", description, bbox, page)
-                    if name is not None:
-                        return f"![{description}](images/{name})"
-            for page in pages:
-                for name in embedded.get(page, []):
-                    if name not in consumed:
-                        consumed.add(name)
-                        return f"![{description}](images/{name})"
-            return match.group(0)
-
-        def _handwritten_sub(match: re.Match) -> str:
-            raw = match.group(1)
-            bbox_match = _REGION_RE.search(raw)
-            fragment = _REGION_RE.sub("", raw)
-            fragment = _IMG_INDEX_RE.sub("", fragment).strip(" |")
-            if bbox_match is not None:
-                page = _target_page(match)
-                bbox = [float(value) / 1000.0 for value in bbox_match.groups()]
-                if page is not None:
-                    name = _crop("handwritten", fragment, bbox, page)
-                    if name is not None:
-                        return f"[HANDWRITTEN: {fragment}](images/{name})"
-            render = page_images.get(pages[0]) if pages else None
-            if render is not None:
-                return f"[HANDWRITTEN: {fragment}](images/{render})"
-            return match.group(0)
-
-        block = _IMAGE_PLACEHOLDER_RE.sub(_image_sub, block)
-        return _HANDWRITTEN_RE.sub(_handwritten_sub, block)
-
-    def _copy_page_images(self, pdf_path: Path, images_dir: Path, rendered_dir: Path | None = None) -> dict[int, str]:
-        if rendered_dir is None:
-            rendered_dir = self._rendered_dir(pdf_path, Path(pdf_path.name))
-        pngs = sorted(rendered_dir.glob("*.png")) if rendered_dir.is_dir() else []
-        if not pngs:
-            pngs = self._render_pages(pdf_path, rendered_dir)
-        page_images: dict[int, str] = {}
-        for index, png in enumerate(pngs, 1):
-            name = f"page_{index:05d}.png"
-            _link_or_copy(png, images_dir / name)
-            page_images[index] = name
-        return page_images
-
-    @staticmethod
-    def _render_pages(pdf_path: Path, rendered_dir: Path) -> list[Path]:
-        try:
-            from idp.renderer import extract_pdf_text_and_visual_pages
-
-            _, pngs, _ = extract_pdf_text_and_visual_pages(pdf_path, output_dir=rendered_dir)
-            return pngs
-        except Exception as exc:
-            logger.warning("Cannot render pages of %s: %s", pdf_path, exc)
-            return []
-
-    def _bundle_image(self, source: Path, images_dir: Path, text: str) -> str:
-        """Bundle of a scan: the picture is the only page of the document.
-
-        The scan is copied into ``images/`` as the page render, so the regions
-        the VLM marked (figures, handwriting) can be cut out of it just like
-        from a rendered PDF page.
-        """
-        from idp.renderer import convert_image_to_png
-
-        written = convert_image_to_png(source, images_dir / "page_00001.png")
-        name = written.name
-        page_images = {1: name}
-        size = _image_dimensions(images_dir / name)
-        self._regions.append({
-            "name": name,
-            "kind": "page",
-            "page": 1,
-            "bbox": [0.0, 0.0, 1.0, 1.0],
-            "width": size[0] if size else None,
-            "height": size[1] if size else None,
-        })
-        counter = {"figure": 0, "handwritten": 0}
-        return self._link_placeholders(
-            text, [1], {}, page_images, set(), images_dir, self._regions, counter
-        )
-
-    def _bundle_docx(self, docx_path: Path, images_dir: Path, text: str) -> str:
-        text, counter = _materialize_data_uris(images_dir, text, prefix="docx_image")
-        if counter == 0:
-            text = self._append_archive_images(text, docx_path, images_dir, member_prefix="word/media/", label="Document")
-        return text
-
-    def _bundle_pptx(self, pptx_path: Path, images_dir: Path, text: str) -> str:
-        slide_images = _extract_pptx_images(pptx_path, images_dir)
-        if not slide_images:
-            return self._append_archive_images(text, pptx_path, images_dir, member_prefix="ppt/media/", label="Slide")
-        out: list[str] = []
-        linked: set[int] = set()
-        for line in text.splitlines():
-            out.append(line)
-            marker = _SLIDE_MARKER_RE.search(line)
-            if marker is None:
-                continue
-            slide_no = int(marker.group(1))
-            linked.add(slide_no)
-            for name in slide_images.get(slide_no, []):
-                out.append(f"![Slide {slide_no} image](images/{name})")
-        leftovers = [(slide_no, names) for slide_no, names in sorted(slide_images.items()) if slide_no not in linked]
-        if leftovers:
-            out.append("")
-            out.append("## Slide images")
-            for slide_no, names in leftovers:
-                for name in names:
-                    out.append(f"![Slide {slide_no} image](images/{name})")
-        return "\n".join(out)
-
-    def _bundle_html(self, source: Path, images_dir: Path, text: str, *, folder: bool) -> str:
-        text, counter = _materialize_data_uris(images_dir, text, prefix="html_image")
-        rewritten: list[str] = []
-        for base_dirs, section in self._html_sections(source, text, folder=folder):
-            section, counter = _rewrite_local_image_refs(section, base_dirs, images_dir, "html_image", counter)
-            rewritten.append(section)
-        return "\n".join(rewritten)
-
-    @staticmethod
-    def _html_sections(source: Path, text: str, *, folder: bool) -> list[tuple[list[Path], str]]:
-        if not folder or not source.is_dir():
-            base = source.parent if source.is_file() else source
-            return [([base], text)]
-        sections: list[list[str]] = []
-        current: list[str] = []
-        for line in text.splitlines():
-            if _FILE_MARKER_RE.search(line):
-                if current:
-                    sections.append(current)
-                current = [line]
-                continue
-            current.append(line)
-        if current:
-            sections.append(current)
-        return [([source], "\n".join(lines)) for lines in sections]
-
-    @staticmethod
-    def _append_archive_images(
-        text: str,
-        archive_path: Path,
-        images_dir: Path,
-        member_prefix: str,
-        label: str,
-    ) -> str:
-        links: list[str] = []
-        try:
-            with zipfile.ZipFile(archive_path) as archive:
-                members = [
-                    name
-                    for name in sorted(archive.namelist())
-                    if name.startswith(member_prefix) and not name.endswith("/")
-                ]
-                for index, member in enumerate(members, 1):
-                    stored_name = f"{label.lower()}_image_{index:04d}.{_image_extension(Path(member).suffix)}"
-                    (images_dir / stored_name).write_bytes(archive.read(member))
-                    links.append(f"![{label} image {index}](images/{stored_name})")
-        except Exception:
-            return text
-        if not links:
-            return text
-        return f"{text.rstrip()}\n\n## {label} images\n\n" + "\n\n".join(links) + "\n"
-
-    def _write_meta(
-        self,
-        bundle_dir: Path,
-        source: Path,
-        relative: Path,
-        file_type: str,
-        pages: int | None,
-        document_type: str,
-        annotation: str,
-        metadata: dict,
-        images_dir: Path,
-    ) -> None:
-        images = sorted(path.name for path in images_dir.iterdir() if path.is_file())
-        meta = {
-            "source": str(relative),
-            "type": file_type,
-            "size_bytes": source.stat().st_size if source.is_file() else None,
-            "pages": pages,
-            "document_type": document_type,
-            "annotation": annotation,
-            "metadata": metadata,
-            "text_file": "text.txt",
-            "images_dir": "images",
-            "images": images,
-            "regions": self._regions,
-            "tables_file": "tables.json",
-        }
-        (bundle_dir / "meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )

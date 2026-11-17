@@ -151,6 +151,13 @@ def convert_html_to_markdown(html_path: Path) -> str:
     return _extract_html_text(raw)
 
 
+def extract_html_text(html_path: Path) -> str:
+    """Extract plain text from a single HTML file (tags stripped)."""
+    with open(html_path, "r", encoding="utf-8", errors="replace") as f:
+        raw = f.read()
+    return _extract_html_text(raw)
+
+
 def convert_html_folder_to_markdown(folder_path: Path) -> str:
     html_files = sorted(folder_path.glob("*.html"))
     if not html_files:

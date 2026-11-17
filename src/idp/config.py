@@ -36,10 +36,7 @@ class Settings(BaseSettings):
     artifacts_mode: bool = Field(default=False)
     visio_mode: bool = Field(default=False)
     visio_content: str = Field(default="pages")
-    entity_schema_path: str | Path | None = Field(default=None)
-    trash_path: str = Field(default="")
-    min_entity_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
-    reconstruct_formats: str | list[str] = Field(default="docx,pdf")
+    reconstruct_formats: str | list[str] = Field(default="")
 
     vllm_quantization: str = Field(default="awq")
     vllm_dtype: str = Field(default="half")
@@ -68,52 +65,6 @@ class Settings(BaseSettings):
             msg = f"path must be absolute: {value}"
             raise ValueError(msg)
         return value
-
-    @field_validator("entity_schema_path", mode="before")
-    @classmethod
-    def parse_entity_schema_path(cls, value: str | Path | None) -> Path | None:
-        if value is None or (isinstance(value, str) and not value.strip()):
-            return None
-        return Path(value)
-
-    @field_validator("vl_endpoint")
-    @classmethod
-    def require_local_endpoint(cls, value: str) -> str:
-        if not value:
-            return value
-        endpoint = urlparse(value)
-        if endpoint.scheme != "http":
-            msg = "endpoint must use http"
-            raise ValueError(msg)
-        return value.rstrip("/")
-
-    @field_validator("vl_endpoints", mode="before")
-    @classmethod
-    def parse_vl_endpoints(cls, value: str | list[str]) -> list[str]:
-        if isinstance(value, list):
-            return [v.strip().rstrip("/") for v in value if v and v.strip()]
-        if not value:
-            return []
-        if isinstance(value, str):
-            value = value.strip('"').strip("'")
-            if not value:
-                return []
-            return [v.strip().rstrip("/") for v in value.split(",") if v.strip()]
-        return []
-
-    @field_validator("reconstruct_formats", mode="before")
-    @classmethod
-    def parse_reconstruct_formats(cls, value: str | list[str]) -> list[str]:
-        if isinstance(value, list):
-            return [v.strip().lower().lstrip(".") for v in value if v and v.strip()]
-        if not value:
-            return []
-        if isinstance(value, str):
-            value = value.strip('"').strip("'")
-            if not value:
-                return []
-            return [v.strip().lower().lstrip(".") for v in value.split(",") if v.strip()]
-        return []
 
     @field_validator("visio_content")
     @classmethod
