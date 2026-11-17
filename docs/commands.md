@@ -192,12 +192,9 @@ IDP_ARTIFACTS_MODE=true
 
 ## CLI (консольный интерфейс)
 
-Все точки входа объявлены в `pyproject.toml` (`[project.scripts]`): `idp`, `idp-web`,
+Все точки входа объявлены в `pyproject.toml` (`[project.scripts]`): `idp`,
 `idp-reconstruct`, `idp-visio`, `idp-operator`, `idp-finetune-dataset`. Работают и в контейнере,
 и на хосте (после `pip install -e .`).
-
-CLI — полноценная замена веб-интерфейсу: `idp-web` внутри вызывает тот же `Worker`,
-что и `idp`. Если оболочка не поднялась, все задачи доступны из консоли.
 
 ### Прогнать все файлы
 
@@ -255,8 +252,8 @@ docker compose -f infra/compose/local.yml run --rm worker idp --visio --visio-co
 mkdir -p data/input/single && cp отчёт.pdf data/input/single/
 docker compose -f infra/compose/local.yml run --rm -e IDP_INPUT_ROOT=/input/single worker idp --artifacts
 
-# вариант 2: веб-интерфейс — туда файл перетаскивают мышью (см. ниже)
-idp-web --root data/ui --port 8080
+# вариант 2: положить файл в отдельный подкаталог с своим именем и
+# запустить воркер на него повторно
 ```
 
 ### Собрать PDF / DOCX / TXT из готовых бандлов
@@ -357,51 +354,6 @@ docker compose -f infra/compose/local.yml run --rm --no-deps worker idp-reconstr
 ```
 
 `--no-deps` не поднимает `vllm-vl-0/1`, так что команда не падает даже если GPU недоступна.
-
-## Веб-интерфейс для отдельных файлов
-
-Отдельный режим для одного документа: файл перетаскивают в окно браузера и нажимают
-кнопки — пайплайн обрабатывает его без просмотра каталогов.
-
-```bash
-# на хосте (нужны зависимости проекта: pip install -e .)
-idp-web --root data/ui --host 127.0.0.1 --port 8080
-
-# в контейнере: сервис web из infra/compose/local.yml
-docker compose -f infra/compose/local.yml up -d web
-```
-
-Чтобы запустить интерфейс без GPU (с заглушкой вместо vLLM), добавьте `--stub`:
-
-```bash
-idp-web --stub --root data/ui --port 8080
-```
-
-Заглушка `tests/vlm_stub.py` стартует в процессе и отдаёт детерминированный markdown/JSON,
-так что весь пайплайн (render → VLM → entities → bundle → reconstruct) работает офлайн.
-
-Отдельный `docker-compose.yml` в корне репо поднимает интерфейс и заглушку на образе
-`worker:latest` — без GPU и без `infra/compose/local.yml`:
-
-```bash
-docker compose up -d                       # прод, VLM по умолчанию http://vllm-vl:8000/v1
-docker compose --profile stub up -d        # интерфейс + vlm-stub
-```
-
-Заглушка включается **только** через `--stub` / профиль `stub`; в `infra/compose/local.yml`
-её нет вообще, поэтому на прод-стек она не влияет.
-
-Что умеет:
-
-- принять файл (drag & drop или выбор через проводник): PDF, DOCX, XLSX, PPTX, HTML, изображения;
-- кнопка **Обработать всё** — прогоняет пайплайн по всем dropped-файлам сразу (Markdown + DOCX/PDF по умолчанию);
-- кнопка **Обработать** — обрабатывает отдельный файл;
-- кнопки **DOCX / PDF / TXT** — пересобирают выбранный артефакт из бандла, не запуская VLM повторно;
-- ссылки на скачи Markdown, TXT-бандла и `reconstruct.docx` / `reconstruct.pdf`.
-
-Сервер работает только на стандартной библиотеке (новых пакетов в air-gapped образ
-не добавляется), файлы и результаты складываются под `--root` (`uploads/<id>/`,
-`output/<id>/`).
 
 ## Настройка скорости и качества
 
@@ -610,7 +562,6 @@ src/idp/           # Код пайплайна
   visio_document.py # Текст документа → редактируемый Visio (фигуры, таблицы)
   visio_cli.py     # CLI: idp-visio (PNG → .vsdx)  reconstructor.py # Сборка DOCX/PDF/Visio из бандлов
   operator_client.py # Терминальный инструмент review'а оператора
-  webui.py         # Веб-интерфейс для отдельных файлов (stdlib http.server)
   prompts.py       # Промпты для VLM
 
 infra/compose/

@@ -10,7 +10,6 @@ DOCX конвертируется в Markdown через `mammoth`.
 |---|---|---|
 | Каталог | `idp` | Обрабатывает `data/input/` рекурсивно, складывает результаты в `data/output/` (`--artifacts` добавляет `<stem>.md`, `--force` переобрабатывает) |
 | Оператор | `idp-operator --input page.pdf` | Постраничный review черновиков VLM, исправления идут в few-shot feedback для будущих прогонов (`--force` — ревьюить заново, не теряя правки) |
-| Один файл | `idp-web --root data/ui --port 8080` | Веб-интерфейс: перетащил файл в бокс, нажал «Обработать»/«DOCX»/«PDF»/«TXT», скачал результат. Добавь `--stub`, чтобы работать без GPU (заглушка вместо VLM) |
 | Сборка | `idp-reconstruct [--bundle DIR] [--format docx\|pdf\|vsdx]` | Пересобирает DOCX/PDF/Visio из бандла без VLM |
 | Visio | `idp-visio --out drawing.vsdx <png-файлы или папка>` | Собирает Visio-чертеж (.vsdx) из PNG-картинок без VLM; `--mode document` — редактируемый документ из текста бандла |
 

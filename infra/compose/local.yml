@@ -149,45 +149,5 @@ services:
     networks:
       - idp_internal
 
-  web:
-    image: ${IDP_APP_IMAGE:-local/idp-app:latest}
-    pull_policy: never
-    command: ["idp-web", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "18067"]
-    environment:
-      PYTHONPATH: /workspace/src
-      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1}
-      IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}
-      IDP_MAX_IMAGES: ${IDP_MAX_IMAGES:-2}
-      IDP_RECONSTRUCT_FORMATS: ${IDP_RECONSTRUCT_FORMATS:-docx,pdf,vsdx}
-      IDP_VISIO_MODE: ${IDP_VISIO_MODE:-false}
-      IDP_VISIO_CONTENT: ${IDP_VISIO_CONTENT:-pages}
-    ports:
-      - "18067:18067"
-    volumes:
-      - ${IDP_SOURCE_ROOT:-../..}:/workspace
-      - ui_data:/data/ui
-    networks:
-      - idp_internal
-
-  web-stub:
-    image: ${IDP_APP_IMAGE:-local/idp-app:latest}
-    pull_policy: never
-    command: ["idp-web", "--stub", "--root", "/data/ui", "--host", "0.0.0.0", "--port", "18067"]
-    environment:
-      PYTHONPATH: /workspace/src
-      IDP_VL_MODEL: stub-vl
-    ports:
-      - "18067:18067"
-    volumes:
-      - ${IDP_SOURCE_ROOT:-../..}:/workspace
-      - ui_data:/data/ui
-    profiles:
-      - stub
-    networks:
-      - idp_internal
-
-volumes:
-  ui_data:
-
 networks:
   idp_internal:

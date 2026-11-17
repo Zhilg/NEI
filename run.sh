@@ -15,8 +15,6 @@ usage() {
   logs                Логи воркера (follow)
   ps                  Статус контейнеров
   process [--force]   Обработать файлы из data/input
-  web                 Веб-интерфейс на http://localhost:18067
-  web-stub            Веб-интерфейс без GPU (заглушка VLM)
   model qwen|xiaomi   Переключить модель (сохраняет в .env)
   download [hf/repo]  Скачать модель в transfer/models/
   bench               Бенчмарк VLM
@@ -55,14 +53,6 @@ case "$cmd" in
   process)
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d vllm-vl
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm worker idp "$@"
-    ;;
-  web)
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d web
-    echo "Веб-интерфейс: http://localhost:18067"
-    ;;
-  web-stub)
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile stub up -d web-stub
-    echo "Веб-интерфейс (stub): http://localhost:18067"
     ;;
   model)
     target="${1:-}"
