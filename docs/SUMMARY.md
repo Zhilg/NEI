@@ -48,7 +48,7 @@ flowchart LR
 |---|---|
 | `IDP_VL_CONCURRENCY` | одновременных запросов к VLM (по умолчанию 12) |
 | `IDP_VL_MAX_IMAGES` | страниц в одном запросе (по умолчанию 2) |
-| `IDP_VL_TIMEOUT_SECONDS` | таймаут запроса, 3 попытки с backoff 1s/2s/4s |
+| `IDP_VL_TIMEOUT_SECONDS` | таймаут запроса (по умолчанию 1800 — под пиковую очередь vLLM), 6 попыток с backoff и ротацией эндпоинтов |
 | `IDP_MIN_ENTITY_CONFIDENCE` | порог уверенности сущности (по умолчанию 0.3) |
 | `IDP_RECONSTRUCT_FORMATS` | `docx,pdf` / пусто; `vsdx` — ещё и Visio-чертеж из рендеров |
 | `IDP_VISIO_MODE` | аналог флага `idp --visio` (собирать `reconstruct.vsdx` из бандла) |

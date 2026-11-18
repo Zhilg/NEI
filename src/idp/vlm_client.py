@@ -197,7 +197,12 @@ class _HttpClient:
                             url = f"{self.selector.next()}/chat/completions"
                             continue
                 logger.warning(
-                    "VLM network error (attempt %d/%d): %s", attempt + 1, self._MAX_ATTEMPTS, exc
+                    "VLM network error (attempt %d/%d) [%s] %s: %s",
+                    attempt + 1,
+                    self._MAX_ATTEMPTS,
+                    url.split("/")[2] if "/" in url else url,
+                    type(exc).__name__,
+                    exc,
                 )
             else:
                 if response.status_code == 200:
@@ -215,7 +220,7 @@ class _HttpClient:
             if attempt < self._MAX_ATTEMPTS - 1:
                 url = f"{self.selector.next()}/chat/completions"
                 await asyncio.sleep(self._BACKOFF_SECONDS[attempt])
-        raise RuntimeError(f"VLM request failed after {self._MAX_ATTEMPTS} retries: {last_error}")
+        raise RuntimeError(f"VLM request failed after {self._MAX_ATTEMPTS} retries: {type(last_error).__name__}: {last_error}")
 
 
 def _cache_key(url: str, payload: dict) -> str:
