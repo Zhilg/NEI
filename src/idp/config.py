@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     vl_max_context_chars: int = Field(default=500, ge=100, le=100000)
     vl_concurrency: int = Field(default=12, ge=1, le=64)
 
+    # Сколько файлов обрабатывается параллельно (очередь воркеров и пул
+    # потоков для CPU-части: текстовый слой, конвертеры, запись txt).
+    worker_threads: int = Field(default=32, ge=1, le=256)
+    # Как часто (сек) архив сверяется полностью (CRC журналов + недостающие
+    # файлы).  Между сверками результаты дозаписываются точечно после
+    # каждого файла — на больших пачках это в разы быстрее полной перепаковки.
+    archive_sync_interval: float = Field(default=60.0, ge=0)
+
     test_mode: bool = Field(default=False)
     artifacts_mode: bool = Field(default=False)
     visio_mode: bool = Field(default=False)

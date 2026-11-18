@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from pathlib import Path
 
 from idp.config import settings
@@ -38,6 +39,9 @@ class TxtExporter:
         self.root = (output_root or settings.output_root) / "txts"
         self.root.mkdir(parents=True, exist_ok=True)
         self._used: set[str] = set()
+        # export вызывается из потоков (asyncio.to_thread) параллельно —
+        # выбор свободного имени должен быть атомарным.
+        self._lock = threading.Lock()
 
     def export(self, text: str, *, name: str) -> Path:
         """Write ``text`` to ``txts/<name>.txt``.
@@ -47,12 +51,13 @@ class TxtExporter:
         ``_2``, ``_3`` ... suffix so nothing is overwritten.
         """
         base = _sanitize_name(name)
-        candidate = base
-        counter = 2
-        while candidate in self._used:
-            candidate = f"{base}_{counter}"
-            counter += 1
-        self._used.add(candidate)
+        with self._lock:
+            candidate = base
+            counter = 2
+            while candidate in self._used:
+                candidate = f"{base}_{counter}"
+                counter += 1
+            self._used.add(candidate)
         out_path = self.root / f"{candidate}.txt"
         out_path.write_text((text or "").strip() + "\n", encoding="utf-8")
         return out_path

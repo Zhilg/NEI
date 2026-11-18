@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import zipfile
 from pathlib import Path
 
@@ -214,8 +215,8 @@ def test_scan_pdf_without_text_layer_goes_through_vlm(workspace, stub_server):
     txt = workspace.output / "txts" / "scan.txt"
     assert txt.is_file()
     assert txt.read_text(encoding="utf-8").strip(), "VLM must return some text"
-    # Рендеры страниц скана сохранились рядом с результатами
-    assert (workspace.output / "rendered" / "scan" / "page_00001.png").is_file()
+    # Рендеры страниц — временные, на диске не остаются
+    assert not (workspace.output / "rendered").exists()
     with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
         assert "txts/scan.txt" in zf.namelist()
 
@@ -232,6 +233,45 @@ def test_png_scan_goes_through_vlm(workspace, stub_server):
     assert results[0]["status"] == "ok", results[0].get("error")
     assert results[0]["pages"] == 1
     assert (workspace.output / "txts" / "photo.txt").is_file()
+
+
+def test_archive_contains_only_text_results(workspace, stub_server):
+    """В results.zip — только txts и журналы: никаких рендеров и прочего мусора."""
+    make_scan_pdf(workspace.input / "scan.pdf")
+    make_text_pdf(workspace.input / "text.pdf", "Отчёт о работах", BODY)
+    # Мусор от старых прогонов в output
+    junk = workspace.output / "rendered" / "old"
+    junk.mkdir(parents=True)
+    (junk / "page_00001.png").write_bytes(b"\x89PNG")
+    (workspace.output / "entities.json").write_text("{}", encoding="utf-8")
+
+    _run(Worker())
+
+    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
+        names = zf.namelist()
+    assert "txts/scan.txt" in names
+    assert "txts/text.txt" in names
+    assert "results.jsonl" in names
+    assert not any(n.startswith("rendered/") for n in names)
+    assert "entities.json" not in names
+
+
+def test_many_files_processed_in_parallel(workspace):
+    """Пачка файлов проходит быстро: очередь воркеров, а не файл за файлом."""
+    for i in range(24):
+        make_text_pdf(workspace.input / f"doc_{i:02d}.pdf", f"Отчёт {i}", BODY)
+
+    start = time.perf_counter()
+    _run(Worker())
+    elapsed = time.perf_counter() - start
+
+    results = _read_results(workspace.output)
+    assert len(results) == 24
+    assert all(r["status"] == "ok" for r in results)
+    assert len(list((workspace.output / "txts").glob("*.txt"))) == 24
+    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
+        assert len([n for n in zf.namelist() if n.startswith("txts/")]) == 24
+    assert elapsed < 30, f"24 files took {elapsed:.1f}s — parallelism regressed"
 
 
 def test_html_folder_and_docx(workspace, stub_server):

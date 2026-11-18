@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
 import re
+import shutil
+import tempfile
 import time
 import zlib
 import zipfile
@@ -224,6 +227,10 @@ class Worker:
         # Архивируется между вызовами _archive_results, чтобы не перечитывать
         # оглавление zip после каждого файла.  None — ещё не читали.
         self._archived: set[str] | None = None
+        # Полная сверка архива (CRC журналов + поиск недостающих файлов)
+        # не чаще, чем раз в archive_sync_interval секунд.
+        self._archive_sync_interval = settings.archive_sync_interval
+        self._last_archive_sync = 0.0
 
     def _find_files(self, input_root: Path) -> list[Path]:
         files: list[Path] = []
@@ -292,15 +299,6 @@ class Worker:
             document_type="other",
         )
 
-    def _rendered_dir(self, relative: Path) -> Path:
-        return settings.output_root / "rendered" / relative.parent / relative.stem
-
-    def _prepare_image(self, file_path: Path, relative: Path) -> Path:
-        """Положить скан в рендеры как PNG, который понимает VLM."""
-        target_dir = self._rendered_dir(relative)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        return convert_image_to_png(file_path, target_dir / "page_00001.png")
-
     async def _reconstruct_with_vlm(self, file_path: Path, relative: Path) -> tuple[str, int]:
         """Текст для файла без текстового слоя: рендер страниц -> VLM markdown.
 
@@ -308,22 +306,34 @@ class Worker:
         бессмыслен (DOCX/PPTX/HTML — они born-digital), дают пустой текст.
         Ошибки VLM (модель недоступна и т.п.) не глотаем: пусть файл уйдёт
         в status=error и будет виден в results.jsonl.
+
+        Рендеры страниц живут во временной папке и удаляются сразу после
+        запроса к VLM — на диске и в архиве остаются только текстовые
+        результаты.
         """
         ext = file_path.suffix.lower()
-        if ext == ".pdf":
-            _, pngs, _ = await asyncio.to_thread(
-                extract_pdf_text_and_visual_pages, file_path, self._rendered_dir(relative)
-            )
-        elif ext in IMAGE_EXTENSIONS:
-            png = await asyncio.to_thread(self._prepare_image, file_path, relative)
-            pngs = [png]
-        else:
+        if ext not in IMAGE_EXTENSIONS and ext != ".pdf":
             return "", 0
-        if not pngs:
-            return "", 0
-        logger.info("%s: текстового слоя нет, реконструирую через VLM (%d стр.)", relative, len(pngs))
-        markdown = await reconstruct_markdown(pngs)
-        return strip_bbox_annotations(markdown).strip(), len(pngs)
+        # Уникальная папка на файл: параллельные воркеры с одинаковыми
+        # stem не должны делить общий temp-каталог.
+        tmp_dir = Path(tempfile.mkdtemp(prefix="idp_pages_"))
+        try:
+            if ext == ".pdf":
+                _, pngs, _ = await asyncio.to_thread(
+                    extract_pdf_text_and_visual_pages, file_path, tmp_dir
+                )
+            else:
+                png = await asyncio.to_thread(
+                    convert_image_to_png, file_path, tmp_dir / "page_00001.png"
+                )
+                pngs = [png]
+            if not pngs:
+                return "", 0
+            logger.info("%s: текстового слоя нет, реконструирую через VLM (%d стр.)", relative, len(pngs))
+            markdown = await reconstruct_markdown(pngs)
+            return strip_bbox_annotations(markdown).strip(), len(pngs)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _record_stats(self, timer: FileTimer, result: FileResult | None) -> None:
         duration = time.perf_counter() - timer.start
@@ -344,7 +354,7 @@ class Worker:
         result_writer: ResultWriter,
         txt_exporter: TxtExporter,
         pbar: tqdm,
-    ) -> dict:
+    ) -> tuple[dict, list[Path]]:
         relative = file_path.relative_to(self._input_root)
         file_type = (
             file_path.suffix.lower().lstrip(".") if file_path.is_file() else "html_folder"
@@ -375,9 +385,8 @@ class Worker:
             if not text.strip():
                 result = self._skip_result(file_path, relative, timer, file_type)
                 self._processed.add(str(relative))
-                await self._export_txt_bundle(file_path, relative, result, txt_exporter)
                 pbar.set_postfix(file=file_path.name, stage="done")
-                return result.to_dict()
+                return result.to_dict(), []
 
             document_type = detect_document_type(file_path, text)
             documents = _split_into_documents(text, file_path)
@@ -407,14 +416,14 @@ class Worker:
                 document_type=document_type,
             )
             self._processed.add(str(relative))
-            await self._export_txt_bundle(file_path, relative, result, txt_exporter)
+            produced = await self._export_txt_bundle(file_path, relative, result, txt_exporter)
             pbar.set_postfix(file=file_path.name, stage="done")
-            return result.to_dict()
+            return result.to_dict(), produced
         except Exception as exc:
             pbar.set_postfix(file=file_path.name, stage="error")
             logger.exception("Failed to process %s", relative)
             result = self._error_result(file_path, relative, timer, file_type, exc)
-            return result.to_dict()
+            return result.to_dict(), []
         finally:
             self._record_stats(timer, result)
 
@@ -424,13 +433,15 @@ class Worker:
         relative: Path,
         result: FileResult,
         txt_exporter: TxtExporter,
-    ) -> None:
+    ) -> list[Path]:
+        """Записать txt документа; вернуть пути записанных файлов (для архива)."""
+        written: list[Path] = []
         if result.status != "ok":
-            return
+            return written
         try:
             documents = result.documents
             if not documents:
-                return
+                return written
             # Flat output: txts/<original name>.txt, no subfolders, no meta.json.
             # Several documents from one collection get _2, _3 ... suffixes.
             base_name = relative.stem
@@ -439,9 +450,11 @@ class Worker:
                 if not doc_text:
                     continue
                 name = f"{base_name}_{index + 1}" if len(documents) > 1 else base_name
-                await asyncio.to_thread(txt_exporter.export, doc_text, name=name)
+                path = await asyncio.to_thread(txt_exporter.export, doc_text, name=name)
+                written.append(path)
         except Exception as exc:
             logger.warning("Txt export failed for %s: %s", file_path.name, exc)
+        return written
 
     async def run(
         self,
@@ -452,6 +465,12 @@ class Worker:
     ) -> None:
         root = input_root or settings.input_root
         self._input_root = root
+        # Пул потоков для CPU-части (текстовый слой PDF, конвертеры, запись
+        # txt): по умолчанию asyncio даёт min(32, cpu+4), поднимаем до
+        # worker_threads, чтобы большие пачки не упирались в 16 потоков.
+        asyncio.get_running_loop().set_default_executor(
+            concurrent.futures.ThreadPoolExecutor(max_workers=settings.worker_threads)
+        )
         settings.output_root.mkdir(parents=True, exist_ok=True)
         result_writer = ResultWriter(
             settings.output_root / "results.jsonl",
@@ -485,24 +504,46 @@ class Worker:
             logger.info("Новых файлов для обработки: %d", len(pending))
             pbar = tqdm(total=len(pending), desc="Files", unit="file")
 
-            async def _process_with_semaphore(file_path: Path) -> dict:
-                return await self._process_file(file_path, result_writer, txt_exporter, pbar)
+            # Очередь + фиксированное число воркеров: на пачке в десятки
+            # тысяч файлов не создаём по корутине на файл, память ровная.
+            # Реальный параллелизм ограничен пулом потоков (CPU-часть) и
+            # семафором VLM (запросы к модели).
+            queue: asyncio.Queue[Path | None] = asyncio.Queue()
+            for file_path in pending:
+                queue.put_nowait(file_path)
+            n_workers = min(settings.worker_threads, len(pending))
+            for _ in range(n_workers):
+                queue.put_nowait(None)
 
-            tasks = [_process_with_semaphore(file_path) for file_path in pending]
-            try:
-                for coro in asyncio.as_completed(tasks):
-                    result = await coro
-                    pbar.update(1)
+            async def _queue_worker() -> None:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        return
+                    result, produced = await self._process_file(item, result_writer, txt_exporter, pbar)
                     result_writer.write(result)
                     result_writer.flush()
-                    self._archive_results(settings.output_root)
+                    # Точечная дозапись в архив только что созданных txt —
+                    # без сканирования всего output после каждого файла.
+                    self._archive_file_results(produced)
+                    pbar.update(1)
+
+            try:
+                await asyncio.gather(*[_queue_worker() for _ in range(n_workers)])
             finally:
                 pbar.close()
             self._stats_writer.flush()
-            # Свежий pretty-JSON и синхронизация «живых» журналов в архиве —
-            # после каждой пачки, а не только при остановке watch-режима.
+            # Свежий pretty-JSON после каждой пачки, а не только при остановке
+            # watch-режима.  Полная сверка архива (CRC журналов + недостающие
+            # файлы) — не чаще archive_sync_interval: на больших output
+            # перепаковка zip после каждой пачки слишком дорогая.
             result_writer.finalize()
-            self._archive_results(settings.output_root, full_sync=True)
+            now = time.monotonic()
+            if now - self._last_archive_sync >= self._archive_sync_interval:
+                self._archive_results(settings.output_root, full_sync=True)
+                self._last_archive_sync = now
+            else:
+                self._archive_results(settings.output_root)
             return len(pending)
 
         if not watch:
@@ -530,6 +571,59 @@ class Worker:
             self._stats_writer.flush()
             self._archive_results(settings.output_root, full_sync=True)
 
+    @staticmethod
+    def _archivable(path: Path, output_root: Path) -> bool:
+        """В архив идут только текстовые результаты: ``txts/**/*.txt`` и журналы.
+
+        Рендеры страниц, бандлы, картинки и прочие промежуточные артефакты —
+        мусор, они в results.zip не попадают.
+        """
+        if path.name == ARCHIVE_NAME:
+            return False
+        rel = path.relative_to(output_root)
+        if len(rel.parts) == 1:
+            return rel.name in LIVE_FILES
+        return rel.parts[0] == "txts" and path.suffix.lower() == ".txt"
+
+    def _archive_index(self, archive: Path) -> set[str]:
+        """Оглавление архива (лениво читается один раз и кэшируется)."""
+        if self._archived is None:
+            self._archived = set()
+            if archive.exists():
+                try:
+                    with zipfile.ZipFile(archive, "r") as zf:
+                        self._archived = set(zf.namelist())
+                except (zipfile.BadZipFile, OSError):
+                    self._archived = set()
+        return self._archived
+
+    def _archive_file_results(self, paths: list[Path]) -> None:
+        """Дозаписать в архив txt одного обработанного документа.
+
+        Быстрый путь после каждого файла: пакуются только что созданные
+        файлы, без rglob по всему output.  Журналы и всё пропущенное
+        докидывает периодическая :meth:`_archive_results`.
+        """
+        if not paths:
+            return
+        output_root = settings.output_root
+        archive = output_root / ARCHIVE_NAME
+        archived = self._archive_index(archive)
+        new_entries: list[tuple[Path, str]] = []
+        for path in paths:
+            if not path.is_file():
+                continue
+            arcname = path.relative_to(output_root).as_posix()
+            if arcname not in archived:
+                new_entries.append((path, arcname))
+        if not new_entries:
+            return
+        mode = "a" if archive.exists() else "w"
+        with zipfile.ZipFile(archive, mode, zipfile.ZIP_DEFLATED) as zf:
+            for path, arcname in new_entries:
+                zf.write(path, arcname)
+                archived.add(arcname)
+
     def _archive_results(self, output_root: Path, full_sync: bool = False) -> None:
         """Обновить сжатый архив ``results.zip`` с результатами.
 
@@ -546,20 +640,13 @@ class Worker:
         archive = output_root / ARCHIVE_NAME
         current: dict[str, Path] = {}
         for path in sorted(output_root.rglob("*")):
-            if path.is_file() and path.name != ARCHIVE_NAME:
+            if path.is_file() and self._archivable(path, output_root):
                 # as_posix: zip хранит имена с "/", иначе на Windows один и тот
                 # же файл выглядит то как "txts\a.txt" (на диске), то как
                 # "txts/a.txt" (в архиве) и дозаписывается второй раз.
                 current[path.relative_to(output_root).as_posix()] = path
 
-        if self._archived is None:
-            self._archived = set()
-            if archive.exists():
-                try:
-                    with zipfile.ZipFile(archive, "r") as zf:
-                        self._archived = set(zf.namelist())
-                except (zipfile.BadZipFile, OSError):
-                    self._archived = set()
+        self._archive_index(archive)
 
         stale = False
         if full_sync:
