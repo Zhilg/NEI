@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -423,6 +424,7 @@ class Worker:
                     pbar.update(1)
                     result_writer.write(result)
                     result_writer.flush()
+                    self._archive_results(settings.output_root)
             finally:
                 pbar.close()
             self._stats_writer.flush()
@@ -432,6 +434,7 @@ class Worker:
             await _process_batch()
             result_writer.finalize()
             self._stats_writer.flush()
+            self._archive_results(settings.output_root)
             return
 
         logger.info("Режим наблюдения: сканирование %s каждые %.0f сек", root, interval)
@@ -447,6 +450,41 @@ class Worker:
         finally:
             result_writer.finalize()
             self._stats_writer.flush()
+            self._archive_results(settings.output_root)
+
+
+    def _archive_results(self, output_root: Path) -> None:
+        """Добавить новые результаты в сжатый архив ``results.zip``.
+
+        Архив обновляется инкрементально: в него добавляются только файлы,
+        которых ещё нет внутри (кроме самого архива). Каждый новый результат
+        попадает в архив сразу после записи,
+        так что при аварийной остановке уже обработанное не теряется.
+        """
+        archive = output_root / "results.zip"
+        existing: set[str] = set()
+        mode = "w"
+        if archive.exists():
+            mode = "a"
+            try:
+                with zipfile.ZipFile(archive, "r") as zf:
+                    existing = set(zf.namelist())
+            except (zipfile.BadZipFile, OSError):
+                mode = "w"
+                existing = set()
+        files_added = 0
+        with zipfile.ZipFile(archive, mode, zipfile.ZIP_DEFLATED) as zf:
+            for path in sorted(output_root.rglob("*")):
+                if not path.is_file() or path.name == "results.zip":
+                    continue
+                arcname = str(path.relative_to(output_root))
+                if arcname in existing:
+                    continue
+                zf.write(path, arcname)
+                existing.add(arcname)
+                files_added += 1
+        if files_added:
+            logger.info("В архив %s добавлено %d файлов", archive, files_added)
 
 
 def _parse_args() -> argparse.Namespace:
