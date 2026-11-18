@@ -30,23 +30,35 @@ docker compose -f infra/compose/local.yml logs -f worker
 docker compose -f infra/compose/local.yml down
 ```
 
-## Репликация vLLM на 2 GPU
+## Репликация vLLM на несколько GPU
 
-Сейчас настроено 2 независимых инстанса vLLM, каждый на своей видеокарте:
+Настроено 4 инстанса vLLM:
 
-- **vllm-vl-0** — GPU 0, порт `8000`
-- **vllm-vl-1** — GPU 1, порт `8001`
+- **vllm-vl** — GPU 0+1, tensor-parallel 2 (основная пара)
+- **vllm-vl-2** — GPU 2 (отдельная карта)
+- **vllm-vl-3** — GPU 3
+- **vllm-vl-4** — GPU 4
 
-Worker балансирует запросы между ними через round-robin (`IDP_VL_ENDPOINTS`).
+Все слушают порт `8000` внутри docker-сети (конфликтов нет — у каждого свой
+контейнер). Worker балансирует запросы между ними через round-robin
+(`IDP_VL_ENDPOINTS`, по умолчанию все четыре) и держит до
+`IDP_VL_CONCURRENCY=32` параллельных запросов (~8 на реплику). GPU каждой
+реплики настраивается через `IDP_VLLM_VL_GPU_0..4` в `.env`.
 
-### Проверка что оба инстанса работают
+Общие параметры реплик вынесены в YAML-якорь `x-vllm-anchor` в
+`infra/compose/local.yml` — правка в одном месте применяется ко всем.
+
+### Проверка что все инстансы работают
 
 ```bash
-curl http://localhost:8000/v1/models
-curl http://localhost:8001/v1/models
+docker compose -f infra/compose/local.yml ps
+for s in vllm-vl vllm-vl-2 vllm-vl-3 vllm-vl-4; do
+  docker compose -f infra/compose/local.yml exec $s \
+    python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/v1/models', timeout=2).status)"
+done
 ```
 
-Оба должны вернуть модель `Qwen3.8-27B`.
+Каждый должен ответить `200`.
 
 ## Запуск через SGLang
 
@@ -98,15 +110,17 @@ python scripts/bench_vlm.py \\
 В `.env`:
 
 ```env
-# Какую видеокарту использовать для worker (обычно 0)
-IDP_WORKER_GPU=0
-
 # Репликация: GPU для каждого vLLM инстанса
 IDP_VLLM_VL_GPU_0=0
 IDP_VLLM_VL_GPU_1=1
+IDP_VLLM_VL_GPU_2=2
+IDP_VLLM_VL_GPU_3=3
+IDP_VLLM_VL_GPU_4=4
 ```
 
-Если у тебя только одна карта, удали один из инстансов из `infra/compose/local.yml` и оставь только `vllm-vl-0`.
+Если карт меньше, удали лишние сервисы из `infra/compose/local.yml` **и** их
+эндпоинты из `IDP_VL_ENDPOINTS` у воркера (иначе воркер будет ждать healthcheck
+несуществующих реплик и слать запросы в пустоту).
 
 ## Параметры vLLM
 
@@ -376,7 +390,7 @@ docker compose -f infra/compose/local.yml run --rm --no-deps worker idp --help
 docker compose -f infra/compose/local.yml run --rm --no-deps worker idp-reconstruct --help
 ```
 
-`--no-deps` не поднимает `vllm-vl-0/1`, так что команда не падает даже если GPU недоступна.
+`--no-deps` не поднимает реплики `vllm-vl*`, так что команда не падает даже если GPU недоступна.
 
 ## Настройка скорости и качества
 

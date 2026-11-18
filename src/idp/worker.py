@@ -35,11 +35,16 @@ from idp.document_classifier import detect_document_type
 from idp.docx_converter import extract_docx_text
 from idp.html_converter import extract_html_text, convert_html_folder_to_markdown
 from idp.pptx_converter import extract_pptx_text
-from idp.renderer import extract_pdf_text
+from idp.renderer import (
+    convert_image_to_png,
+    extract_pdf_text,
+    extract_pdf_text_and_visual_pages,
+)
 from idp.rubricator import extract_rubricators
 from idp.result_writer import ResultWriter
 from idp.stats_writer import FileTimer, StatsWriter
 from idp.txt_export import TxtExporter
+from idp.vlm_client import reconstruct_markdown, strip_bbox_annotations
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +292,39 @@ class Worker:
             document_type="other",
         )
 
+    def _rendered_dir(self, relative: Path) -> Path:
+        return settings.output_root / "rendered" / relative.parent / relative.stem
+
+    def _prepare_image(self, file_path: Path, relative: Path) -> Path:
+        """Положить скан в рендеры как PNG, который понимает VLM."""
+        target_dir = self._rendered_dir(relative)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return convert_image_to_png(file_path, target_dir / "page_00001.png")
+
+    async def _reconstruct_with_vlm(self, file_path: Path, relative: Path) -> tuple[str, int]:
+        """Текст для файла без текстового слоя: рендер страниц -> VLM markdown.
+
+        Возвращает ``(text, page_count)``.  Форматы, для которых VLM-фолбэк
+        бессмыслен (DOCX/PPTX/HTML — они born-digital), дают пустой текст.
+        Ошибки VLM (модель недоступна и т.п.) не глотаем: пусть файл уйдёт
+        в status=error и будет виден в results.jsonl.
+        """
+        ext = file_path.suffix.lower()
+        if ext == ".pdf":
+            _, pngs, _ = await asyncio.to_thread(
+                extract_pdf_text_and_visual_pages, file_path, self._rendered_dir(relative)
+            )
+        elif ext in IMAGE_EXTENSIONS:
+            png = await asyncio.to_thread(self._prepare_image, file_path, relative)
+            pngs = [png]
+        else:
+            return "", 0
+        if not pngs:
+            return "", 0
+        logger.info("%s: текстового слоя нет, реконструирую через VLM (%d стр.)", relative, len(pngs))
+        markdown = await reconstruct_markdown(pngs)
+        return strip_bbox_annotations(markdown).strip(), len(pngs)
+
     def _record_stats(self, timer: FileTimer, result: FileResult | None) -> None:
         duration = time.perf_counter() - timer.start
         stats = self._stats_writer or StatsWriter(settings.output_root / "stats.jsonl")
@@ -325,8 +363,14 @@ class Worker:
                 text = convert_html_folder_to_markdown(file_path)
                 pages = 1
             else:
-                text, pages = _extract_text(file_path)
+                text, pages = await asyncio.to_thread(_extract_text, file_path)
             timer.pages = pages
+
+            if not text.strip():
+                # Скан без текстового слоя (или PNG/JPEG): рендерим страницы
+                # и реконструируем текст через VLM — скипать сканы нельзя.
+                text, pages = await self._reconstruct_with_vlm(file_path, relative)
+                timer.pages = pages
 
             if not text.strip():
                 result = self._skip_result(file_path, relative, timer, file_type)

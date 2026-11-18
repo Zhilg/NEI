@@ -22,7 +22,8 @@ _PACKAGED_SCHEMA_PATH = Path(__file__).parent / "entity_schema.json"
 
 def _schema_paths() -> tuple[Path, Path]:
     """(writable schema path, packaged template)."""
-    resolved = settings.entity_schema_path or settings.output_root / "entity_schema.json"
+    configured = settings.entity_schema_path
+    resolved = Path(configured) if configured else settings.output_root / "entity_schema.json"
     return resolved, _PACKAGED_SCHEMA_PATH
 
 

@@ -94,7 +94,12 @@ def with_feedback(system_prompt: str, force_refresh: bool = False) -> str:
 def get_vl_endpoints() -> list[str]:
     """VL endpoints to talk to: explicit list, single endpoint, or empty."""
     if settings.vl_endpoints:
-        return list(settings.vl_endpoints)
+        raw = settings.vl_endpoints
+        if isinstance(raw, str):
+            # Из переменной окружения приходит строка "url1,url2" — без split
+            # list(str) разрезал бы её на отдельные символы.
+            return [endpoint.strip() for endpoint in raw.split(",") if endpoint.strip()]
+        return list(raw)
     if settings.vl_endpoint:
         return [settings.vl_endpoint]
     return []

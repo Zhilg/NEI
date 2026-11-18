@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     visio_content: str = Field(default="pages")
     reconstruct_formats: str | list[str] = Field(default="")
 
+    # Пути-строки (пустая строка = не задано): compose передаёт их как env,
+    # при отсутствии полей pydantic молча игнорировал бы эти переменные.
+    entity_schema_path: str = Field(default="")
+    trash_path: str = Field(default="")
+    min_entity_confidence: float = Field(default=0.3, ge=0, le=1)
+
     vllm_quantization: str = Field(default="awq")
     vllm_dtype: str = Field(default="half")
     vllm_gpu_memory_utilization: float = Field(default=0.9, ge=0.1, le=1.0)

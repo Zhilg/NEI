@@ -29,6 +29,24 @@ def make_text_pdf(path: Path, heading: str, body: str, pages: int = 2) -> Path:
     return path
 
 
+def make_scan_pdf(path: Path, pages: int = 2) -> Path:
+    """A PDF without a text layer: pages are pure images, like a real scan."""
+    import fitz
+
+    from tests import fixtures
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    page_png = fixtures.make_png(path.parent / "_scan_page.png", 400, 300)
+    doc = fitz.open()
+    for _ in range(pages):
+        page = doc.new_page(width=400, height=300)
+        page.insert_image(page.rect, filename=str(page_png))
+    doc.save(str(path))
+    doc.close()
+    page_png.unlink(missing_ok=True)
+    return path
+
+
 def _read_results(output_root: Path) -> list[dict]:
     results_path = output_root / "results.jsonl"
     if not results_path.exists():
@@ -182,7 +200,43 @@ def test_startup_adds_files_missing_from_existing_archive(workspace):
         assert "txts/report.txt" in zf.namelist()
 
 
-def test_html_folder_and_docx(workspace):
+def test_scan_pdf_without_text_layer_goes_through_vlm(workspace, stub_server):
+    """Скан без текстового слоя обязан обрабатываться, а не скипаться."""
+    make_scan_pdf(workspace.input / "scan.pdf")
+    _run(Worker())
+
+    results = _read_results(workspace.output)
+    assert len(results) == 1
+    record = results[0]
+    assert record["status"] == "ok", record.get("error")
+    assert record["pages"] == 2
+
+    txt = workspace.output / "txts" / "scan.txt"
+    assert txt.is_file()
+    assert txt.read_text(encoding="utf-8").strip(), "VLM must return some text"
+    # Рендеры страниц скана сохранились рядом с результатами
+    assert (workspace.output / "rendered" / "scan" / "page_00001.png").is_file()
+    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
+        assert "txts/scan.txt" in zf.namelist()
+
+
+def test_png_scan_goes_through_vlm(workspace, stub_server):
+    """PNG/JPEG — это скан по определению: всегда через VLM."""
+    from tests import fixtures
+
+    fixtures.make_png(workspace.input / "photo.png", 600, 400)
+    _run(Worker())
+
+    results = _read_results(workspace.output)
+    assert len(results) == 1
+    assert results[0]["status"] == "ok", results[0].get("error")
+    assert results[0]["pages"] == 1
+    assert (workspace.output / "txts" / "photo.txt").is_file()
+
+
+def test_html_folder_and_docx(workspace, stub_server):
+    # stub_server нужен: make_docx кладёт figure.png рядом в input,
+    # а картинки теперь идут через VLM.
     from tests import fixtures
 
     fixtures.make_docx(workspace.input / "spec.docx")
