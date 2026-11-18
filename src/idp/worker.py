@@ -10,7 +10,8 @@ worker:
    individual articles or stories — each becomes a separate document.
 3. Extracts rubricator classification codes (УДК, ГРНТИ, ГНТИ) together
    with their numbers from every document's text.
-4. Writes one TXT bundle per document (``text.txt`` + ``meta.json``).
+4. Writes one flat TXT file per document (``txts/<original name>.txt``,
+   no subfolders and no sidecar metadata files).
 """
 
 from __future__ import annotations
@@ -317,6 +318,7 @@ class Worker:
 
             if not text.strip():
                 result = self._skip_result(file_path, relative, timer, file_type)
+                self._processed.add(str(relative))
                 await self._export_txt_bundle(file_path, relative, result, txt_exporter)
                 pbar.set_postfix(file=file_path.name, stage="done")
                 return result.to_dict()
@@ -348,6 +350,7 @@ class Worker:
                 documents=doc_results,
                 document_type=document_type,
             )
+            self._processed.add(str(relative))
             await self._export_txt_bundle(file_path, relative, result, txt_exporter)
             pbar.set_postfix(file=file_path.name, stage="done")
             return result.to_dict()
@@ -372,30 +375,27 @@ class Worker:
             documents = result.documents
             if not documents:
                 return
-            # Export each document as its own bundle.  For multi-document
-            # sources (collections/journals) every article gets its own
-            # txts/ folder so each article is a separate document.
+            # Flat output: txts/<original name>.txt, no subfolders, no meta.json.
+            # Several documents from one collection get _2, _3 ... suffixes.
+            base_name = relative.stem
             for index, doc in enumerate(documents):
-                suffix = f"_{index + 1}" if len(documents) > 1 else ""
-                doc_relative = relative.parent / f"{relative.stem}{suffix}"
-                await asyncio.to_thread(
-                    txt_exporter.export,
-                    file_path,
-                    result.type,
-                    doc.get("text", ""),
-                    relative=doc_relative,
-                    pages=result.pages,
-                    document_type=result.document_type,
-                    rubricators=doc.get("rubricators", []),
-                )
+                doc_text = doc.get("text", "").strip()
+                if not doc_text:
+                    continue
+                name = f"{base_name}_{index + 1}" if len(documents) > 1 else base_name
+                await asyncio.to_thread(txt_exporter.export, doc_text, name=name)
         except Exception as exc:
             logger.warning("Txt export failed for %s: %s", file_path.name, exc)
 
-    async def run(self, input_root: Path | None = None) -> None:
+    async def run(
+        self,
+        input_root: Path | None = None,
+        watch: bool = False,
+        interval: float = 5.0,
+    ) -> None:
         root = input_root or settings.input_root
         self._input_root = root
         settings.output_root.mkdir(parents=True, exist_ok=True)
-        files = self._find_files(root)
         result_writer = ResultWriter(
             settings.output_root / "results.jsonl",
             pretty_path=settings.output_root / "results_readable.json",
@@ -404,35 +404,47 @@ class Worker:
         self._stats_writer = StatsWriter(settings.output_root / "stats.jsonl")
         self._processed = self._load_processed()
 
-        pending: list[Path] = []
-        for file_path in files:
-            if self._already_processed(file_path):
-                continue
-            pending.append(file_path)
-        pending.sort(key=lambda p: p.stat().st_size if p.is_file() else 0)
+        async def _process_batch() -> int:
+            files = self._find_files(root)
+            pending = [f for f in files if not self._already_processed(f)]
+            pending.sort(key=lambda p: p.stat().st_size if p.is_file() else 0)
+            if not pending:
+                return 0
+            logger.info("Новых файлов для обработки: %d", len(pending))
+            pbar = tqdm(total=len(pending), desc="Files", unit="file")
 
-        logger.info("Found %d file(s), %d pending after cache check", len(files), len(pending))
+            async def _process_with_semaphore(file_path: Path) -> dict:
+                return await self._process_file(file_path, result_writer, txt_exporter, pbar)
 
-        if not pending:
-            logger.warning("No pending files to process in %s", root)
+            tasks = [_process_with_semaphore(file_path) for file_path in pending]
+            try:
+                for coro in asyncio.as_completed(tasks):
+                    result = await coro
+                    pbar.update(1)
+                    result_writer.write(result)
+                    result_writer.flush()
+            finally:
+                pbar.close()
+            self._stats_writer.flush()
+            return len(pending)
+
+        if not watch:
+            await _process_batch()
             result_writer.finalize()
             self._stats_writer.flush()
             return
 
-        pbar = tqdm(total=len(pending), desc="Files", unit="file")
-
-        async def _process_with_semaphore(file_path: Path) -> dict:
-            return await self._process_file(file_path, result_writer, txt_exporter, pbar)
-
-        tasks = [_process_with_semaphore(file_path) for file_path in pending]
+        logger.info("Режим наблюдения: сканирование %s каждые %.0f сек", root, interval)
         try:
-            for coro in asyncio.as_completed(tasks):
-                result = await coro
-                pbar.update(1)
-                result_writer.write(result)
-                result_writer.flush()
+            while True:
+                try:
+                    await _process_batch()
+                except Exception as exc:  # noqa: BLE001 — keep the watcher alive
+                    logger.exception("Пакет сканирования не удался: %s", exc)
+                await asyncio.sleep(interval)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            logger.info("Режим наблюдения остановлен")
         finally:
-            pbar.close()
             result_writer.finalize()
             self._stats_writer.flush()
 
@@ -441,6 +453,17 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="IDP pipeline: text conversion and rubricator extraction")
     parser.add_argument("--force", action="store_true", help="Ignore processed cache and reprocess all files")
     parser.add_argument("--input", type=Path, default=None, help="Input directory (overrides IDP_INPUT_ROOT)")
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Режим наблюдения: сканировать input_root и обрабатывать новые файлы сразу после появления",
+    )
+    parser.add_argument(
+        "--watch-interval",
+        type=float,
+        default=5.0,
+        help="Интервал сканирования в режиме наблюдения, сек (по умолчанию 5)",
+    )
     return parser.parse_args()
 
 
@@ -449,7 +472,7 @@ async def _main() -> None:
     level = getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     worker = Worker(force=args.force)
-    await worker.run(input_root=args.input)
+    await worker.run(input_root=args.input, watch=args.watch, interval=args.watch_interval)
 
 
 def main() -> None:
