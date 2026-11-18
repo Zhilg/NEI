@@ -521,6 +521,18 @@ class Worker:
                     if item is None:
                         return
                     result, produced = await self._process_file(item, result_writer, txt_exporter, pbar)
+                    # Строка в лог на каждый файл — чтобы по логам было видно,
+                    # что сканер жуёт (без этого только tqdm-мусор в stderr).
+                    if result.get("status") == "ok":
+                        logger.info(
+                            "OK %s: %d стр., %d док., %.1fс",
+                            result.get("file"),
+                            result.get("pages") or 0,
+                            len(result.get("documents") or []),
+                            result.get("duration_sec") or 0.0,
+                        )
+                    elif result.get("status") == "error":
+                        logger.error("ERROR %s: %s", result.get("file"), result.get("error"))
                     result_writer.write(result)
                     result_writer.flush()
                     # Точечная дозапись в архив только что созданных txt —
@@ -557,12 +569,26 @@ class Worker:
             "Режим наблюдения: сканирование %s каждые %.0f сек (пауза записи %.0f сек)",
             root, interval, settle,
         )
+        empty_cycles = 0
         try:
             while True:
                 try:
-                    await _process_batch()
+                    batch_count = await _process_batch()
                 except Exception as exc:  # noqa: BLE001 — keep the watcher alive
                     logger.exception("Пакет сканирования не удался: %s", exc)
+                    batch_count = -1
+                if batch_count > 0:
+                    empty_cycles = 0
+                else:
+                    empty_cycles += 1
+                    # Сразу одна строка-подтверждение, дальше пульс раз
+                    # в ~минуту — чтобы лог показывал, что наблюдатель жив,
+                    # но не превращался в спам каждые 5 секунд.
+                    if empty_cycles == 1 or empty_cycles % 12 == 0:
+                        logger.info(
+                            "Наблюдатель активен: новых файлов нет (цикл %d, обработано всего: %d)",
+                            empty_cycles, len(self._processed),
+                        )
                 await asyncio.sleep(interval)
         except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("Режим наблюдения остановлен")
