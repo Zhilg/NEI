@@ -12,8 +12,8 @@
 ```mermaid
 flowchart TB
     Operator["Оператор"] -->|"cp файлов в data/input/"| Worker["worker (idp)"]
-    Worker -->|"chat/completions"| V0["vllm-vl-0 (GPU0)"]
-    Worker -->|"chat/completions"| V1["vllm-vl-1 (GPU1)"]
+    Worker -->|"chat/completions"| V0["vllm-vl (GPU1)"]
+    Worker -->|"chat/completions"| V1["vllm-vl-2/3/4 (GPU5/6/7)"]
     V0 --> FS[("data/output/")]
     V1 --> FS
     Worker --> FS
@@ -51,7 +51,8 @@ flowchart TB
 
 ## Inference backends
 
-- `vllm-vl-0`, `vllm-vl-1` — два инстанса vLLM с одной VL-моделью, по одному на GPU;
+- `vllm-vl`, `vllm-vl-2`, `vllm-vl-3`, `vllm-vl-4` — четыре инстанса vLLM с одной
+  VL-моделью, у каждого своя GPU (по умолчанию 1, 5, 6, 7), tensor-parallel-size 1;
   worker балансирует запросы round-robin (`IDP_VL_ENDPOINTS`).
 
 Параметры инференса (квантизация, длина контекста, KV-cache) задаются в compose,

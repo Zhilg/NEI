@@ -1,8 +1,8 @@
 name: idp
 
-# Общая конфигурация реплик vLLM; у сервисов отличаются только GPU
-# и tensor-parallel-size.  Якорь живёт на верхнем уровне: ключи x-* под
-# services: docker compose считает отдельными сервисами.
+# Общая конфигурация реплик vLLM; у сервисов отличаются только GPU.
+# Якорь живёт на верхнем уровне: ключи x-* под services: docker compose
+# считает отдельными сервисами.
 x-vllm-anchor: &vllm-base
   image: ${IDP_VLLM_VL_IMAGE:-local/vllm-vl:latest}
   pull_policy: never
@@ -115,7 +115,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_VL_GPU_0:-0}", "${IDP_VLLM_VL_GPU_1:-1}"]
+              device_ids: ["${IDP_VLLM_VL_GPU_0:-1}"]
               capabilities: [gpu]
 
     command:
@@ -128,7 +128,7 @@ services:
       - --port
       - "8000"
       - --tensor-parallel-size
-      - "2"
+      - "1"
       - --quantization
       - ${IDP_VLLM_QUANTIZATION:-compressed-tensors}
       - --dtype
@@ -155,9 +155,9 @@ services:
       - --kv-cache-memory
       - ${IDP_VLLM_KV_CACHE_MEMORY:-15000000000}
 
-  # Реплики на свободных 80GB-картах: по одной на GPU, tensor-parallel-size 1.
-  # Все слушают :8000 внутри своей сети — конфликтов нет, воркер ходит по
-  # именам сервисов (vllm-vl-2/3/4) через IDP_VL_ENDPOINTS.
+  # 4 инстанса, у каждого своя карта (по умолчанию GPU 1, 5, 6, 7),
+  # tensor-parallel-size 1. Все слушают :8000 внутри своей сети —
+  # конфликтов нет, воркер ходит по именам сервисов через IDP_VL_ENDPOINTS.
   vllm-vl-2:
     <<: *vllm-base
     deploy:
@@ -165,7 +165,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_VL_GPU_2:-2}"]
+              device_ids: ["${IDP_VLLM_VL_GPU_2:-5}"]
               capabilities: [gpu]
 
     command:
@@ -212,7 +212,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_VL_GPU_3:-3}"]
+              device_ids: ["${IDP_VLLM_VL_GPU_3:-6}"]
               capabilities: [gpu]
 
     command:
@@ -259,7 +259,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${IDP_VLLM_VL_GPU_4:-4}"]
+              device_ids: ["${IDP_VLLM_VL_GPU_4:-7}"]
               capabilities: [gpu]
 
     command:

@@ -32,18 +32,18 @@ docker compose -f infra/compose/local.yml down
 
 ## Репликация vLLM на несколько GPU
 
-Настроено 4 инстанса vLLM:
+Настроено 4 инстанса vLLM, у каждого своя карта, tensor-parallel-size 1:
 
-- **vllm-vl** — GPU 0+1, tensor-parallel 2 (основная пара)
-- **vllm-vl-2** — GPU 2 (отдельная карта)
-- **vllm-vl-3** — GPU 3
-- **vllm-vl-4** — GPU 4
+- **vllm-vl** — GPU 1
+- **vllm-vl-2** — GPU 5
+- **vllm-vl-3** — GPU 6
+- **vllm-vl-4** — GPU 7
 
 Все слушают порт `8000` внутри docker-сети (конфликтов нет — у каждого свой
 контейнер). Worker балансирует запросы между ними через round-robin
 (`IDP_VL_ENDPOINTS`, по умолчанию все четыре) и держит до
 `IDP_VL_CONCURRENCY=32` параллельных запросов (~8 на реплику). GPU каждой
-реплики настраивается через `IDP_VLLM_VL_GPU_0..4` в `.env`.
+реплики настраивается через `IDP_VLLM_VL_GPU_0/2/3/4` в `.env`.
 
 Общие параметры реплик вынесены в YAML-якорь `x-vllm-anchor` в
 `infra/compose/local.yml` — правка в одном месте применяется ко всем.
@@ -110,12 +110,11 @@ python scripts/bench_vlm.py \\
 В `.env`:
 
 ```env
-# Репликация: GPU для каждого vLLM инстанса
-IDP_VLLM_VL_GPU_0=0
-IDP_VLLM_VL_GPU_1=1
-IDP_VLLM_VL_GPU_2=2
-IDP_VLLM_VL_GPU_3=3
-IDP_VLLM_VL_GPU_4=4
+# Репликация: GPU для каждого vLLM инстанса (дефолты 1, 5, 6, 7)
+IDP_VLLM_VL_GPU_0=1
+IDP_VLLM_VL_GPU_2=5
+IDP_VLLM_VL_GPU_3=6
+IDP_VLLM_VL_GPU_4=7
 ```
 
 Если карт меньше, удали лишние сервисы из `infra/compose/local.yml` **и** их
@@ -407,12 +406,14 @@ docker compose -f infra/compose/local.yml run --rm --no-deps worker idp-reconstr
 # Больше изображений за один VLM-запрос (по умолчанию 2)
 IDP_VL_MAX_IMAGES=2
 
-# Больше параллельных запросов (по умолчанию 12, максимум 64)
-IDP_VL_CONCURRENCY=16
+# Больше параллельных запросов (по умолчанию 32)
+IDP_VL_CONCURRENCY=32
 
-# Для 2 GPU: убедись что оба используются
-IDP_VLLM_VL_GPU_0=0
-IDP_VLLM_VL_GPU_1=1
+# Убедись что все 4 карты задействованы (дефолты 1, 5, 6, 7)
+IDP_VLLM_VL_GPU_0=1
+IDP_VLLM_VL_GPU_2=5
+IDP_VLLM_VL_GPU_3=6
+IDP_VLLM_VL_GPU_4=7
 ```
 
 В `src/idp/config.py` можно также увеличить `vl_max_tokens` если нужно более длинный вывод.
