@@ -16,6 +16,14 @@ from PIL import Image, ImageEnhance
 from idp.config import settings
 from idp.image_preprocess import preprocess_for_ocr
 
+# MuPDF печатает некритичные syntax-ошибки битых PDF (кривые XObject, битые
+# словари, non-page object in page tree — типично для сканов) прямо в stderr:
+# сотни строк спама в логах воркера, хотя текст извлекается нормально.
+# Глушим поток; предупреждения при необходимости читаются через
+# fitz.TOOLS.mupdf_warnings(), а фатальные проблемы ловятся исключениями.
+fitz.TOOLS.mupdf_display_errors(False)
+fitz.TOOLS.mupdf_display_warnings(False)
+
 logger = logging.getLogger(__name__)
 
 _local = threading.local()

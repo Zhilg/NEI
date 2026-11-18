@@ -7,7 +7,10 @@ services:
     build:
       context: ${IDP_SOURCE_ROOT:-../../}
       dockerfile: Dockerfile
-    command: ["idp"]
+    # Наблюдатель: воркер не завершается после одного прогона, а сканирует
+    # /input каждые IDP_WATCH_INTERVAL секунд и обрабатывает новые файлы.
+    command: ["idp", "--watch"]
+    restart: unless-stopped
 
     environment:
       PYTHONPATH: /workspace/src
@@ -15,6 +18,9 @@ services:
       IDP_INPUT_ROOT: /input
       IDP_OUTPUT_ROOT: /output
       IDP_MODELS_ROOT: /models
+
+      IDP_WATCH_INTERVAL: ${IDP_WATCH_INTERVAL:-5}
+      IDP_WATCH_SETTLE: ${IDP_WATCH_SETTLE:-2}
 
       IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1}
       IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}

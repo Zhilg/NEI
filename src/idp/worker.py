@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import time
+import zlib
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,13 @@ SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html", ".htm", ".png", ".jpg
 # they somehow appear under a supported extension list.
 IGNORED_EXTENSIONS = {".css", ".js", ".mjs", ".ts", ".tsx", ".jsx"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+# Top-level journals that keep changing while the worker runs.  The archive
+# adds new files incrementally, but these must be re-synced (full repack)
+# whenever their content changed, otherwise the zip holds a stale first copy.
+LIVE_FILES = ("results.jsonl", "results_readable.json", "stats.jsonl")
+
+ARCHIVE_NAME = "results.zip"
 
 # Keywords that hint the source is a collection / journal / newspaper issue
 # that should be split into individual articles or stories.
@@ -208,6 +216,9 @@ class Worker:
         self._input_root: Path = settings.input_root
         self._processed: set[str] = set()
         self._stats_writer: StatsWriter | None = None
+        # Архивируется между вызовами _archive_results, чтобы не перечитывать
+        # оглавление zip после каждого файла.  None — ещё не читали.
+        self._archived: set[str] | None = None
 
     def _find_files(self, input_root: Path) -> list[Path]:
         files: list[Path] = []
@@ -393,6 +404,7 @@ class Worker:
         input_root: Path | None = None,
         watch: bool = False,
         interval: float = 5.0,
+        settle: float = 2.0,
     ) -> None:
         root = input_root or settings.input_root
         self._input_root = root
@@ -405,9 +417,24 @@ class Worker:
         self._stats_writer = StatsWriter(settings.output_root / "stats.jsonl")
         self._processed = self._load_processed()
 
+        # Разовая сверка при запуске: докинуть в архив всё, что лежит в output,
+        # но ещё не попало в results.zip — результаты прогонов до появления
+        # архива, восстановленные вручную файлы и т.п.
+        self._archive_results(settings.output_root, full_sync=True)
+
         async def _process_batch() -> int:
             files = self._find_files(root)
             pending = [f for f in files if not self._already_processed(f)]
+            if watch and settle > 0:
+                # Файл, который прямо сейчас копируют в папку, выглядит уже
+                # лежащим на месте.  Берём только те, что не менялись дольше
+                # settle секунд, — недокопированный файл обработается на
+                # следующем проходе целиком.
+                cutoff = time.time() - settle
+                fresh = [f for f in pending if f.is_file() and f.stat().st_mtime > cutoff]
+                if fresh:
+                    logger.debug("Отложено (ещё копируется?): %s", ", ".join(f.name for f in fresh))
+                pending = [f for f in pending if f not in fresh]
             pending.sort(key=lambda p: p.stat().st_size if p.is_file() else 0)
             if not pending:
                 return 0
@@ -428,16 +455,23 @@ class Worker:
             finally:
                 pbar.close()
             self._stats_writer.flush()
+            # Свежий pretty-JSON и синхронизация «живых» журналов в архиве —
+            # после каждой пачки, а не только при остановке watch-режима.
+            result_writer.finalize()
+            self._archive_results(settings.output_root, full_sync=True)
             return len(pending)
 
         if not watch:
             await _process_batch()
             result_writer.finalize()
             self._stats_writer.flush()
-            self._archive_results(settings.output_root)
+            self._archive_results(settings.output_root, full_sync=True)
             return
 
-        logger.info("Режим наблюдения: сканирование %s каждые %.0f сек", root, interval)
+        logger.info(
+            "Режим наблюдения: сканирование %s каждые %.0f сек (пауза записи %.0f сек)",
+            root, interval, settle,
+        )
         try:
             while True:
                 try:
@@ -450,41 +484,76 @@ class Worker:
         finally:
             result_writer.finalize()
             self._stats_writer.flush()
-            self._archive_results(settings.output_root)
+            self._archive_results(settings.output_root, full_sync=True)
 
+    def _archive_results(self, output_root: Path, full_sync: bool = False) -> None:
+        """Обновить сжатый архив ``results.zip`` с результатами.
 
-    def _archive_results(self, output_root: Path) -> None:
-        """Добавить новые результаты в сжатый архив ``results.zip``.
+        Обычный вызов инкрементально дозаписывает файлы, которых ещё нет
+        в архиве (результат каждого файла попадает в zip сразу после записи,
+        так что при аварийной остановке обработанное не теряется).
 
-        Архив обновляется инкрементально: в него добавляются только файлы,
-        которых ещё нет внутри (кроме самого архива). Каждый новый результат
-        попадает в архив сразу после записи,
-        так что при аварийной остановке уже обработанное не теряется.
+        ``full_sync=True`` дополнительно сверяет «живые» журналы
+        (``results.jsonl``, ``results_readable.json``, ``stats.jsonl``): они
+        растут по ходу прогона, поэтому при расхождении CRC архив
+        пересобирается целиком.  Без этого в zip осталась бы первая версия
+        журнала.
         """
-        archive = output_root / "results.zip"
-        existing: set[str] = set()
-        mode = "w"
-        if archive.exists():
-            mode = "a"
-            try:
-                with zipfile.ZipFile(archive, "r") as zf:
-                    existing = set(zf.namelist())
-            except (zipfile.BadZipFile, OSError):
-                mode = "w"
-                existing = set()
-        files_added = 0
+        archive = output_root / ARCHIVE_NAME
+        current: dict[str, Path] = {}
+        for path in sorted(output_root.rglob("*")):
+            if path.is_file() and path.name != ARCHIVE_NAME:
+                # as_posix: zip хранит имена с "/", иначе на Windows один и тот
+                # же файл выглядит то как "txts\a.txt" (на диске), то как
+                # "txts/a.txt" (в архиве) и дозаписывается второй раз.
+                current[path.relative_to(output_root).as_posix()] = path
+
+        if self._archived is None:
+            self._archived = set()
+            if archive.exists():
+                try:
+                    with zipfile.ZipFile(archive, "r") as zf:
+                        self._archived = set(zf.namelist())
+                except (zipfile.BadZipFile, OSError):
+                    self._archived = set()
+
+        stale = False
+        if full_sync:
+            if archive.exists():
+                try:
+                    with zipfile.ZipFile(archive, "r") as zf:
+                        infos = {info.filename: info for info in zf.infolist()}
+                    for name in LIVE_FILES:
+                        path = current.get(name)
+                        if path is None:
+                            continue
+                        info = infos.get(name)
+                        if info is None or info.CRC != zlib.crc32(path.read_bytes()):
+                            stale = True
+                            break
+                except (zipfile.BadZipFile, OSError):
+                    stale = True
+            elif self._archived:
+                # Архив удалили снаружи, а результаты на диске остались.
+                stale = True
+
+        if stale:
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+                for arcname, path in current.items():
+                    zf.write(path, arcname)
+            self._archived = set(current)
+            logger.info("Архив %s пересобран (%d файлов)", archive, len(current))
+            return
+
+        new_names = [arcname for arcname in current if arcname not in self._archived]
+        if not new_names:
+            return
+        mode = "a" if archive.exists() else "w"
         with zipfile.ZipFile(archive, mode, zipfile.ZIP_DEFLATED) as zf:
-            for path in sorted(output_root.rglob("*")):
-                if not path.is_file() or path.name == "results.zip":
-                    continue
-                arcname = str(path.relative_to(output_root))
-                if arcname in existing:
-                    continue
-                zf.write(path, arcname)
-                existing.add(arcname)
-                files_added += 1
-        if files_added:
-            logger.info("В архив %s добавлено %d файлов", archive, files_added)
+            for arcname in new_names:
+                zf.write(current[arcname], arcname)
+        self._archived.update(new_names)
+        logger.info("В архив %s добавлено %d файлов", archive, len(new_names))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -494,13 +563,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--watch",
         action="store_true",
+        default=os.getenv("IDP_WATCH", "").lower() in ("1", "true", "yes"),
         help="Режим наблюдения: сканировать input_root и обрабатывать новые файлы сразу после появления",
     )
     parser.add_argument(
         "--watch-interval",
         type=float,
-        default=5.0,
-        help="Интервал сканирования в режиме наблюдения, сек (по умолчанию 5)",
+        default=float(os.getenv("IDP_WATCH_INTERVAL", "5")),
+        help="Интервал сканирования в режиме наблюдения, сек (по умолчанию 5, env IDP_WATCH_INTERVAL)",
+    )
+    parser.add_argument(
+        "--watch-settle",
+        type=float,
+        default=float(os.getenv("IDP_WATCH_SETTLE", "2")),
+        help="Пауза записи: файл считается новым только если не менялся столько секунд "
+             "(защита от обработки недокопированного файла; 0 — отключить, env IDP_WATCH_SETTLE)",
     )
     return parser.parse_args()
 
@@ -510,7 +587,7 @@ async def _main() -> None:
     level = getattr(logging, os.getenv("IDP_LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     worker = Worker(force=args.force)
-    await worker.run(input_root=args.input, watch=args.watch, interval=args.watch_interval)
+    await worker.run(input_root=args.input, watch=args.watch, interval=args.watch_interval, settle=args.watch_settle)
 
 
 def main() -> None:

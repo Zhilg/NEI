@@ -1,0 +1,198 @@
+"""Tests for the text-only worker: TXT export, rubricators, watch mode, archive."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import zipfile
+from pathlib import Path
+
+from idp.worker import ARCHIVE_NAME, Worker
+
+_FONT = Path(__file__).resolve().parents[1] / "src" / "idp" / "fonts" / "LiberationSerif-Regular.ttf"
+
+
+def make_text_pdf(path: Path, heading: str, body: str, pages: int = 2) -> Path:
+    """A PDF whose embedded text layer really contains Cyrillic (TTF font)."""
+    import fitz
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = fitz.open()
+    for page_number in range(1, pages + 1):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"{heading} (стр. {page_number})", fontsize=14,
+                         fontname="lib", fontfile=str(_FONT))
+        page.insert_textbox(fitz.Rect(72, 100, 523, 400), body, fontsize=11,
+                            fontname="lib", fontfile=str(_FONT))
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def _read_results(output_root: Path) -> list[dict]:
+    results_path = output_root / "results.jsonl"
+    if not results_path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in results_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _run(worker: Worker, **kwargs) -> None:
+    asyncio.run(worker.run(**kwargs))
+
+
+BODY = (
+    "УДК 51.78\n"
+    "ГРНТИ 12.34.56\n"
+    "Отчёт описывает выполненные работы за отчётный период и приводит "
+    "сводные показатели по объекту. Значения параметров уточняются вручную "
+    "и согласуются с заказчиком перед подписанием акта сдачи-приёмки."
+)
+
+
+def test_pdf_to_txt_rubricators_and_archive(workspace):
+    make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
+    _run(Worker())
+
+    txt = workspace.output / "txts" / "report.txt"
+    assert txt.is_file(), "flat txts/<name>.txt must be written"
+    content = txt.read_text(encoding="utf-8")
+    assert "Отчёт о работах" in content
+
+    results = _read_results(workspace.output)
+    assert len(results) == 1
+    record = results[0]
+    assert record["status"] == "ok"
+    codes = {
+        (rubric["type"], rubric["number"])
+        for doc in record["documents"]
+        for rubric in doc["rubricators"]
+    }
+    assert ("УДК", "51.78") in codes
+    assert ("ГРНТИ", "12.34.56") in codes
+
+    archive = workspace.output / ARCHIVE_NAME
+    assert archive.is_file(), "results.zip must be created"
+    with zipfile.ZipFile(archive) as zf:
+        names = set(zf.namelist())
+        assert "txts/report.txt" in names
+        assert "results.jsonl" in names
+        # Живой журнал в архиве свежий, а не первая версия
+        zipped = zf.read("results.jsonl").decode("utf-8")
+    on_disk = (workspace.output / "results.jsonl").read_bytes().decode("utf-8")
+    assert zipped.replace("\r\n", "\n") == on_disk.replace("\r\n", "\n")
+
+
+def test_rerun_skips_processed_and_keeps_archive(workspace):
+    make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
+    _run(Worker())
+    _run(Worker())
+
+    assert len(_read_results(workspace.output)) == 1, "second run must skip the file"
+    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
+        assert len([n for n in zf.namelist() if n == "txts/report.txt"]) == 1
+
+
+def test_new_file_added_to_archive_incrementally(workspace):
+    make_text_pdf(workspace.input / "first.pdf", "Первый отчёт", BODY)
+    _run(Worker())
+
+    make_text_pdf(workspace.input / "second.pdf", "Второй отчёт", BODY)
+    _run(Worker())
+
+    assert (workspace.output / "txts" / "second.txt").is_file()
+    assert len(_read_results(workspace.output)) == 2
+    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
+        names = set(zf.namelist())
+        assert {"txts/first.txt", "txts/second.txt"} <= names
+        zipped_records = [
+            json.loads(line)
+            for line in zf.read("results.jsonl").decode("utf-8").splitlines()
+            if line.strip()
+        ]
+    assert len(zipped_records) == 2, "results.jsonl inside the zip must be re-synced"
+
+
+def test_watch_processes_file_appearing_later(workspace):
+    async def scenario() -> None:
+        worker = Worker()
+        task = asyncio.create_task(worker.run(watch=True, interval=0.1, settle=0))
+        await asyncio.sleep(0.3)
+        make_text_pdf(workspace.input / "late.pdf", "Поздний отчёт", BODY)
+        txt = workspace.output / "txts" / "late.txt"
+        for _ in range(100):
+            if txt.exists():
+                break
+            await asyncio.sleep(0.1)
+        task.cancel()
+        await asyncio.wait_for(task, timeout=5)
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+    assert (workspace.output / "txts" / "late.txt").is_file()
+    results = _read_results(workspace.output)
+    assert len(results) == 1 and results[0]["file"] == "late.pdf"
+    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
+        assert "txts/late.txt" in zf.namelist()
+
+
+def test_watch_settle_delays_fresh_files(workspace):
+    """A file that is still being copied (fresh mtime) is not picked up yet."""
+    make_text_pdf(workspace.input / "copying.pdf", "Отчёт о работах", BODY)
+
+    async def scenario() -> None:
+        worker = Worker()
+        task = asyncio.create_task(worker.run(watch=True, interval=0.1, settle=3600))
+        await asyncio.sleep(0.5)
+        task.cancel()
+        await asyncio.wait_for(task, timeout=5)
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=30))
+
+    assert not _read_results(workspace.output), "fresh file must wait for the settle window"
+    assert not (workspace.output / "txts" / "copying.pdf").exists()
+
+
+def test_startup_packs_preexisting_output_into_archive(workspace):
+    """Файлы, лежавшие в output до запуска воркера, попадают в архив."""
+    legacy = workspace.output / "txts" / "legacy.txt"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("результат из прошлого прогона", encoding="utf-8")
+
+    _run(Worker())  # вход пустой — обрабатывать нечего
+
+    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
+        assert "txts/legacy.txt" in zf.namelist()
+
+
+def test_startup_adds_files_missing_from_existing_archive(workspace):
+    """Файл, появившийся в output мимо воркера, докидывается в уже есть архив."""
+    make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
+    _run(Worker())
+
+    manual = workspace.output / "txts" / "manual.txt"
+    manual.write_text("скопировано вручную", encoding="utf-8")
+    _run(Worker())
+
+    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
+        assert "txts/manual.txt" in zf.namelist()
+        assert "txts/report.txt" in zf.namelist()
+
+
+def test_html_folder_and_docx(workspace):
+    from tests import fixtures
+
+    fixtures.make_docx(workspace.input / "spec.docx")
+    _run(Worker())
+
+    txt = workspace.output / "txts" / "spec.txt"
+    assert txt.is_file()
+    assert "Назначение" in txt.read_text(encoding="utf-8")
+    # make_docx кладёт figure.png рядом в input — он тоже обрабатывается (skip),
+    # поэтому ищем именно запись про DOCX.
+    results = _read_results(workspace.output)
+    docx_records = [r for r in results if r["type"] == "docx"]
+    assert docx_records and docx_records[0]["status"] == "ok"

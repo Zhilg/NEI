@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+_ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(_ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Container-style defaults (/input, /output) are not absolute paths on Windows,
+# so point the settings at the repo's data/ folders before idp.config is imported.
+os.environ.setdefault("IDP_INPUT_ROOT", str(_ROOT / "data" / "input"))
+os.environ.setdefault("IDP_OUTPUT_ROOT", str(_ROOT / "data" / "output"))
+os.environ.setdefault("IDP_OPERATOR_CORRECTIONS_PATH", str(_ROOT / "data" / "output" / "operator_corrections.jsonl"))
+os.environ.setdefault("IDP_FINETUNE_DATASET_PATH", str(_ROOT / "data" / "output" / "finetune_data.jsonl"))
 
 from idp.config import settings  # noqa: E402
 from tests import fixtures  # noqa: E402

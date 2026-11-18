@@ -202,20 +202,43 @@ IDP_ARTIFACTS_MODE=true
 если он в `results.jsonl` со статусом `ok`/`skip`):
 
 ```bash
-docker compose -f infra/compose/local.yml run --rm worker idp --artifacts
+docker compose -f infra/compose/local.yml run --rm worker idp
 docker compose -f infra/compose/local.yml run --rm worker idp --force     # переобработать всё
-docker compose -f infra/compose/local.yml exec worker idp --artifacts     # в уже запущенном контейнере
+docker compose -f infra/compose/local.yml exec worker idp                 # в уже запущенном контейнере
 ```
 
 | Флаг | Действие |
 |---|---|
-| `--artifacts` | дополнительно писать `<stem>.md` (без него `.md` на диск не сохраняется) |
 | `--force` | игнорировать кэш обработанных и переобработать всё заново |
-| `--visio` | дополнительно собрать `reconstruct.vsdx` из рендеров страниц (флаги `IDP_VISIO_MODE=true` или `IDP_RECONSTRUCT_FORMATS=docx,pdf,vsdx` — то же самое постоянно) |
-| `--visio-content pages\|sheet\|document` | что класть в `reconstruct.vsdx`: рендеры страниц (по умолчанию), все рендеры на одном листе или редактируемый документ (то же — `IDP_VISIO_CONTENT`) |
+| `--input DIR` | обработать другой каталог вместо `IDP_INPUT_ROOT` |
+| `--watch` | режим наблюдателя: не завершаться, сканировать входной каталог и обрабатывать новые файлы сразу после появления |
+| `--watch-interval N` | интервал сканирования в секундах (по умолчанию 5, env `IDP_WATCH_INTERVAL`) |
+| `--watch-settle N` | пауза записи: файл берётся в работу, только если не менялся N секунд — защита от обработки недокопированного файла (по умолчанию 2, env `IDP_WATCH_SETTLE`, `0` — отключить) |
 
 Каталог задаётся переменной окружения: `IDP_INPUT_ROOT` / `IDP_OUTPUT_ROOT`
 (в `local.yml` это `/input` и `/output`, смонтированные из `data/input` и `data/output`).
+
+### Наблюдатель и архив результатов
+
+В `infra/compose/local.yml` воркер запускается как наблюдатель (`command: ["idp", "--watch"]`,
+`restart: unless-stopped`): положил файл в `data/input/` — через несколько секунд он обработан.
+Интервал и пауза записи настраиваются в `.env`:
+
+```env
+IDP_WATCH_INTERVAL=5   # как часто сканировать data/input, сек
+IDP_WATCH_SETTLE=2     # сколько секунд файл должен быть неизменен, сек
+```
+
+Разовый наблюдатель вне стека: `./run watch` (или `docker compose ... run --rm worker idp --watch`).
+
+Все результаты каждого прогона пакуются в `data/output/results.zip`:
+
+- после обработки **каждого файла** новые результаты дозаписываются в архив инкрементально —
+  при аварийной остановке обработанное не теряется;
+- после **каждой пачки** (и при остановке наблюдателя) «живые» журналы `results.jsonl`,
+  `results_readable.json` и `stats.jsonl` сверяются по CRC с копией в архиве и при расхождении
+  архив пересобирается целиком — в zip всегда свежие версии журналов;
+- сам `results.zip` внутрь себя не вкладывается.
 
 ### PNG / JPEG в input
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 import zipfile
 from pathlib import Path
@@ -19,7 +18,6 @@ from idp.visio_exporter import (
     inspect_vsdx,
     validate_vsdx,
 )
-from idp.worker import Worker
 
 
 def _make_png(path: Path, width: int = 200, height: int = 300, color: str = "#3366cc") -> Path:
@@ -251,69 +249,6 @@ def test_parse_page_size():
     assert parse_page_size("8.27x11.69") == (8.27, 11.69)
     assert parse_page_size("") is None
 
-
-def test_worker_visio_flag_builds_drawing(workspace, sample_pdf, stub_server):
-    worker = Worker(artifacts_mode=True, visio_mode=True)
-    asyncio.run(worker.run())
-
-    bundle = workspace.output / "txts" / "report.pdf"
-    vsdx = bundle / "reconstruct.vsdx"
-    assert vsdx.is_file()
-    assert validate_vsdx(vsdx) == []
-    assert inspect_vsdx(vsdx)["pages"] == 3
-
-
-def test_worker_visio_content_document(workspace, sample_pdf, stub_server):
-    worker = Worker(artifacts_mode=True, visio_mode=True, visio_content="document")
-    asyncio.run(worker.run())
-
-    bundle = workspace.output / "txts" / "report.pdf"
-    vsdx = bundle / "reconstruct.vsdx"
-    assert vsdx.is_file()
-    assert validate_vsdx(vsdx) == []
-    summary = inspect_vsdx(vsdx)
-    assert summary["texts"] > 0, "the drawing holds the text of the document"
-
-
-def test_worker_rebuilds_a_scan_as_an_editable_drawing(workspace, stub_server):
-    """A PNG in the input root becomes a Visio drawing with editable text."""
-    _make_png(workspace.input / "scan.png", 600, 800)
-    worker = Worker(artifacts_mode=True, visio_mode=True)
-    asyncio.run(worker.run())
-
-    bundle = workspace.output / "txts" / "scan.png"
-    assert (bundle / "text.txt").is_file()
-    assert (bundle / "images" / "page_00001.png").is_file()
-
-    vsdx = bundle / "reconstruct.vsdx"
-    assert vsdx.is_file()
-    assert validate_vsdx(vsdx) == []
-    summary = inspect_vsdx(vsdx)
-    assert summary["texts"] > 0, "the scan is rebuilt as text, not as a picture"
-    shapes = _shapes(vsdx)
-    texts = [
-        (shape.find(f"{{{VISIO_NS}}}Text").text or "")
-        for shape in shapes
-        if shape.get("Type") == "Shape" and shape.find(f"{{{VISIO_NS}}}Text") is not None
-    ]
-    assert any("Страница" in text for text in texts)
-
-
-def test_worker_layout_mode_uses_the_vlm_json_layout(workspace, stub_server):
-    """--visio-layout makes the VLM return a structured layout instead of Markdown."""
-    _make_png(workspace.input / "scan.png", 600, 800)
-    worker = Worker(artifacts_mode=True, visio_mode=True, visio_layout=True)
-    asyncio.run(worker.run())
-
-    bundle = workspace.output / "txts" / "scan.png"
-    assert (bundle / "layout.json").is_file()
-    assert "blocks" in (bundle / "layout.json").read_text(encoding="utf-8")
-
-    vsdx = bundle / "reconstruct.vsdx"
-    assert vsdx.is_file()
-    assert validate_vsdx(vsdx) == []
-    summary = inspect_vsdx(vsdx)
-    assert summary["texts"] > 0, "the layout becomes editable shapes"
 
 
 DOCUMENT_TEXT = """<!-- page 1 -->

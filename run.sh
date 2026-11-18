@@ -14,7 +14,8 @@ usage() {
   restart             Перезапустить стек
   logs                Логи воркера (follow)
   ps                  Статус контейнеров
-  process [--force]   Обработать файлы из data/input
+  process [--force]   Обработать файлы из data/input один раз
+  watch [флаги]       Наблюдатель: обрабатывать новые файлы сразу после появления
   model qwen|xiaomi   Переключить модель (сохраняет в .env)
   download [hf/repo]  Скачать модель в transfer/models/
   bench               Бенчмарк VLM
@@ -53,6 +54,10 @@ case "$cmd" in
   process)
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d vllm-vl
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm worker idp "$@"
+    ;;
+  watch)
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d vllm-vl
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm worker idp --watch "$@"
     ;;
   model)
     target="${1:-}"
