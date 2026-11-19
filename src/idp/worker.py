@@ -185,12 +185,22 @@ def _rebuild_zip_parallel(
     workers: int = 64,
     chunk: int = 512,
 ) -> int:
-    """Пересобрать zip из items в tmp; вернуть число записей."""
+    """Пересобрать zip из items в tmp; вернуть число записей.
+
+    Шарды пишутся на диск (не в память): многогигабайтный журнал не
+    должен целиком лезть в RAM.  Страй-шарды с прошлых прерванных попыток
+    убираем сразу — иначе каждый рестарт посреди пересборки плодил новые.
+    """
+    for stray in tmp.parent.glob("*.zipshard"):
+        stray.unlink(missing_ok=True)
     asm = _ZipAssembler(tmp)
     shards: list[Path] = []
+    total = len(items)
+    t0 = time.perf_counter()
+    done = 0
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            for i in range(0, len(items), chunk):
+            for i in range(0, total, chunk):
                 packed = list(pool.map(
                     lambda it: _pack_shard(it, tmp.parent),
                     items[i:i + chunk],
@@ -198,6 +208,12 @@ def _rebuild_zip_parallel(
                 shards.extend(shard for _, shard in packed)
                 for info, shard in packed:
                     asm.add(info, shard)
+                    done += 1
+                if done % 5000 < chunk or done == total:
+                    logger.info(
+                        "Пересборка архива: %d/%d файлов (%.0f с)",
+                        done, total, time.perf_counter() - t0,
+                    )
         return asm.finish()
     finally:
         asm.close()
@@ -905,6 +921,8 @@ class Worker:
             # запись рвалась при рестарте/остановке посреди пересборки —
             # тогда следующий запуск снова видел битый zip и пересобирал
             # (бесконечный цикл «не зип файла» при каждом старте).
+            # Ошибка сборки НЕ роняет воркер: честный лог, tmp подчищен,
+            # следующая сверка через archive_sync_interval попробует снова.
             tmp = archive.with_name(archive.name + ".tmp")
             t0 = time.perf_counter()
             try:
@@ -913,6 +931,9 @@ class Worker:
                     workers=settings.archive_threads,
                 )
                 os.replace(tmp, archive)
+            except Exception as exc:  # noqa: BLE001 — архив не должен ронять воркер
+                logger.exception("Пересборка архива не удалась: %s", exc)
+                return
             finally:
                 tmp.unlink(missing_ok=True)
             self._archived = set(current)
@@ -931,8 +952,31 @@ class Worker:
         new_names = [arcname for arcname in current if arcname not in self._archived]
         if not new_names:
             return
-        mode = "a" if archive.exists() else "w"
-        with zipfile.ZipFile(archive, mode, zipfile.ZIP_DEFLATED) as zf:
+        if not archive.exists():
+            # Архива нет, а файлов много (удалили zip, txt остались) —
+            # та же атомарная параллельная сборка, иначе ZipFile(mode="w")
+            # пишет 80k файлов одним потоком и рвётся каждым рестартом.
+            # Ошибка не роняет воркер — попробуем снова на следующей сверке.
+            tmp = archive.with_name(archive.name + ".tmp")
+            t0 = time.perf_counter()
+            try:
+                count = _rebuild_zip_parallel(
+                    [(name, current[name]) for name in new_names],
+                    tmp, workers=settings.archive_threads,
+                )
+                os.replace(tmp, archive)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Создание архива не удалось: %s", exc)
+                return
+            finally:
+                tmp.unlink(missing_ok=True)
+            self._archived.update(new_names)
+            logger.info(
+                "Архив %s создан (%d файлов, %.1f с, %d потоков)",
+                archive, count, time.perf_counter() - t0, settings.archive_threads,
+            )
+            return
+        with zipfile.ZipFile(archive, "a", zipfile.ZIP_DEFLATED) as zf:
             for arcname in new_names:
                 zf.write(current[arcname], arcname)
         self._archived.update(new_names)
