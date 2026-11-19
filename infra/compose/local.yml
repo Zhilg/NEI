@@ -56,7 +56,10 @@ services:
       IDP_WATCH_INTERVAL: ${IDP_WATCH_INTERVAL:-5}
       IDP_WATCH_SETTLE: ${IDP_WATCH_SETTLE:-2}
 
-      IDP_VL_ENDPOINTS: ${IDP_VL_ENDPOINTS:-http://vllm-vl:8000/v1,http://vllm-vl-2:8000/v1,http://vllm-vl-3:8000/v1,http://vllm-vl-4:8000/v1}
+      # Захардкожено намертво: через ${...:-...} это можно было тихо сломать
+      # .env-ом на сервере (фактически был случай — остался один эндпоинт
+      # из четырёх, три карты простаивали). Меньше реплик — правь compose.
+      IDP_VL_ENDPOINTS: "http://vllm-vl:8000/v1,http://vllm-vl-2:8000/v1,http://vllm-vl-3:8000/v1,http://vllm-vl-4:8000/v1"
       IDP_VL_MODEL: ${IDP_VL_MODEL:-Qwen3.8-27B}
       IDP_VL_MAX_IMAGES: ${IDP_VL_MAX_IMAGES:-2}
 
