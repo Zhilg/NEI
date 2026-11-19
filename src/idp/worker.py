@@ -110,8 +110,6 @@ def _extract_text(file_path: Path) -> tuple[str, int]:
         return extract_pptx_text(file_path), 1
     if ext in (".html", ".htm"):
         text = extract_html_text(file_path)
-        if not _has_meaningful_content(text):
-            return "", 1
         return text, 1
     # Images and unsupported formats: no OCR available without the VLM,
     # so they produce empty text.
@@ -214,7 +212,7 @@ class Worker:
         dirs: set[Path] = set()
         for path in sorted(input_root.rglob("*")):
             if path.is_dir():
-                html_files = list(path.glob("*.html")) + list(path.glob("*.htm"))
+                html_files = list(path.rglob("*.html")) + list(path.rglob("*.htm"))
                 if html_files:
                     dirs.add(path)
             elif path.is_file():
@@ -370,14 +368,15 @@ class Worker:
         result: FileResult,
         txt_exporter: TxtExporter,
     ) -> None:
-        if result.status != "ok":
-            return
         try:
             documents = result.documents
             if not documents:
+                # Пустой/пропущенный результат — всё равно пишем TXT,
+                # чтобы в выходе была запись об обработанном файле.
+                name = relative.stem
+                await asyncio.to_thread(txt_exporter.export, "", name=name)
                 return
-            # Flat output: txts/<original name>.txt, no subfolders, no meta.json.
-            # Several documents from one collection get _2, _3 ... suffixes.
+            # Несколько документов из одной книги получают суффикс _2, _3 ...
             base_name = relative.stem
             for index, doc in enumerate(documents):
                 doc_text = doc.get("text", "").strip()

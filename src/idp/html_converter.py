@@ -159,9 +159,9 @@ def extract_html_text(html_path: Path) -> str:
 
 
 def convert_html_folder_to_markdown(folder_path: Path) -> str:
-    html_files = sorted(folder_path.glob("*.html"))
+    html_files = sorted(folder_path.rglob("*.html"))
     if not html_files:
-        html_files = sorted(folder_path.glob("*.htm"))
+        html_files = sorted(folder_path.rglob("*.htm"))
     if not html_files:
         return ""
     parts: list[str] = []

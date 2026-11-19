@@ -120,6 +120,21 @@ def test_watch_mode_picks_up_new_file(workspace, stub_server):
     assert "new.txt" in names, f"новый файл не подхвачен watch-ом: {names}"
 
 
+def test_html_file_in_input_produces_flat_txt(workspace, stub_server):
+    """Одиночный HTML-файл прямо в data/input -> плоский txts/<имя>.txt."""
+    (workspace.input / "page.html").write_text(
+        "<html><body><h1>Заголовок</h1><p>" + "слово " * 250 + "</p></body></html>",
+        encoding="utf-8",
+    )
+
+    _run_worker()
+
+    names = _txt_names(workspace.output)
+    assert "page.txt" in names, f"expected page.txt, got {names}"
+    text = (workspace.output / "txts" / "page.txt").read_text(encoding="utf-8")
+    assert "Заголовок" in text
+
+
 def test_html_folder_book_produces_flat_txt(workspace, stub_server):
     """HTML-книга (папка с главами) -> плоский txts/<имя>.txt."""
     book = workspace.input / "книга.html"
