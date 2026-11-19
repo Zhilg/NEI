@@ -40,17 +40,13 @@ def workspace(tmp_path):
     output_root = tmp_path / "output"
     input_root.mkdir()
     output_root.mkdir()
-    previous = (settings.input_root, settings.output_root,
-                settings.artifacts_mode, settings.reconstruct_formats)
+    previous = (settings.input_root, settings.output_root)
     settings.input_root = input_root
     settings.output_root = output_root
-    settings.artifacts_mode = True
-    settings.reconstruct_formats = ["docx", "pdf"]
     try:
         yield SimpleNamespace(input=input_root, output=output_root, tmp=tmp_path)
     finally:
-        (settings.input_root, settings.output_root,
-         settings.artifacts_mode, settings.reconstruct_formats) = previous
+        (settings.input_root, settings.output_root) = previous
 
 
 class SimpleNamespace:

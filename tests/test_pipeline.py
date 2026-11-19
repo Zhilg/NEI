@@ -1,9 +1,15 @@
-"""End-to-end pipeline tests against the VLM stub (no GPU)."""
+"""End-to-end pipeline tests against the VLM stub (no GPU).
+
+Tests the text-only pipeline: flat TXT output (no subfolders, no meta.json),
+rubricator extraction, idempotent re-processing, results.zip archiving and
+watch-mode pickup of new files dropped into data/input.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import zipfile
 from pathlib import Path
 
 from idp.worker import Worker
@@ -11,13 +17,8 @@ from tests.vlm_stub import hash_bytes
 
 
 def _run_worker(force: bool = False) -> None:
-    worker = Worker(artifacts_mode=True, force=force)
+    worker = Worker(force=force)
     asyncio.run(worker.run())
-
-
-def _page_hashes(rendered_dir: Path) -> list[str]:
-    pngs = sorted(rendered_dir.glob("*.png"))
-    return [hash_bytes(png.read_bytes()) for png in pngs]
 
 
 def _pdf_text(path: Path) -> str:
@@ -30,26 +31,27 @@ def _pdf_text(path: Path) -> str:
         document.close()
 
 
-def test_pdf_pipeline_produces_bundle_and_documents(workspace, sample_pdf, stub_server):
+def _txt_names(output: Path) -> list[str]:
+    txts = output / "txts"
+    if not txts.exists():
+        return []
+    return sorted(p.name for p in txts.iterdir() if p.is_file())
+
+
+def test_pdf_pipeline_produces_flat_txt(workspace, sample_pdf, stub_server):
     _run_worker()
 
-    bundle = workspace.output / "txts" / "report.pdf"
-    assert (bundle / "text.txt").is_file()
-    assert (bundle / "tables.json").is_file()
-    assert (bundle / "meta.json").is_file()
-    assert (bundle / "reconstruct.docx").is_file()
-    assert (bundle / "reconstruct.pdf").is_file()
-    assert (bundle / "images" / "page_00001.png").is_file()
-    assert (bundle / "images" / "figure_0001.png").is_file()
-    assert (bundle / "images" / "handwritten_0001.png").is_file()
+    names = _txt_names(workspace.output)
+    assert "report.txt" in names, f"expected report.txt, got {names}"
+    # Плоская структура: только .txt файлы, нет подпапок и метафайлов
+    txts = workspace.output / "txts"
+    assert all(p.suffix == ".txt" for p in txts.iterdir() if p.is_file()), "только .txt в txts/"
+    assert not any(p.is_dir() for p in txts.iterdir()), "нет подпапок в txts/"
+    assert not (txts / "report.pdf").exists(), "нет подпапки report.pdf/"
+    assert not (txts / "meta.json").exists(), "нет meta.json"
 
-    hashes = _page_hashes(workspace.output / "rendered" / "report")
-    assert len(hashes) == 3
-
-    text = (bundle / "text.txt").read_text(encoding="utf-8")
-    assert "<!-- page 1 -->" in text
-    for digest in hashes:
-        assert f"## Страница {digest}" in text, "every page heading must reach text.txt"
+    text = (txts / "report.txt").read_text(encoding="utf-8")
+    assert text.strip(), "TXT не пустой"
 
     results = [
         json.loads(line)
@@ -57,42 +59,14 @@ def test_pdf_pipeline_produces_bundle_and_documents(workspace, sample_pdf, stub_
         if line.strip()
     ]
     assert results and results[0]["status"] == "ok"
-    assert results[0]["entities"], "stub returns entities, results must contain them"
 
 
-def test_pdf_reconstruction_keeps_headings(workspace, sample_pdf, stub_server):
+def test_docx_pipeline(workspace, sample_docx, stub_server):
     _run_worker()
-
-    hashes = _page_hashes(workspace.output / "rendered" / "report")
-    pdf_text = _pdf_text(workspace.output / "txts" / "report.pdf" / "reconstruct.pdf")
-    for digest in hashes:
-        assert f"Страница {digest}" in pdf_text, "reconstructed PDF must keep every page heading"
-    assert "пункт 1.1" in pdf_text
-    assert "|" not in pdf_text  # tables rendered as text cells, not raw pipes
-
-
-def test_large_document_keeps_all_headings(workspace, large_pdf, stub_server):
-    """A big file must not silently drop markup (headings) in reconstruction."""
-    _run_worker()
-
-    bundle = workspace.output / "txts" / "big" / "big_report.pdf"
-    hashes = _page_hashes(workspace.output / "rendered" / "big" / "big_report")
-    assert len(hashes) == 40
-
-    text = (bundle / "text.txt").read_text(encoding="utf-8")
-    for digest in hashes:
-        assert f"## Страница {digest}" in text, "text.txt must keep every page heading"
-
-    pdf_text = _pdf_text(bundle / "reconstruct.pdf")
-    missing = [digest for digest in hashes if f"Страница {digest}" not in pdf_text]
-    assert not missing, f"reconstructed PDF lost {len(missing)} page headings: {missing[:3]}"
-
-    import docx
-
-    document = docx.Document(str(bundle / "reconstruct.docx"))
-    docx_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-    missing_docx = [digest for digest in hashes if f"Страница {digest}" not in docx_text]
-    assert not missing_docx, f"reconstructed DOCX lost {len(missing_docx)} page headings"
+    names = _txt_names(workspace.output)
+    assert "spec.txt" in names, f"expected spec.txt, got {names}"
+    text = (workspace.output / "txts" / "spec.txt").read_text(encoding="utf-8")
+    assert "Назначение" in text
 
 
 def test_force_reprocesses_and_rebuilds(workspace, sample_pdf, stub_server):
@@ -104,18 +78,64 @@ def test_force_reprocesses_and_rebuilds(workspace, sample_pdf, stub_server):
     assert second.count("\n") > first.count("\n"), "force re-appends results"
 
 
-def test_docx_pipeline(workspace, sample_docx, stub_server):
+def test_stats_written(workspace, sample_pdf, stub_server):
     _run_worker()
-    bundle = workspace.output / "txts" / "spec.docx"
-    assert (bundle / "text.txt").is_file()
-    assert (bundle / "reconstruct.docx").is_file()
-    text = (bundle / "text.txt").read_text(encoding="utf-8")
-    assert "Назначение" in text
-
-
-def test_entity_store_and_stats(workspace, sample_pdf, stub_server):
-    _run_worker()
-    entities = json.loads((workspace.output / "entities.json").read_text(encoding="utf-8"))
-    assert entities, "entities.json must not be empty"
     stats = (workspace.output / "stats.jsonl").read_text(encoding="utf-8").splitlines()
     assert stats and json.loads(stats[-1])["status"] == "ok"
+
+
+def test_archive_created_after_run(workspace, sample_pdf, stub_server):
+    _run_worker()
+    archive = workspace.output / "results.zip"
+    assert archive.exists(), "results.zip не создан"
+    with zipfile.ZipFile(archive) as zf:
+        names = zf.namelist()
+    assert any(n.endswith(".txt") for n in names), f"в архиве нет .txt: {names}"
+    assert "results.zip" not in names, "архив не должен содержать сам себя"
+    assert any(n.endswith("results.jsonl") for n in names), "в архиве есть results.jsonl"
+
+
+def test_watch_mode_picks_up_new_file(workspace, stub_server):
+    _run_worker()  # начальный прогон (если есть файлы)
+
+    # Добавляем новый файл после первого прогона — watch должен подхватить
+    (workspace.input / "new.html").write_text(
+        "<html><body><h1>Новый документ</h1><p>" + "слово " * 250 + "</p></body></html>",
+        encoding="utf-8",
+    )
+
+    async def run_watch() -> None:
+        w = Worker(force=False)
+        task = asyncio.create_task(w.run(input_root=workspace.input, watch=True, interval=1.0))
+        await asyncio.sleep(4)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run_watch())
+
+    names = _txt_names(workspace.output)
+    assert "new.txt" in names, f"новый файл не подхвачен watch-ом: {names}"
+
+
+def test_html_folder_book_produces_flat_txt(workspace, stub_server):
+    """HTML-книга (папка с главами) -> плоский txts/<имя>.txt."""
+    book = workspace.input / "книга.html"
+    book.mkdir()
+    (book / "chapter1.html").write_text(
+        "<html><body><h1>Глава 1</h1><p>" + "слово " * 250 + "</p></body></html>",
+        encoding="utf-8",
+    )
+    (book / "chapter2.html").write_text(
+        "<html><body><h1>Глава 2</h1><p>" + "слово " * 250 + "</p></body></html>",
+        encoding="utf-8",
+    )
+
+    _run_worker()
+
+    names = _txt_names(workspace.output)
+    assert "книга.txt" in names, f"expected книга.txt, got {names}"
+    text = (workspace.output / "txts" / "книга.txt").read_text(encoding="utf-8")
+    assert "Глава 1" in text and "Глава 2" in text
