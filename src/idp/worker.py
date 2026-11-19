@@ -240,6 +240,12 @@ class Worker:
                 # rglob: html-папка любого уровня вложенности.  Берём только
                 # ВЕРХНИЕ папки: вложенная обработается в составе родителя,
                 # иначе каждая подпапка стала бы отдельной коллекцией-дублём.
+                # Папка с именем *.html (выгрузки книг) — коллекция всегда,
+                # даже если html-страниц внутри нет: иначе она пропадала
+                # молча, без единой строки в логах.
+                if path.suffix.lower() in (".html", ".htm"):
+                    dirs.add(path)
+                    continue
                 html_files = list(path.rglob("*.html")) + list(path.rglob("*.htm"))
                 if html_files and not any(path.is_relative_to(d) for d in dirs):
                     dirs.add(path)
