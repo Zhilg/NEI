@@ -159,6 +159,7 @@ def extract_html_text(html_path: Path) -> str:
 
 
 def convert_html_folder_to_markdown(folder_path: Path) -> str:
+    # rglob: HTML любого уровня вложенности (подпапки внутри папки книги)
     html_files = sorted(folder_path.rglob("*.html"))
     if not html_files:
         html_files = sorted(folder_path.rglob("*.htm"))

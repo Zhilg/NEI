@@ -126,6 +126,8 @@ def _extract_text(file_path: Path) -> tuple[str, int]:
         return extract_pptx_text(file_path), 1
     if ext in (".html", ".htm"):
         text = extract_html_text(file_path)
+        if not _has_meaningful_content(text):
+            return "", 1
         return text, 1
     # Images and unsupported formats: no OCR available without the VLM,
     # so they produce empty text.
@@ -235,6 +237,7 @@ class Worker:
         dirs: set[Path] = set()
         for path in sorted(input_root.rglob("*")):
             if path.is_dir():
+                # rglob: html-папка любого уровня вложенности
                 html_files = list(path.rglob("*.html")) + list(path.rglob("*.htm"))
                 if html_files:
                     dirs.add(path)
@@ -431,25 +434,32 @@ class Worker:
         relative: Path,
         result: FileResult,
         txt_exporter: TxtExporter,
-    ) -> None:
+    ) -> list[Path]:
+        """Записать txt документа; вернуть пути записанных файлов (для архива)."""
+        written: list[Path] = []
+        if result.status != "ok":
+            return written
         try:
             documents = result.documents
             if not documents:
-                # Пустой/пропущенный результат — всё равно пишем TXT,
-                # чтобы в выходе была запись об обработанном файле.
-                name = relative.stem
-                await asyncio.to_thread(txt_exporter.export, "", name=name)
-                return
-            # Несколько документов из одной книги получают суффикс _2, _3 ...
+                # Файл обработан, но документов не вышло — всё равно пишем
+                # пустой TXT, чтобы в выходе (и архиве) была запись о файле.
+                path = await asyncio.to_thread(txt_exporter.export, "", name=relative.stem)
+                written.append(path)
+                return written
+            # Flat output: txts/<original name>.txt, no subfolders, no meta.json.
+            # Several documents from one collection get _2, _3 ... suffixes.
             base_name = relative.stem
             for index, doc in enumerate(documents):
                 doc_text = doc.get("text", "").strip()
                 if not doc_text:
                     continue
                 name = f"{base_name}_{index + 1}" if len(documents) > 1 else base_name
-                await asyncio.to_thread(txt_exporter.export, doc_text, name=name)
+                path = await asyncio.to_thread(txt_exporter.export, doc_text, name=name)
+                written.append(path)
         except Exception as exc:
             logger.warning("Txt export failed for %s: %s", file_path.name, exc)
+        return written
 
     async def run(
         self,
