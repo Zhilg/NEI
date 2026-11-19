@@ -511,8 +511,16 @@ class Worker:
 
         # Разовая сверка при запуске: докинуть в архив всё, что лежит в output,
         # но ещё не попало в results.zip — результаты прогонов до появления
-        # архива, восстановленные вручную файлы и т.п.
+        # архива, восстановленные вручную файлы и т.п.  На больших output
+        # (десятки тысяч txt) пересборка занимает минуты — без этих строк
+        # воркер выглядит мёртвым между 'Воркер запущен' и первым циклом.
+        logger.info("Сверка архива при запуске (может занять минуты)...")
+        sync_start = time.perf_counter()
         self._archive_results(settings.output_root, full_sync=True)
+        logger.info(
+            "Сверка архива при запуске завершена за %.1f с",
+            time.perf_counter() - sync_start,
+        )
 
         async def _process_batch() -> int:
             batch_start = time.perf_counter()
