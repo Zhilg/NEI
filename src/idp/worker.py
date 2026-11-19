@@ -47,7 +47,7 @@ from idp.rubricator import extract_rubricators
 from idp.result_writer import ResultWriter
 from idp.stats_writer import FileTimer, StatsWriter
 from idp.txt_export import TxtExporter
-from idp.vlm_client import reconstruct_markdown, strip_bbox_annotations
+from idp.vlm_client import get_vl_endpoints, reconstruct_markdown, strip_bbox_annotations
 
 logger = logging.getLogger(__name__)
 
@@ -479,6 +479,16 @@ class Worker:
         txt_exporter = TxtExporter()
         self._stats_writer = StatsWriter(settings.output_root / "stats.jsonl")
         self._processed = self._load_processed()
+        logger.info(
+            "Воркер запущен: модель %s | эндпоинты: %s | потоков: %d | "
+            "VLM-конкуренция: %d | таймаут: %.0fс | уже обработано: %d",
+            settings.vl_model,
+            ", ".join(get_vl_endpoints()),
+            settings.worker_threads,
+            settings.vl_concurrency,
+            settings.vl_timeout_seconds,
+            len(self._processed),
+        )
 
         # Разовая сверка при запуске: докинуть в архив всё, что лежит в output,
         # но ещё не попало в results.zip — результаты прогонов до появления
@@ -486,6 +496,7 @@ class Worker:
         self._archive_results(settings.output_root, full_sync=True)
 
         async def _process_batch() -> int:
+            batch_start = time.perf_counter()
             files = self._find_files(root)
             pending = [f for f in files if not self._already_processed(f)]
             if watch and settle > 0:
@@ -496,7 +507,7 @@ class Worker:
                 cutoff = time.time() - settle
                 fresh = [f for f in pending if f.is_file() and f.stat().st_mtime > cutoff]
                 if fresh:
-                    logger.debug("Отложено (ещё копируется?): %s", ", ".join(f.name for f in fresh))
+                    logger.info("Отложено (ещё копируется?): %s", ", ".join(f.name for f in fresh))
                 pending = [f for f in pending if f not in fresh]
             pending.sort(key=lambda p: p.stat().st_size if p.is_file() else 0)
             if not pending:
@@ -556,6 +567,10 @@ class Worker:
                 self._last_archive_sync = now
             else:
                 self._archive_results(settings.output_root)
+            logger.info(
+                "Пакет завершён: %d файлов за %.1f с (всего обработано: %d)",
+                len(pending), time.perf_counter() - batch_start, len(self._processed),
+            )
             return len(pending)
 
         if not watch:
@@ -619,7 +634,8 @@ class Worker:
                 try:
                     with zipfile.ZipFile(archive, "r") as zf:
                         self._archived = set(zf.namelist())
-                except (zipfile.BadZipFile, OSError):
+                except (zipfile.BadZipFile, OSError) as exc:
+                    logger.warning("Архив %s не читается (%s) — будет пересобран при полной сверке", archive, exc)
                     self._archived = set()
         return self._archived
 
@@ -701,6 +717,12 @@ class Worker:
             self._archived = set(current)
             logger.info("Архив %s пересобран (%d файлов)", archive, len(current))
             return
+
+        if full_sync and archive.exists():
+            logger.info(
+                "Сверка архива: журналы совпадают, актуально %d файлов",
+                len(self._archived or ()),
+            )
 
         new_names = [arcname for arcname in current if arcname not in self._archived]
         if not new_names:
