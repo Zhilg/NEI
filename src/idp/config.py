@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # файлы).  Между сверками результаты дозаписываются точечно после
     # каждого файла — на больших пачках это в разы быстрее полной перепаковки.
     archive_sync_interval: float = Field(default=60.0, ge=0)
+    # Потоки пересборки results.zip: каждый файл жмётся в отдельный шард
+    # параллельно (zlib отпускает GIL), швы склеиваются сырыми байтами.
+    archive_threads: int = Field(default=64, ge=1, le=256)
 
     test_mode: bool = Field(default=False)
     artifacts_mode: bool = Field(default=False)

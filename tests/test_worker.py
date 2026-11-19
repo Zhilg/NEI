@@ -201,6 +201,34 @@ def test_startup_adds_files_missing_from_existing_archive(workspace):
         assert "txts/report.txt" in zf.namelist()
 
 
+def test_parallel_zip_rebuild_roundtrip(workspace):
+    """Параллельная пересборка: архив читается штатным zipfile, имена
+    (включая кириллицу) и содержимое совпадают, CRC сходятся."""
+    from idp.worker import _rebuild_zip_parallel
+
+    items = []
+    for i in range(300):
+        path = workspace.output / "txts" / f"файл_{i:03d}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"Содержимое документа номер {i}.\n" * (i % 7 + 1), encoding="utf-8")
+        items.append((f"txts/файл_{i:03d}.txt", path))
+
+    tmp = workspace.output / "rebuilt.zip.tmp"
+    count = _rebuild_zip_parallel(items, tmp, workers=8)
+
+    assert count == len(items)
+    with zipfile.ZipFile(tmp) as zf:
+        assert zf.testzip() is None
+        names = zf.namelist()
+        assert len(names) == len(items)
+        for arcname, path in items:
+            assert arcname in names
+            assert zf.read(arcname) == path.read_bytes()
+    # Шард-остатков не осталось
+    assert not list(workspace.output.glob("*.zipshard"))
+    tmp.unlink()
+
+
 def test_scan_pdf_without_text_layer_goes_through_vlm(workspace, stub_server):
     """Скан без текстового слоя обязан обрабатываться, а не скипаться."""
     make_scan_pdf(workspace.input / "scan.pdf")

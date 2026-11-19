@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import shutil
+import struct
 import tempfile
 import time
 import zlib
@@ -63,6 +64,145 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 LIVE_FILES = ("results.jsonl", "results_readable.json", "stats.jsonl")
 
 ARCHIVE_NAME = "results.zip"
+
+
+# --- Параллельная пересборка архива ---------------------------------------
+#
+# Каждый файл жмётся в собственный одноразовый шард (zlib отпускает GIL —
+# реальный параллелизм), затем швы склеиваются СЫРЫМИ сжатыми байтами без
+# пережатия.  Оглавление пишем сами, в том числе ZIP64: на больших прогонах
+# записей больше 65535 и архив больше 4 ГБ — оба случая обязаны читаться
+# любым zip-ридером.  Раньше пересборка 80k файлов занимала ~14 минут
+# одним потоком; в 64 потока — считанные минуты.
+
+_ZIP64_EXTRA_ID = 0x0001
+_LOCAL_HEADER = struct.Struct("<IHHHHHIIIHH")          # 30 байт
+_CENTRAL_HEADER = struct.Struct("<IHHHHHHIIIHHHHHII")  # 46 байт
+_ZIP64_EOCD = struct.Struct("<IQHHIIQQQQ")
+_ZIP64_LOCATOR = struct.Struct("<IIQI")
+_EOCD = struct.Struct("<IHHHHIIH")
+
+
+def _dos_datetime(dt: tuple[int, ...]) -> tuple[int, int]:
+    year, month, day, hour, minute, sec = (list(dt) + [0] * 6)[:6]
+    year = max(1980, min(year, 2107))
+    return (
+        (hour << 11) | (minute << 5) | (sec // 2),
+        ((year - 1980) << 9) | (month << 5) | day,
+    )
+
+
+def _pack_shard(item: tuple[str, Path], shard_dir: Path) -> tuple[zipfile.ZipInfo, Path]:
+    """Сжать один файл в отдельный zip-шард (на диске, не в памяти)."""
+    arcname, path = item
+    fd, name = tempfile.mkstemp(suffix=".zipshard", dir=shard_dir)
+    os.close(fd)
+    shard = Path(name)
+    with zipfile.ZipFile(shard, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(path, arcname)
+    with zipfile.ZipFile(shard, "r") as zf:
+        info = zf.infolist()[0]
+    return info, shard
+
+
+class _ZipAssembler:
+    """Склейка шардов в один zip: локальные заголовки копируются как есть,
+    центральное оглавление (с ZIP64 при необходимости) пишется один раз в
+    самом конце — поэтому добавлять записи можно чанками."""
+
+    def __init__(self, tmp: Path) -> None:
+        self._out = open(tmp, "wb")
+        self._offset = 0
+        self._centrals: list[tuple[zipfile.ZipInfo, int]] = []
+
+    def add(self, info: zipfile.ZipInfo, shard: Path) -> None:
+        with open(shard, "rb") as sf:
+            head = sf.read(_LOCAL_HEADER.size)
+            (_sig, _ver, _flag, _method, _mt, _md, _crc,
+             _cs, _us, nlen, xlen) = _LOCAL_HEADER.unpack(head)
+            self._out.write(head)
+            self._out.write(sf.read(nlen + xlen))
+            shutil.copyfileobj(sf, self._out, length=info.compress_size)
+        self._centrals.append((info, self._offset))
+        self._offset = self._out.tell()
+
+    def finish(self) -> int:
+        out, offset = self._out, self._offset
+        cd_start = offset
+        for info, local_off in self._centrals:
+            name_b = info.filename.encode("utf-8" if (info.flag_bits & 0x800) else "cp437")
+            big_size = info.file_size > 0xFFFFFFFF or info.compress_size > 0xFFFFFFFF
+            big_off = local_off > 0xFFFFFFFF
+            vals: list[int] = []
+            if big_size:
+                vals.extend((info.file_size, info.compress_size))
+            if big_off:
+                vals.append(local_off)
+            extra = b""
+            if vals:
+                payload = struct.pack(f"<{len(vals)}Q", *vals)
+                extra = struct.pack("<HH", _ZIP64_EXTRA_ID, len(payload)) + payload
+            mtime, mdate = _dos_datetime(info.date_time)
+            out.write(_CENTRAL_HEADER.pack(
+                0x02014B50,
+                ((info.create_system & 0xFF) << 8) | (info.create_version & 0xFF),
+                info.extract_version, info.flag_bits, info.compress_type,
+                mtime, mdate, info.CRC,
+                0xFFFFFFFF if big_size else info.compress_size,
+                0xFFFFFFFF if big_size else info.file_size,
+                len(name_b), len(extra), 0, 0, 0, info.external_attr & 0xFFFFFFFF,
+                0xFFFFFFFF if big_off else local_off,
+            ))
+            out.write(name_b)
+            out.write(extra)
+            offset = out.tell()
+        cd_size = offset - cd_start
+        count = len(self._centrals)
+        # Больше 65535 записей или оглавление за 4 ГБ — только через ZIP64 EOCD.
+        need_z64 = count > 0xFFFF or cd_start > 0xFFFFFFFF or cd_size > 0xFFFFFFFF
+        if need_z64:
+            z64_off = offset
+            out.write(_ZIP64_EOCD.pack(
+                0x06064B50, 44, 45, 45, 0, 0, count, count, cd_size, cd_start))
+            out.write(_ZIP64_LOCATOR.pack(0x07064B50, 0, z64_off, 1))
+        out.write(_EOCD.pack(
+            0x06054B50,
+            45 if need_z64 else 20,
+            45 if need_z64 else 20,
+            min(count, 0xFFFF), min(count, 0xFFFF),
+            min(cd_size, 0xFFFFFFFF), min(cd_start, 0xFFFFFFFF),
+            0,
+        ))
+        return count
+
+    def close(self) -> None:
+        self._out.close()
+
+
+def _rebuild_zip_parallel(
+    items: list[tuple[str, Path]],
+    tmp: Path,
+    workers: int = 64,
+    chunk: int = 512,
+) -> int:
+    """Пересобрать zip из items в tmp; вернуть число записей."""
+    asm = _ZipAssembler(tmp)
+    shards: list[Path] = []
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            for i in range(0, len(items), chunk):
+                packed = list(pool.map(
+                    lambda it: _pack_shard(it, tmp.parent),
+                    items[i:i + chunk],
+                ))
+                shards.extend(shard for _, shard in packed)
+                for info, shard in packed:
+                    asm.add(info, shard)
+        return asm.finish()
+    finally:
+        asm.close()
+        for shard in shards:
+            shard.unlink(missing_ok=True)
 
 # Keywords that hint the source is a collection / journal / newspaper issue
 # that should be split into individual articles or stories.
@@ -766,15 +906,20 @@ class Worker:
             # тогда следующий запуск снова видел битый zip и пересобирал
             # (бесконечный цикл «не зип файла» при каждом старте).
             tmp = archive.with_name(archive.name + ".tmp")
+            t0 = time.perf_counter()
             try:
-                with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for arcname, path in current.items():
-                        zf.write(path, arcname)
+                count = _rebuild_zip_parallel(
+                    sorted(current.items()), tmp,
+                    workers=settings.archive_threads,
+                )
                 os.replace(tmp, archive)
             finally:
                 tmp.unlink(missing_ok=True)
             self._archived = set(current)
-            logger.info("Архив %s пересобран (%d файлов)", archive, len(current))
+            logger.info(
+                "Архив %s пересобран (%d файлов, %.1f с, %d потоков)",
+                archive, count, time.perf_counter() - t0, settings.archive_threads,
+            )
             return
 
         if full_sync and archive.exists():
