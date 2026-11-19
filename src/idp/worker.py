@@ -231,6 +231,10 @@ class Worker:
         # не чаще, чем раз в archive_sync_interval секунд.
         self._archive_sync_interval = settings.archive_sync_interval
         self._last_archive_sync = 0.0
+        # Сигнатуры (size, mtime_ns) живых журналов на момент последней
+        # успешной CRC-сверки: совпала сигнатура — пропускаем перечитывание
+        # многогигабайтного файла ради CRC.
+        self._live_sig: dict[str, tuple[int, int]] = {}
 
     def _find_files(self, input_root: Path) -> list[Path]:
         files: list[Path] = []
@@ -736,9 +740,20 @@ class Worker:
                         if path is None:
                             continue
                         info = infos.get(name)
+                        # Быстрая проверка по сигнатуре (size, mtime_ns):
+                        # CRC журнала в 5 ГБ читать каждые 60 секунд —
+                        # это лишний постоянный I/O на больших прогонах.
+                        try:
+                            st = path.stat()
+                            sig = (st.st_size, st.st_mtime_ns)
+                        except OSError:
+                            continue
+                        if self._live_sig.get(name) == sig:
+                            continue
                         if info is None or info.CRC != zlib.crc32(path.read_bytes()):
                             stale = True
                             break
+                        self._live_sig[name] = sig
                 except (zipfile.BadZipFile, OSError):
                     stale = True
             elif self._archived:
