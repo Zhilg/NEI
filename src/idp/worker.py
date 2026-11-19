@@ -393,9 +393,16 @@ class Worker:
         self._live_sig: dict[str, tuple[int, int]] = {}
 
     def _find_files(self, input_root: Path) -> list[Path]:
+        # ОДИН проход по дереву.  Раньше здесь был is_relative_to() против
+        # множества всех коллекций для каждой записи — O(записи × коллекции),
+        # на 200k+ файлов воркер молчал часами.  Теперь фильтрация через
+        # цепочку родителей (O(глубина) на файл).
+        t0 = time.perf_counter()
         files: list[Path] = []
         dirs: set[Path] = set()
-        for path in sorted(input_root.rglob("*")):
+        n_scanned = 0
+        for path in input_root.rglob("*"):
+            n_scanned += 1
             if path.is_dir():
                 # Книга-коллекция — это:
                 #  - папка с именем *.html/.htm (выгрузки wget: NAME.html/ с
@@ -405,24 +412,40 @@ class Worker:
                 #  Детектим по прямым детям, не по rglob: иначе папка-
                 #  контейнер с несколькими книгами внутри сливала бы их в
                 #  один документ.  Вложенные книги детектятся сами, когда
-                #  обход до них доходит; страховка от двойной обработки —
-                #  is_relative_to.
+                #  обход до них доходит.
                 #  Сами страницы при конвертации собираются рекурсивно
                 #  (rglob в convert_html_folder_to_markdown), поэтому
                 #  chapters/*.html внутри корня книги не теряются.
-                if not any(path.is_relative_to(d) for d in dirs):
-                    if path.suffix.lower() in (".html", ".htm"):
-                        dirs.add(path)
-                    elif list(path.glob("*.html")) + list(path.glob("*.htm")):
-                        dirs.add(path)
+                name = path.name.lower()
+                is_named = name.endswith(".html") or name.endswith(".htm")
+                has_direct_html = False
+                if not is_named:
+                    try:
+                        has_direct_html = any(
+                            p.suffix.lower() in (".html", ".htm")
+                            for p in path.iterdir()
+                            if p.is_file()
+                        )
+                    except OSError:
+                        has_direct_html = False
+                if (is_named or has_direct_html) and not any(
+                    par in dirs for par in path.parents
+                ):
+                    dirs.add(path)
             elif path.is_file():
                 ext = path.suffix.lower()
                 if ext in IGNORED_EXTENSIONS:
                     continue
                 if ext in SUPPORTED_EXTENSIONS:
                     files.append(path)
-        filtered_files = [f for f in files if not any(f.is_relative_to(d) for d in dirs)]
-        return sorted(dirs) + sorted(filtered_files)
+        filtered_files = [f for f in files if not any(par in dirs for par in f.parents)]
+        result = sorted(dirs) + sorted(filtered_files)
+        logger.info(
+            "Сканирование input: %d записей в дереве, %d файлов к обработке, "
+            "%d коллекций за %.1f с",
+            n_scanned, len(filtered_files), len(dirs), time.perf_counter() - t0,
+        )
+        return result
 
     def _load_processed(self) -> set[str]:
         processed: set[str] = set()
