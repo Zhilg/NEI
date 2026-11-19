@@ -237,18 +237,24 @@ class Worker:
         dirs: set[Path] = set()
         for path in sorted(input_root.rglob("*")):
             if path.is_dir():
-                # rglob: html-папка любого уровня вложенности.  Берём только
-                # ВЕРХНИЕ папки: вложенная обработается в составе родителя,
-                # иначе каждая подпапка стала бы отдельной коллекцией-дублём.
-                # Папка с именем *.html (выгрузки книг) — коллекция всегда,
-                # даже если html-страниц внутри нет: иначе она пропадала
-                # молча, без единой строки в логах.
-                if path.suffix.lower() in (".html", ".htm"):
-                    dirs.add(path)
-                    continue
-                html_files = list(path.rglob("*.html")) + list(path.rglob("*.htm"))
-                if html_files and not any(path.is_relative_to(d) for d in dirs):
-                    dirs.add(path)
+                # Книга-коллекция — это:
+                #  - папка с именем *.html/.htm (выгрузки wget: NAME.html/ с
+                #    контентом на любой глубине) — всегда, иначе такая папка
+                #    молча исчезала из пайплайна без строки в логах;
+                #  - папка с html-файлами ПРЯМО внутри (корень книги).
+                #  Детектим по прямым детям, не по rglob: иначе папка-
+                #  контейнер с несколькими книгами внутри сливала бы их в
+                #  один документ.  Вложенные книги детектятся сами, когда
+                #  обход до них доходит; страховка от двойной обработки —
+                #  is_relative_to.
+                #  Сами страницы при конвертации собираются рекурсивно
+                #  (rglob в convert_html_folder_to_markdown), поэтому
+                #  chapters/*.html внутри корня книги не теряются.
+                if not any(path.is_relative_to(d) for d in dirs):
+                    if path.suffix.lower() in (".html", ".htm"):
+                        dirs.add(path)
+                    elif list(path.glob("*.html")) + list(path.glob("*.htm")):
+                        dirs.add(path)
             elif path.is_file():
                 ext = path.suffix.lower()
                 if ext in IGNORED_EXTENSIONS:
