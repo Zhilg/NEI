@@ -237,9 +237,11 @@ class Worker:
         dirs: set[Path] = set()
         for path in sorted(input_root.rglob("*")):
             if path.is_dir():
-                # rglob: html-папка любого уровня вложенности
+                # rglob: html-папка любого уровня вложенности.  Берём только
+                # ВЕРХНИЕ папки: вложенная обработается в составе родителя,
+                # иначе каждая подпапка стала бы отдельной коллекцией-дублём.
                 html_files = list(path.rglob("*.html")) + list(path.rglob("*.htm"))
-                if html_files:
+                if html_files and not any(path.is_relative_to(d) for d in dirs):
                     dirs.add(path)
             elif path.is_file():
                 ext = path.suffix.lower()
@@ -504,6 +506,14 @@ class Worker:
             batch_start = time.perf_counter()
             files = self._find_files(root)
             pending = [f for f in files if not self._already_processed(f)]
+            if len(pending) < len(files):
+                # Уже в журнале со статусом ok/skip — не трогаем.  Без этой
+                # строки повторно подложенные файлы «молча игнорировались»,
+                # и было непонятно, то ли воркер слепой, то ли файл старый.
+                logger.info(
+                    "Пропущено, уже обработаны: %d из %d найденных",
+                    len(files) - len(pending), len(files),
+                )
             if watch and settle > 0:
                 # Файл, который прямо сейчас копируют в папку, выглядит уже
                 # лежащим на месте.  Берём только те, что не менялись дольше
@@ -716,9 +726,18 @@ class Worker:
                 stale = True
 
         if stale:
-            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
-                for arcname, path in current.items():
-                    zf.write(path, arcname)
+            # Атомарно: пишем во временный файл и переименовываем.  Прямая
+            # запись рвалась при рестарте/остановке посреди пересборки —
+            # тогда следующий запуск снова видел битый zip и пересобирал
+            # (бесконечный цикл «не зип файла» при каждом старте).
+            tmp = archive.with_name(archive.name + ".tmp")
+            try:
+                with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for arcname, path in current.items():
+                        zf.write(path, arcname)
+                os.replace(tmp, archive)
+            finally:
+                tmp.unlink(missing_ok=True)
             self._archived = set(current)
             logger.info("Архив %s пересобран (%d файлов)", archive, len(current))
             return
