@@ -9,9 +9,11 @@
    они уже шли через VLM.  Архив results.zip после чистки удаляется — воркер
    пересоберёт его при старте.
 
-2. ``format`` — из оставшихся txt и из текста документов в results.jsonl
-   вырезать служебные маркеры (``<!-- file: ... -->``, ``<!-- page N -->``):
-   в txt должен лежать только чистый текст, имя файла — только в имени файла.
+2. ``format`` — привести оставшееся к финальному формату:
+   * txt на диске — через нормализатор в чистый plain text (без
+     markdown-разметки и служебных маркеров);
+   * results.jsonl — тексты документов выкинуты совсем, остаются только
+     рубрикаторы (журнал схлопывается с ~5 ГБ до десятков МБ).
 
 Запуск на сервере (внутри контейнера воркера, pymupdf уже там):
 
@@ -174,8 +176,9 @@ def phase_format(input_root: Path, output_root: Path) -> None:
                 changed += 1
     logger.info("Шаг 1/2 готов: %d txt просмотрено, %d почищено (%.1f с)", n_txts, changed, time.perf_counter() - t1)
 
-    # 2. Почистить встроенные тексты документов в results.jsonl.
-    logger.info("Шаг 2/2: чистка маркеров в results.jsonl...")
+    # 2. Схлопнуть встроенные тексты документов в results.jsonl: оставить
+    #    только рубрикаторы.  5-гигабайтный журнал ужимается до десятков МБ.
+    logger.info("Шаг 2/2: схлопывание текстов в results.jsonl...")
     t2 = time.perf_counter()
     import json  # noqa: PLC0415
 
@@ -192,23 +195,24 @@ def phase_format(input_root: Path, output_root: Path) -> None:
                 g.write(line if line.endswith("\n") else line + "\n")
                 continue
             n_rec += 1
-            dirty = False
-            for doc in rec.get("documents") or []:
-                text = doc.get("text")
-                if not isinstance(text, str):
-                    continue
-                cleaned, did = _strip_markers(text)
-                if did:
-                    doc["text"] = cleaned
-                    dirty = True
-            if dirty:
+            docs = rec.get("documents")
+            if not isinstance(docs, list):
+                g.write(line if line.endswith("\n") else line + "\n")
+                continue
+            slim_docs = [
+                {"rubricators": doc.get("rubricators") or []}
+                for doc in docs
+                if isinstance(doc, dict)
+            ]
+            if any(set(d.keys()) - {"rubricators"} or "text" in d for d in docs if isinstance(d, dict)):
+                rec["documents"] = slim_docs
                 n_rec_changed += 1
                 g.write(json.dumps(rec, ensure_ascii=False) + "\n")
             else:
                 g.write(line if line.endswith("\n") else line + "\n")
     os.replace(tmp, results_path)
     logger.info(
-        "Шаг 2/2 готов: %d записей, %d почищено (%.1f с)",
+        "Шаг 2/2 готов: %d записей, %d схлопнуто (%.1f с)",
         n_rec, n_rec_changed, time.perf_counter() - t2,
     )
     logger.info("Фаза format завершена за %.1f с", time.perf_counter() - t0)

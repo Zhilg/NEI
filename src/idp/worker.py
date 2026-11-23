@@ -624,10 +624,13 @@ class Worker:
                     continue
                 doc_page = int(doc.get("page", 1) or 1)
                 rubricators = extract_rubricators(doc_text, page=doc_page)
+                # Тексты живут только в txts/ — в results.jsonl (и архиве)
+                # записываем только тип и номер рубрикатора.
                 doc_results.append({
-                    "text": doc_text,
-                    "rubricators": rubricators,
-                    "page": doc_page,
+                    "rubricators": [
+                        {"type": r.get("type", ""), "number": r.get("number", "")}
+                        for r in rubricators
+                    ]
                 })
 
             result = FileResult(
@@ -642,7 +645,7 @@ class Worker:
                 document_type=document_type,
             )
             self._processed.add(str(relative))
-            produced = await self._export_txt_bundle(file_path, relative, result, txt_exporter)
+            produced = await self._export_txt_bundle(file_path, relative, documents, txt_exporter)
             pbar.set_postfix(file=file_path.name, stage="done")
             return result.to_dict(), produced
         except Exception as exc:
@@ -657,16 +660,18 @@ class Worker:
         self,
         file_path: Path,
         relative: Path,
-        result: FileResult,
+        documents: list[dict],
         txt_exporter: TxtExporter,
     ) -> list[Path]:
-        """Записать txt документа; вернуть пути записанных файлов (для архива)."""
+        """Записать txt документа; вернуть пути записанных файлов (для архива).
+
+        Берёт полные документы (с текстом) из сплиттера — в result.documents
+        текста уже нет, там только рубрикаторы.
+        """
         written: list[Path] = []
-        if result.status != "ok":
-            return written
         try:
-            documents = result.documents
-            if not documents:
+            docs = [d for d in documents if d.get("text", "").strip()]
+            if not docs:
                 # Файл обработан, но документов не вышло — всё равно пишем
                 # пустой TXT, чтобы в выходе (и архиве) была запись о файле.
                 path = await asyncio.to_thread(txt_exporter.export, "", name=relative.stem)
@@ -675,11 +680,9 @@ class Worker:
             # Flat output: txts/<original name>.txt, no subfolders, no meta.json.
             # Several documents from one collection get _2, _3 ... suffixes.
             base_name = relative.stem
-            for index, doc in enumerate(documents):
+            for index, doc in enumerate(docs):
                 doc_text = doc.get("text", "").strip()
-                if not doc_text:
-                    continue
-                name = f"{base_name}_{index + 1}" if len(documents) > 1 else base_name
+                name = f"{base_name}_{index + 1}" if len(docs) > 1 else base_name
                 path = await asyncio.to_thread(txt_exporter.export, doc_text, name=name)
                 written.append(path)
         except Exception as exc:
