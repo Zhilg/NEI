@@ -123,7 +123,19 @@ class _ZipAssembler:
              _cs, _us, nlen, xlen) = _LOCAL_HEADER.unpack(head)
             self._out.write(head)
             self._out.write(sf.read(nlen + xlen))
-            shutil.copyfileobj(sf, self._out, length=info.compress_size)
+            # ТОЛЬКО сжатые данные: length в copyfileobj — это размер БУФЕРА,
+            # копируется до EOF, включая оглавление и EOCD шарда.  Мусор между
+            # записями ломал Проводник Windows (Linux читал терпеливо).
+            remaining = info.compress_size
+            while remaining > 0:
+                buf = sf.read(min(1 << 20, remaining))
+                if not buf:
+                    raise RuntimeError(
+                        f"шард {shard.name}: оборвался после "
+                        f"{info.compress_size - remaining} из {info.compress_size} байт"
+                    )
+                self._out.write(buf)
+                remaining -= len(buf)
         self._centrals.append((info, self._offset))
         self._offset = self._out.tell()
 
