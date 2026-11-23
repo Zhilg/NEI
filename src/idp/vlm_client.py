@@ -29,6 +29,47 @@ def _encode_image(image_path: Path) -> str:
     return base64.b64encode(image_path.read_bytes()).decode("utf-8")
 
 
+def _encode_image_safe(image_path: Path) -> str:
+    """base64 PNG в гарантированно-безопасном для Qwen3VLProcessor формате.
+
+    Деградационный путь: processor отклонил исходные картинки чанка — любую
+    картинку кладём на белый квадратный канвас (сторона кратна 64), что
+    проходит его проверки в независимости от того, какое именно ограничение
+    (размер/aspect/чётность) сработало в этой версии vllm/transformers.
+    """
+    import io  # noqa: PLC0415
+
+    from PIL import Image  # noqa: PLC0415
+
+    from idp.renderer import ensure_vlm_safe_image  # noqa: PLC0415
+
+    with Image.open(image_path) as im:
+        safe = ensure_vlm_safe_image(im.convert("RGB"), force=True)
+        buf = io.BytesIO()
+        safe.save(buf, "PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+async def _post_reconstruct(http, payload: dict, make_safe_payload) -> "httpx.Response":
+    """POST с одним деградационным retry на processor-400.
+
+    Qwen3VLProcessor может отклонить размеры/форму картинок чанка (400 «Failed
+    to apply ...Processor»).  Это не сетевая ошибка и не перегрузка — ретрай
+    as-is бесполезен, поэтому повторяем один раз с безопасным форматом
+    картинок, а не гоняем штатные попытки.
+    """
+    try:
+        return await http.post(f"{http.selector.next()}/chat/completions", payload)
+    except RuntimeError as exc:
+        if "Failed to apply" not in str(exc):
+            raise
+        logger.warning(
+            "VLM-OCR: processor отклонил чанк (%s ...) — повтор с безопасным форматом картинок",
+            str(exc)[:160],
+        )
+        return await http.post(f"{http.selector.next()}/chat/completions", make_safe_payload())
+
+
 def _chunked(images: list[Path], size: int) -> list[list[Path]]:
     return [images[i : i + size] for i in range(0, len(images), size)]
 
@@ -842,24 +883,29 @@ class VlmClient:
 
         async def _process_chunk(chunk: list[Path], http: _HttpClient, token_budget: int) -> str:
             async with sem:
-                user_content = [
-                    {"type": "text", "text": "Reconstruct as Markdown."},
-                ]
-                for img in chunk:
-                    user_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{_encode_image(img)}"},
-                    })
-                payload = {
-                    "model": settings.vl_model,
-                    "messages": [
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": token_budget,
-                }
-                response = await http.post(f"{http.selector.next()}/chat/completions", payload)
+                def _make_payload(safe_images: bool = False) -> dict:
+                    user_content = [
+                        {"type": "text", "text": "Reconstruct as Markdown."},
+                    ]
+                    encode = _encode_image_safe if safe_images else _encode_image
+                    for img in chunk:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{encode(img)}"},
+                        })
+                    return {
+                        "model": settings.vl_model,
+                        "messages": [
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": token_budget,
+                    }
+
+                response = await _post_reconstruct(
+                    http, _make_payload(), lambda: _make_payload(safe_images=True)
+                )
                 if response.status_code != 200:
                     raise RuntimeError(f"vLLM {response.status_code}: {response.text[:1000]}")
                 data = response.json()

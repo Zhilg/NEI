@@ -186,6 +186,102 @@ def test_zero_page_document_raises_clear_error(tmp_path):
         render_pdf_to_pngs(pdf, tmp_path / "pages")
 
 
+def test_ensure_vlm_safe_image_keeps_normal_pages():
+    """Обычные страницы книг не трогаем — только вырожденные случаи."""
+    from PIL import Image
+
+    from idp.renderer import ensure_vlm_safe_image
+
+    normal = Image.new("RGB", (2480, 3508), "white")
+    assert ensure_vlm_safe_image(normal) is normal
+    # нечётные стороны у крупной картинки — мягкий ресайз до чётных, без канваса
+    odd = Image.new("RGB", (1653, 2339), "white")
+    fixed = ensure_vlm_safe_image(odd)
+    assert fixed.size == (1654, 2340), fixed.size
+
+
+def test_ensure_vlm_safe_image_letterboxes_strips():
+    """Полосы и мини-страницы — белый квадратный канвас, кратный 64."""
+    from PIL import Image
+
+    from idp.renderer import ensure_vlm_safe_image
+
+    for size in [(4, 1250), (125, 313)]:
+        img = Image.new("RGB", size, "white")
+        safe = ensure_vlm_safe_image(img)
+        w, h = safe.size
+        assert w == h, f"канвас не квадратный: {safe.size}"
+        assert w % 64 == 0, f"сторона не кратна 64: {safe.size}"
+        assert min(safe.size) >= 256
+    # force — канвас даже для нормальной картинки (retry-путь VLM)
+    normal = Image.new("RGB", (2480, 3508), "white")
+    forced = ensure_vlm_safe_image(normal, force=True)
+    assert forced.size[0] == forced.size[1]
+    assert forced.size[0] % 64 == 0
+
+
+def test_post_reconstruct_retries_with_safe_images(tmp_path):
+    """processor-400 не убивает чанк: один повтор с безопасным форматом."""
+    import asyncio
+
+    from PIL import Image
+
+    from idp.vlm_client import _post_reconstruct
+
+    png = tmp_path / "page_00001.png"
+    Image.new("RGB", (125, 313), "white").save(png, "PNG")
+
+    class _Resp:
+        status_code = 200
+        text = "ok"
+
+    calls = []
+
+    class _Sel:
+        def next(self):
+            return "http://fake:8000/v1"
+
+    class _Http:
+        selector = _Sel()
+
+        async def post(self, url, payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                raise RuntimeError(
+                    'VLM request failed: 400 {"error":{"message":"Failed to apply '
+                    'Qwen3VLProcessor on data=..."}}'
+                )
+            return _Resp()
+
+    def safe_payload():
+        return {"safe": True}
+
+    resp = asyncio.run(_post_reconstruct(_Http(), {"orig": True}, safe_payload))
+    assert resp.status_code == 200
+    assert len(calls) == 2
+    assert calls[1] == {"safe": True}
+
+
+def test_post_reconstruct_passes_through_other_errors():
+    """Другие RuntimeError не дёргают retry — пробрасываются как есть."""
+    import asyncio
+
+    from idp.vlm_client import _post_reconstruct
+
+    class _Sel:
+        def next(self):
+            return "http://fake:8000/v1"
+
+    class _Http:
+        selector = _Sel()
+
+        async def post(self, url, payload):
+            raise RuntimeError("VLM request failed: 500 internal")
+
+    with pytest.raises(RuntimeError, match="500 internal"):
+        asyncio.run(_post_reconstruct(_Http(), {}, lambda: {}))
+
+
 # ---------------------------------------------------------------------------
 # Болевые типы документов: классификация и устойчивость пайплайна
 # ---------------------------------------------------------------------------

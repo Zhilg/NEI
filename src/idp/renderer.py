@@ -35,6 +35,46 @@ _local = threading.local()
 # картинки вида 4x1250 px и убивают весь пакет запросов на всех репликах.
 # Гарантируем минимальную сторону после рендера.
 _MIN_PX = 64
+# Ограничения Qwen3VLProcessor (vllm) не задокументированы и меняются между
+# версиями: падал и на 4x1250, и на 125x313.  Угадывать точный порог
+# бессмысленно — «подозрительные» картинки кладём на белый квадратный канвас
+# со стороной, кратной 64: aspect ровно 1, стороны чётные, min >= 64.
+# Обычные страницы книг критериям проходят и возвращаются без изменений.
+_VLM_SAFE_MIN_SIDE = 256
+_VLM_SAFE_ASPECT = 6.0
+_VLM_SAFE_CANVAS_LONG = 2048
+
+
+def ensure_vlm_safe_image(img: Image.Image, force: bool = False) -> Image.Image:
+    """Картинка, гарантированно проходящая Qwen3VLProcessor.
+
+    Обычные страницы (чётные стороны, min >= 256, aspect <= 6) возвращаются
+    без изменений.  Нечётные стороны у крупных картинок — мягкий ресайз до
+    чётных.  Мелкие/вытянутые (полосы, мини-страницы) — белый квадратный
+    канвас со стороной, кратной 64.  ``force=True`` — канвас для любой
+    картинки (деградационный retry на уровне VLM-клиента).
+    """
+    w, h = img.size
+    odd = (w % 2) or (h % 2)
+    small = min(w, h) < _VLM_SAFE_MIN_SIDE
+    wild = not (1.0 / _VLM_SAFE_ASPECT <= w / h <= _VLM_SAFE_ASPECT)
+    if not force and not (odd or small or wild):
+        return img
+    if not force and not (small or wild):
+        # только нечётные стороны — ресайз до чётных, канвас не нужен
+        return img.resize((w + (w % 2), h + (h % 2)), Image.Resampling.LANCZOS)
+    scale = min(1.0, _VLM_SAFE_CANVAS_LONG / max(w, h))
+    nw = max(64, round(w * scale))
+    nh = max(64, round(h * scale))
+    nw += nw % 2
+    nh += nh % 2
+    side = ((max(nw, nh) + 63) // 64) * 64
+    canvas = Image.new("RGB", (side, side), (255, 255, 255))
+    if (nw, nh) != (w, h):
+        img = img.resize((nw, nh), Image.Resampling.LANCZOS)
+    canvas.paste(img, ((side - nw) // 2, (side - nh) // 2))
+    logger.debug("Renderer: letterbox %dx%d -> %dx%d (безопасный канвас VLM)", w, h, side, side)
+    return canvas
 
 
 def open_pdf(pdf_path: Path):
@@ -105,16 +145,9 @@ def _render_single_page(
     logger.debug("Renderer: page %d raw size: %dx%d", page_index + 1, pix.width, pix.height)
     img = _upscale_image(img, scale=upscale_factor)
     img = _resize_to_max_dimension(img, max_image_dimension)
-    if min(img.size) < _MIN_PX:
-        # Дикий aspect (полоса): resize_to_max ужал малую сторону обратно
-        # ниже минимума — поднимаем её финальным ресайзом (большая сторона
-        # при этом может превысить max_image_dimension, но уложится в лимит
-        # пикселей VLM).
-        scale = _MIN_PX / min(img.size)
-        img = img.resize(
-            (max(_MIN_PX, round(img.width * scale)), max(_MIN_PX, round(img.height * scale))),
-            Image.Resampling.LANCZOS,
-        )
+    # Квадратный канвас для вырожденных страниц — иначе процессор VLM
+    # (Qwen3VLProcessor) отклонит запрос целиком, 400 на всех репликах.
+    img = ensure_vlm_safe_image(img)
     if settings.preprocess_enabled:
         img = preprocess_for_ocr(
             img,
@@ -204,6 +237,7 @@ def convert_image_to_png(source: Path, target: Path) -> Path:
                     img.width,
                     img.height,
                 )
+            img = ensure_vlm_safe_image(img)
             img.save(target, "PNG")
         return target
     except Exception as exc:  # noqa: BLE001 - keep the original file
