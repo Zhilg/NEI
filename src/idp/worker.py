@@ -739,13 +739,21 @@ class Worker:
         # архива, восстановленные вручную файлы и т.п.  На больших output
         # (десятки тысяч txt) пересборка занимает минуты — без этих строк
         # воркер выглядит мёртвым между 'Воркер запущен' и первым циклом.
-        logger.info("Сверка архива при запуске (может занять минуты)...")
-        sync_start = time.perf_counter()
-        self._archive_results(settings.output_root, full_sync=True)
-        logger.info(
-            "Сверка архива при запуске завершена за %.1f с",
-            time.perf_counter() - sync_start,
-        )
+        # Выключается archive_enabled: тогда финальный архив собирает фаза
+        # archive оркестратора один раз после нормализации результатов.
+        if settings.archive_enabled:
+            logger.info("Сверка архива при запуске (может занять минуты)...")
+            sync_start = time.perf_counter()
+            self._archive_results(settings.output_root, full_sync=True)
+            logger.info(
+                "Сверка архива при запуске завершена за %.1f с",
+                time.perf_counter() - sync_start,
+            )
+        else:
+            logger.info(
+                "Автоархив выключен (IDP_ARCHIVE_ENABLED=false): воркер не трогает "
+                "results.zip, финальный архив соберёт фаза archive"
+            )
 
         async def _process_batch() -> int:
             batch_start = time.perf_counter()
@@ -830,12 +838,13 @@ class Worker:
             # файлы) — не чаще archive_sync_interval: на больших output
             # перепаковка zip после каждой пачки слишком дорогая.
             result_writer.finalize()
-            now = time.monotonic()
-            if now - self._last_archive_sync >= self._archive_sync_interval:
-                self._archive_results(settings.output_root, full_sync=True)
-                self._last_archive_sync = now
-            else:
-                self._archive_results(settings.output_root)
+            if settings.archive_enabled:
+                now = time.monotonic()
+                if now - self._last_archive_sync >= self._archive_sync_interval:
+                    self._archive_results(settings.output_root, full_sync=True)
+                    self._last_archive_sync = now
+                else:
+                    self._archive_results(settings.output_root)
             logger.info(
                 "Пакет завершён: %d файлов за %.1f с (всего обработано: %d)",
                 len(pending), time.perf_counter() - batch_start, len(self._processed),
@@ -846,7 +855,8 @@ class Worker:
             await _process_batch()
             result_writer.finalize()
             self._stats_writer.flush()
-            self._archive_results(settings.output_root, full_sync=True)
+            if settings.archive_enabled:
+                self._archive_results(settings.output_root, full_sync=True)
             return
 
         logger.info(
@@ -879,7 +889,8 @@ class Worker:
         finally:
             result_writer.finalize()
             self._stats_writer.flush()
-            self._archive_results(settings.output_root, full_sync=True)
+            if settings.archive_enabled:
+                self._archive_results(settings.output_root, full_sync=True)
 
     @staticmethod
     def _archivable(path: Path, output_root: Path) -> bool:

@@ -228,8 +228,17 @@ def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
                 kept += 1
                 continue
             fpath = str(rec.get("file", ""))
+            # Идемпотентность: выкидываем ТОЛЬКО записи старого формата (с
+            # текстами документов внутри).  Переработанные записи после фазы
+            # format схлопнуты до {"rubricators": ...} — их не трогаем, иначе
+            # каждый перезапуск гонял бы одни и те же pdf по кругу.
+            has_text = any(
+                isinstance(d, dict) and "text" in d
+                for d in (rec.get("documents") or [])
+            )
             if (
-                rec.get("status") in ("ok", "skip")
+                has_text
+                and rec.get("status") in ("ok", "skip")
                 and fpath.lower().endswith(".pdf")
                 and Path(fpath).stem in stems
             ):
