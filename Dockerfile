@@ -18,7 +18,8 @@ RUN pip install --no-cache-dir \
     huggingface_hub \
     uvicorn \
     fastapi \
-    opencv-python-headless
+    opencv-python-headless \
+    pikepdf
 
 COPY src /workspace/src
 COPY scripts /workspace/scripts

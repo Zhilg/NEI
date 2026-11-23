@@ -232,6 +232,64 @@ def test_same_stem_in_nested_folders_survives_restart(workspace, ocr_stub):
 
 
 # ---------------------------------------------------------------------------
+# Ремонт битых PDF через pikepdf (fitz.reject -> repair -> fitz.open)
+# ---------------------------------------------------------------------------
+
+def test_open_pdf_falls_back_to_repair(tmp_path, monkeypatch):
+    """fitz отказал -> pikepdf чинит копию -> документ открывается."""
+    import fitz
+
+    from idp import renderer
+
+    pdf = make_text_pdf(tmp_path / "doc.pdf", "Документ", "Текст " * 40, pages=2)
+    orig_open = fitz.open
+    calls = {"n": 0}
+
+    def flaky_open(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1 and args and str(args[0]) == str(pdf):
+            raise fitz.FileDataError("simulated corrupt xref")
+        return orig_open(*args, **kwargs)
+
+    monkeypatch.setattr(fitz, "open", flaky_open)
+    doc = renderer.open_pdf(pdf)
+    try:
+        assert len(doc) == 2, "починенная копия должна открываться"
+    finally:
+        doc.close()
+    assert calls["n"] >= 2, "ремонтный путь не вызван"
+
+
+def test_requeue_detects_textlayer_after_repair(tmp_path, monkeypatch):
+    """pdf-requeue: битый файл с текстовым слоем всё равно на переработку."""
+    import fitz
+
+    pdf = make_text_pdf(tmp_path / "doc.pdf", "Документ", "Слой текста " * 40, pages=1)
+    orig_open = fitz.open
+    calls = {"n": 0}
+
+    def flaky_open(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1 and args and str(args[0]) == str(pdf):
+            raise fitz.FileDataError("simulated corrupt xref")
+        return orig_open(*args, **kwargs)
+
+    monkeypatch.setattr(fitz, "open", flaky_open)
+    assert fix_results._pdf_has_text_layer(pdf) is True
+
+
+def test_repair_gives_up_on_empty_and_garbage(tmp_path):
+    from idp.pdf_repair import repair_pdf
+
+    empty = tmp_path / "empty.pdf"
+    empty.write_bytes(b"")
+    assert repair_pdf(empty) is None
+    garbage = tmp_path / "garbage.pdf"
+    garbage.write_bytes(b"%PDF-1.4\n" + b"\x00\xff" * 1024)
+    assert repair_pdf(garbage) is None
+
+
+# ---------------------------------------------------------------------------
 # 'Лесенка' колонок: детерминированная эмуляция OCR-вывода
 # ---------------------------------------------------------------------------
 

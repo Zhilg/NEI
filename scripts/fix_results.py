@@ -91,12 +91,26 @@ def _strip_markers(text: str) -> tuple[str, bool]:
     return cleaned, cleaned != text
 
 
+def _load_repair_module():
+    """pdf_repair грузим напрямую по пути — как plaintext выше."""
+    import importlib.util  # noqa: PLC0415
+
+    spec = importlib.util.spec_from_file_location(
+        "idp_pdf_repair",
+        Path(__file__).resolve().parents[1] / "src" / "idp" / "pdf_repair.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _pdf_has_text_layer(pdf_path: Path, sample_pages: int = 3) -> bool:
     import fitz  # noqa: PLC0415 — pymupdf есть в контейнере воркера
 
+    repaired: Path | None = None
     try:
         doc = fitz.open(str(pdf_path))
-    except Exception as exc:  # noqa: BLE001 — битый pdf просто пропускаем
+    except Exception as exc:  # noqa: BLE001 — пробуем починить, иначе пропускаем
         try:
             size = pdf_path.stat().st_size
         except OSError:
@@ -108,7 +122,14 @@ def _pdf_has_text_layer(pdf_path: Path, sample_pages: int = 3) -> bool:
         else:
             kind = "битая структура (truncated/xref/encrypt)"
         logger.warning("не открылся %s: %s [%s, %d байт]", pdf_path.name, exc, kind, size)
-        return False
+        repaired = _load_repair_module().repair_pdf(pdf_path)
+        if repaired is None:
+            return False
+        try:
+            doc = fitz.open(str(repaired))
+        except Exception:  # noqa: BLE001 — и после ремонта не открылся
+            repaired.unlink(missing_ok=True)
+            return False
     try:
         for page in list(doc)[:sample_pages]:
             if page.get_text().strip():
@@ -116,6 +137,8 @@ def _pdf_has_text_layer(pdf_path: Path, sample_pages: int = 3) -> bool:
         return False
     finally:
         doc.close()
+        if repaired is not None:
+            repaired.unlink(missing_ok=True)
 
 
 def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
@@ -244,6 +267,8 @@ def phase_merge(input_root: Path, output_root: Path) -> None:
 
     groups: dict[str, list[Path]] = {}
     for txt in txts_root.glob("*.txt"):
+        if not txt.is_file():
+            continue  # директория с расширением .txt — не часть документа
         base = txt.stem
         m = _DOC_SUFFIX_RE.search(base)
         key = _DOC_SUFFIX_RE.sub("", base) if m else base
@@ -259,7 +284,13 @@ def phase_merge(input_root: Path, output_root: Path) -> None:
             return (int(m.group(0)[1:]) if m else 1), p.name
 
         parts_paths = sorted(paths, key=sort_key)
-        parts = [p.read_text(encoding="utf-8", errors="replace") for p in parts_paths]
+        try:
+            parts = [p.read_text(encoding="utf-8", errors="replace") for p in parts_paths]
+        except OSError as exc:
+            # Одна недочитанная часть (пропала/занята/права) не должна валить
+            # фазу целиком — группа остаётся как есть, проблема видна в логе.
+            logger.warning("merge: группа %s пропущена, часть не читается: %s", key, exc)
+            continue
         if plan_merge(parts):
             combined = merge_parts(parts)
             tmp = txts_root / f"{key}.merge.tmp"

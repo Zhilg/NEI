@@ -29,13 +29,36 @@ logger = logging.getLogger(__name__)
 _local = threading.local()
 
 
+def open_pdf(pdf_path: Path):
+    """fitz.open с фолбэком на pikepdf-ремонт битых файлов.
+
+    MuPDF строго валидирует PDF и отказывается открывать повреждённые
+    xref/трейлер/потоки — то, что читалки чинят молча.  Починенную копию
+    скармливаем fitz из памяти, временный файл удаляем сразу.
+    """
+    try:
+        return fitz.open(str(pdf_path))
+    except Exception:
+        from idp.pdf_repair import repair_pdf  # noqa: PLC0415
+
+        repaired = repair_pdf(pdf_path)
+        if repaired is None:
+            raise
+        try:
+            data = repaired.read_bytes()
+        finally:
+            repaired.unlink(missing_ok=True)
+        logger.warning("PDF открыт после pikepdf-ремонта: %s", pdf_path.name)
+        return fitz.open(stream=data, filetype="pdf")
+
+
 def _open_document(pdf_path: Path):
     """One PyMuPDF document per worker thread (the API is not thread-safe)."""
     doc = getattr(_local, "doc", None)
     if doc is None or getattr(_local, "doc_path", None) != str(pdf_path):
         if doc is not None:
             doc.close()
-        doc = fitz.open(pdf_path)
+        doc = open_pdf(pdf_path)
         _local.doc = doc
         _local.doc_path = str(pdf_path)
     return doc
@@ -86,7 +109,7 @@ def _render_single_page(
 
 def _render_all_pages(pdf_path: Path, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    doc = fitz.open(pdf_path)
+    doc = open_pdf(pdf_path)
     num_pages = len(doc)
     doc.close()
     max_workers = min(os.cpu_count() or 4, num_pages, 8)
@@ -178,7 +201,7 @@ def extract_pdf_text_and_visual_pages(
     ``rendered/`` area); otherwise a per-stem temp directory is used and the
     caller is responsible for cleanup.
     """
-    doc = fitz.open(pdf_path)
+    doc = open_pdf(pdf_path)
     num_pages = len(doc)
     doc.close()
 
@@ -201,7 +224,7 @@ def extract_pdf_text(pdf_path: Path) -> tuple[str, int]:
     character so callers can split by page when needed.
     """
     try:
-        doc = fitz.open(pdf_path)
+        doc = open_pdf(pdf_path)
     except Exception:
         return "", 0
     parts: list[str] = []
