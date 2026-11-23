@@ -15,12 +15,20 @@
 #
 # Весь вывод дублируется в logs/reprocess_<время>.log (подпапка репо,
 # не корень).  REPROCESS_QUIET=1 — писать только в файл, в консоль тишина.
+# Управление: scripts/reprocess_ctl.sh {start|stop|status|logs} — запускает
+# этот скрипт в nohup, корректно гасит, показывает прогресс.
 # При ошибке на любом шаге воркер всё равно поднимается обратно.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
 COMPOSE="docker compose -f infra/compose/local.yml"
 mkdir -p logs
+PID_FILE="logs/reprocess.pid"
+if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    echo "прогон уже идёт (pid $(cat "$PID_FILE")). Сначала: scripts/reprocess_ctl.sh stop" >&2
+    exit 1
+fi
+echo $$ > "$PID_FILE"
 LOG="logs/reprocess_$(date +%Y%m%d_%H%M%S).log"
 if [ "${REPROCESS_QUIET:-0}" = "1" ]; then
     exec >> "$LOG" 2>&1
@@ -33,6 +41,7 @@ finish() {
     $COMPOSE up -d worker
 }
 trap finish ERR
+trap 'rm -f "$PID_FILE"' EXIT
 
 step() { echo; echo "=== $(date '+%F %T') $* ==="; }
 
