@@ -58,6 +58,14 @@ merge_parts = _plaintext.merge_parts
 _DOC_SUFFIX_RE = re.compile(r"_\d+$")
 
 
+def _normalize_txt_star(path: Path) -> int:
+    content = path.read_text(encoding="utf-8", errors="replace")
+    cleaned, did = _strip_markers(content)
+    if did:
+        path.write_text(cleaned, encoding="utf-8")
+    return int(did)
+
+
 def _strip_markers(text: str) -> tuple[str, bool]:
     """Полная нормализация к plain text; True — текст реально изменился."""
     cleaned = to_plain_text(text)
@@ -86,16 +94,19 @@ def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
     results_path = output_root / "results.jsonl"
     txts_root = output_root / "txts"
 
-    # 1. Какие PDF в input вообще имеют текстовый слой.
-    logger.info("Шаг 1/3: скан input на PDF с текстовым слоем...")
+    # 1. Какие PDF в input вообще имеют текстовый слой (16 потоков —
+    #    fitz-извлечение текста C-bound и отпускает GIL, потоков достаточно;
+    #    ProcessPool на Windows ломался под spawn — не используем).
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+    logger.info("Шаг 1/3: скан input на PDF с текстовым слоем (16 потоков)...")
+    pdfs = [p for p in sorted(input_root.rglob("*.pdf")) if p.is_file()]
     stems: set[str] = set()
-    n_pdfs = 0
-    for p in sorted(input_root.rglob("*.pdf")):
-        if not p.is_file():
-            continue
-        n_pdfs += 1
-        if _pdf_has_text_layer(p):
-            stems.add(p.stem)
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for path, has in zip(pdfs, pool.map(_pdf_has_text_layer, pdfs, chunksize=32)):
+            if has:
+                stems.add(path.stem)
+    n_pdfs = len(pdfs)
     logger.info(
         "Шаг 1/3 готов: %d pdf в input, из них с текстовым слоем (на переработку): %d (%.1f с)",
         n_pdfs, len(stems), time.perf_counter() - t0,
@@ -243,20 +254,17 @@ def phase_format(input_root: Path, output_root: Path) -> None:
     results_path = output_root / "results.jsonl"
     txts_root = output_root / "txts"
 
-    # 1. Почистить txt на диске.
-    logger.info("Шаг 1/2: чистка маркеров в txts/...")
+    # 1. Почистить txt на диске (32 потока — чтение/запись мелких файлов).
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+    logger.info("Шаг 1/2: чистка маркеров в txts/ (32 потока)...")
     t1 = time.perf_counter()
+    txt_paths = list(txts_root.glob("*.txt")) if txts_root.is_dir() else []
     changed = 0
-    n_txts = 0
-    if txts_root.is_dir():
-        for txt in txts_root.glob("*.txt"):
-            n_txts += 1
-            content = txt.read_text(encoding="utf-8", errors="replace")
-            cleaned, did = _strip_markers(content)
-            if did:
-                txt.write_text(cleaned, encoding="utf-8")
-                changed += 1
-    logger.info("Шаг 1/2 готов: %d txt просмотрено, %d почищено (%.1f с)", n_txts, changed, time.perf_counter() - t1)
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        for did in pool.map(_normalize_txt_star, txt_paths, chunksize=64):
+            changed += did
+    logger.info("Шаг 1/2 готов: %d txt просмотрено, %d почищено (%.1f с)", len(txt_paths), changed, time.perf_counter() - t1)
 
     # 2. Схлопнуть встроенные тексты документов в results.jsonl: оставить
     #    только рубрикаторы.  5-гигабайтный журнал ужимается до десятков МБ.

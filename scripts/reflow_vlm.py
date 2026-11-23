@@ -180,6 +180,10 @@ class Reflower:
         return "\n\n".join(p.strip() for p in parts if p.strip())
 
 
+FILE_WORKERS = 16  # файлы параллельно: внутри файла чанки и так параллельны,
+# но мелкие файлы не наполняют семафор — держим несколько файлов в полёте.
+
+
 async def amain() -> int:
     txts_root = settings.output_root / "txts"
     if not txts_root.is_dir():
@@ -188,9 +192,21 @@ async def amain() -> int:
     files = sorted(txts_root.glob("*.txt"))
     logger.info("Сканирую %d txt в %s...", len(files), txts_root)
     reflower = Reflower()
-    t0 = time.perf_counter()
+    queue: asyncio.Queue[Path | None] = asyncio.Queue()
     for path in files:
-        await reflower.reflow_file(path)
+        queue.put_nowait(path)
+    for _ in range(FILE_WORKERS):
+        queue.put_nowait(None)
+
+    async def worker() -> None:
+        while True:
+            path = await queue.get()
+            if path is None:
+                return
+            await reflower.reflow_file(path)
+
+    t0 = time.perf_counter()
+    await asyncio.gather(*[worker() for _ in range(FILE_WORKERS)])
     logger.info(
         "Готово за %.0f с: %d перефлоучено, %d без 'лесенки', %d отклонено",
         time.perf_counter() - t0, reflower._done, reflower._skipped, reflower._failed,
