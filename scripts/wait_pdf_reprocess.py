@@ -49,10 +49,16 @@ def main() -> int:
         return 0
 
     deadline = time.time() + TIMEOUT_SEC
+    offset = 0  # журнал дополняется только append'ом — дочитываем хвост,
+    # а не перечитываем 5 ГБ каждые 2 минуты (сжигало целое ядро CPU).
     while True:
         done: set[str] = set()
         if results_path.exists():
+            size = results_path.stat().st_size
+            if size < offset:
+                offset = 0  # журнал пересоздали (pdf-requeue) — читаем с нуля
             with open(results_path, encoding="utf-8") as f:
+                f.seek(offset)
                 for line in f:
                     try:
                         rec = json.loads(line)
@@ -65,6 +71,7 @@ def main() -> int:
                         and fpath.lower().endswith(".pdf")
                     ):
                         done.add(Path(fpath).stem)
+                offset = f.tell()
         missing = stems - done
         logger.info(
             "Переработано %d/%d текстовослойных pdf, осталось: %d",
