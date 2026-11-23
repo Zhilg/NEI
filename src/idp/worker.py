@@ -528,7 +528,7 @@ class Worker:
                 pngs = [png]
             if not pngs:
                 return "", 0
-            logger.info("%s: текстового слоя нет, реконструирую через VLM (%d стр.)", relative, len(pngs))
+            logger.info("%s: реконструкция через VLM-OCR (%d стр.)", relative, len(pngs))
             markdown = await reconstruct_markdown(pngs)
             return strip_bbox_annotations(markdown).strip(), len(pngs)
         finally:
