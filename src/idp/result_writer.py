@@ -56,10 +56,28 @@ class ResultWriter:
         # синхронизирован с файлом результатов, даже если часть записей не
         # попала в буфер (например, после падения процесса между write и flush).
         records = self._load_existing()
+        # Pretty-файл — только имя файла и рубрикаторы: без текстов, метаданных
+        # и прочего (тексты живут в txts/, полные записи — в results.jsonl).
+        slim: list[dict[str, Any]] = []
+        for record in records:
+            if record.get("status") not in ("ok", "skip"):
+                continue
+            seen: set[tuple[str, str]] = set()
+            rubricators: list[dict[str, str]] = []
+            for doc in record.get("documents") or []:
+                for rub in doc.get("rubricators") or []:
+                    key = (str(rub.get("type", "")), str(rub.get("number", "")))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    rubricators.append({"type": key[0], "number": key[1]})
+            if not rubricators:
+                continue
+            slim.append({"file": record.get("file", ""), "rubricators": rubricators})
         tmp = self.pretty_path.with_suffix(".tmp")
         try:
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(records, f, ensure_ascii=False, indent=2)
+                json.dump(slim, f, ensure_ascii=False, indent=2)
                 f.write("\n")
             tmp.replace(self.pretty_path)
         except OSError as exc:
