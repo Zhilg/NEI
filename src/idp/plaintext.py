@@ -89,6 +89,59 @@ _LEGAL_BOILERPLATE_RES = [
 ]
 # Перенос слова через дефис/мягкий дефис на следующей строке («Пери-\нод»).
 _DEHYPHEN_RE = re.compile(r"(?<![-\s])[-\u00ad]\n(?=[а-яёa-z])")
+# Конец предложения / конструкции, после которой нужен разрыв строки.
+_SENTENCE_END_RE = re.compile(r"[.!?…:;»)\]]$")
+# Маркер списка — строку со списком не приклеиваем к предыдущей.
+_LIST_START_RE = re.compile(r"^(?:[-*•‣]|\d{1,3}[.)])\s")
+
+
+def _reflow(lines: list[str]) -> list[str]:
+    """Склеить разорванные строки в абзацы.
+
+    В узкоколоночных PDF выгрузках каждая строка обрывается по ширине
+    колонки («Один / из / основоположников»), а не по смыслу.  Склеиваем,
+    пока предыдущая строка не заканчивается концом предложения.  Осторожные
+    исключения, когда склейку НЕ делаем: перед заголовком главы, маркером
+    жанра, пунктом списка, строкой В ВЕРХНЕМ РЕГИСТРЕ, а также рядом со
+    строками таблиц (двойные пробелы после расплющивания |...|) — чтобы не
+    склеивать строки стихов и табличные данные.
+    """
+    out: list[str] = []
+    buf = ""
+
+    def flush() -> None:
+        nonlocal buf
+        if buf:
+            out.append(buf)
+            buf = ""
+
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            flush()
+            if out and out[-1] != "":
+                out.append("")
+            continue
+        if not buf:
+            buf = s
+            continue
+        if (
+            _SENTENCE_END_RE.search(buf)
+            or "  " in buf
+            or "  " in s
+            or _CHAPTER_START_RE.match(s)
+            or _ARTICLE_MARKER_RE.match(s)
+            or _LIST_START_RE.match(s)
+            or (_LIST_START_RE.match(buf) and s[:1].isupper())
+            or (len(s) >= 4 and s.isupper())
+            or (len(buf) >= 4 and buf.isupper())
+        ):
+            flush()
+            buf = s
+            continue
+        buf = f"{buf} {s}"
+    flush()
+    return out
 # Заголовок оглавления и строка оглавления определены выше
 # (_TOC_HEADING_RE / _TOC_ENTRY_RE).
 
@@ -197,10 +250,12 @@ def to_plain_text(text: str) -> str:
     text = "\n".join(collapsed).strip("\n")
     # Оглавления — не содержание, вырезаем блоки целиком.
     text = strip_toc(text)
-    # Вырезка оглавления могла оставить двойные пустые строки — схлопываем.
+    # Склейка разорванных колонкой строк в абзацы.
+    reflowed = _reflow(text.split("\n"))
+    # Схлопываем серии пустых строк до одной, режем края.
     final: list[str] = []
     blank = False
-    for ln in text.split("\n"):
+    for ln in reflowed:
         if ln:
             final.append(ln)
             blank = False
