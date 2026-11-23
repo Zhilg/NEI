@@ -58,6 +58,25 @@ merge_parts = _plaintext.merge_parts
 _DOC_SUFFIX_RE = re.compile(r"_\d+$")
 
 
+def _silence_mupdf() -> None:
+    """MuPDF печатает некритичные syntax-ошибки битых PDF прямо в stderr.
+
+    На корпусе из тысяч кривых сканов фаза pdf-requeue превращала лог в
+    простыню «MuPDF error: ...».  Глушим; фатальные проблемы всё равно
+    приходят исключениями, диагностика доступна через fitz.TOOLS.mupdf_warnings().
+    """
+    try:
+        import fitz  # noqa: PLC0415
+
+        fitz.TOOLS.mupdf_display_errors(False)
+        fitz.TOOLS.mupdf_display_warnings(False)
+    except Exception:  # noqa: BLE001 — глушение опционально, не должно ломать фазу
+        pass
+
+
+_silence_mupdf()
+
+
 def _normalize_txt_star(path: Path) -> int:
     content = path.read_text(encoding="utf-8", errors="replace")
     cleaned, did = _strip_markers(content)
