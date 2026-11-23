@@ -78,11 +78,23 @@ _silence_mupdf()
 
 
 def _normalize_txt_star(path: Path) -> int:
-    content = path.read_text(encoding="utf-8", errors="replace")
-    cleaned, did = _strip_markers(content)
-    if did:
-        path.write_text(cleaned, encoding="utf-8")
-    return int(did)
+    t0 = time.perf_counter()
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        cleaned, did = _strip_markers(content)
+        if did:
+            path.write_text(cleaned, encoding="utf-8")
+        return int(did)
+    except OSError as exc:
+        logger.warning("чистка txt: пропущен %s: %s", path.name, exc)
+        return 0
+    finally:
+        dt = time.perf_counter() - t0
+        if dt > 30:
+            logger.warning(
+                "медленный txt %s: %.1f с (%d байт) — проверь, не повис ли он",
+                path.name, dt, path.stat().st_size if path.exists() else -1,
+            )
 
 
 def _strip_markers(text: str) -> tuple[str, bool]:
@@ -178,10 +190,14 @@ def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
 
     pdfs = [p for p in sorted(input_root.rglob("*.pdf")) if p.is_file()]
     stems: set[str] = set()
+    from concurrent.futures import as_completed  # noqa: PLC0415
+
     with ThreadPoolExecutor(max_workers=16) as pool:
-        bar = tqdm(total=len(pdfs), desc="скан pdf", unit="файл")
-        for path, has in pool.map(_has_text_layer_star, pdfs, chunksize=32):
+        futures = {pool.submit(_has_text_layer_star, p): p for p in pdfs}
+        bar = tqdm(total=len(futures), desc="скан pdf", unit="файл")
+        for fut in as_completed(futures):
             bar.update(1)
+            path, has = fut.result()
             if has:
                 stems.add(path.stem)
         bar.close()
@@ -350,13 +366,16 @@ def phase_format(input_root: Path, output_root: Path) -> None:
     from tqdm import tqdm  # noqa: PLC0415
 
     t1 = time.perf_counter()
-    txt_paths = list(txts_root.glob("*.txt")) if txts_root.is_dir() else []
+    txt_paths = [p for p in txts_root.glob("*.txt") if p.is_file()] if txts_root.is_dir() else []
     changed = 0
+    from concurrent.futures import as_completed  # noqa: PLC0415
+
     with ThreadPoolExecutor(max_workers=32) as pool:
-        bar = tqdm(total=len(txt_paths), desc="чистка txt", unit="файл")
-        for did in pool.map(_normalize_txt_star, txt_paths, chunksize=64):
+        futures = {pool.submit(_normalize_txt_star, p): p for p in txt_paths}
+        bar = tqdm(total=len(futures), desc="чистка txt", unit="файл")
+        for fut in as_completed(futures):
             bar.update(1)
-            changed += did
+            changed += fut.result()
         bar.close()
     logger.info("Шаг 1/2 готов: %d txt просмотрено, %d почищено (%.1f с)", len(txt_paths), changed, time.perf_counter() - t1)
 
