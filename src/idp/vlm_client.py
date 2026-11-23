@@ -840,7 +840,7 @@ class VlmClient:
         max_tokens = self._test_max_tokens()
         sem = self._semaphore()
 
-        async def _process_chunk(chunk: list[Path], http: _HttpClient) -> str:
+        async def _process_chunk(chunk: list[Path], http: _HttpClient, token_budget: int) -> str:
             async with sem:
                 user_content = [
                     {"type": "text", "text": "Reconstruct as Markdown."},
@@ -857,17 +857,41 @@ class VlmClient:
                         {"role": "user", "content": user_content},
                     ],
                     "temperature": 0.1,
-                    "max_tokens": max_tokens,
+                    "max_tokens": token_budget,
                 }
                 response = await http.post(f"{http.selector.next()}/chat/completions", payload)
                 if response.status_code != 200:
                     raise RuntimeError(f"vLLM {response.status_code}: {response.text[:1000]}")
                 data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                return _strip_code_fences(_strip_thinking_blocks(content))
+                choice = data["choices"][0]
+                content = choice["message"]["content"]
+                text = _strip_code_fences(_strip_thinking_blocks(content))
+
+            if choice.get("finish_reason") != "length":
+                return text
+            # Обрезано по лимиту токенов — молча сохранять обрыв нельзя:
+            # 1) чанк из нескольких страниц разбиваем на одиночные (меньше
+            #    объём на изображение);  2) одиночную страницу переспрашиваем
+            #    с двойным бюджетом;  3) если и это обрезалось — предупреждаем,
+            #    но текст сохраняем (лучше обрыв, чем потеря файла).
+            if len(chunk) > 1:
+                logger.warning(
+                    "VLM-OCR: чанк из %d стр. обрезан по токенам — разбиваю на одиночные",
+                    len(chunk),
+                )
+                singles = await asyncio.gather(*[_process_chunk([img], http, max_tokens) for img in chunk])
+                return "\n\n".join(singles)
+            if token_budget < 16384:
+                logger.warning(
+                    "VLM-OCR: страница обрезана по токенам (%d) — повтор с бюджетом %d",
+                    token_budget, min(token_budget * 2, 16384),
+                )
+                return await _process_chunk(chunk, http, min(token_budget * 2, 16384))
+            logger.warning("VLM-OCR: страница обрезана даже с бюджетом %d токенов", token_budget)
+            return text
 
         async with self._http() as http:
-            tasks = [_process_chunk(chunk, http) for chunk in chunks]
+            tasks = [_process_chunk(chunk, http, max_tokens) for chunk in chunks]
             parts = await asyncio.gather(*tasks)
 
         # Без маркеров: в txt должен лежать только чистый текст документа

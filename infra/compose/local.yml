@@ -17,7 +17,10 @@ x-vllm-anchor: &vllm-base
     HF_HUB_OFFLINE: "1"
     TRANSFORMERS_OFFLINE: "1"
     VLLM_NO_USAGE_STATS: "1"
-    VLLM_IMAGE_MAX_PIXELS: ${IDP_VLLM_IMAGE_MAX_PIXELS:-2500000}
+    # 6.4Мп: А4 при 300dpi — это 8.7Мп, кап оставляет ~2260x3200 (~260dpi
+    # эффективных).  2.5Мп давало всего ~160dpi на А4 — мелкий шрифт
+    # (сноски, две колонки) распознавался плохо.
+    VLLM_IMAGE_MAX_PIXELS: ${IDP_VLLM_IMAGE_MAX_PIXELS:-6400000}
     VLLM_IMAGE_MIN_PIXELS: "1003520"
     VLLM_ENABLE_CUDA_COMPATIBILITY: "1"
     OMP_NUM_THREADS: ${IDP_VLLM_OMP_NUM_THREADS:-1}
@@ -82,9 +85,9 @@ services:
       IDP_TEST_MODE: ${IDP_TEST_MODE:-false}
       IDP_ARTIFACTS_MODE: ${IDP_ARTIFACTS_MODE:-false}
 
-      IDP_RENDER_DPI: ${IDP_RENDER_DPI:-200}
+      IDP_RENDER_DPI: ${IDP_RENDER_DPI:-300}
       IDP_UPSCALE_FACTOR: ${IDP_UPSCALE_FACTOR:-1}
-      IDP_MAX_IMAGE_DIMENSION: ${IDP_MAX_IMAGE_DIMENSION:-2048}
+      IDP_MAX_IMAGE_DIMENSION: ${IDP_MAX_IMAGE_DIMENSION:-3072}
 
       IDP_VISIO_MODE: ${IDP_VISIO_MODE:-false}
       IDP_VISIO_CONTENT: ${IDP_VISIO_CONTENT:-pages}

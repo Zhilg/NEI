@@ -221,9 +221,12 @@ def _detect_kind(system: str, user_text: str) -> str:
 
 
 class StubState:
-    def __init__(self, model: str = "stub-vl", fail_first: int = 0) -> None:
+    def __init__(self, model: str = "stub-vl", fail_first: int = 0, truncate_first: int = 0) -> None:
         self.model = model
         self.fail_first = fail_first
+        # Первые N markdown-ответов приходят с finish_reason="length"
+        # (эмуляция обрезки по лимиту токенов) для тестов ретрая.
+        self.truncate_first = truncate_first
         self.lock = threading.Lock()
         self.requests: list[dict[str, Any]] = []
 
@@ -280,12 +283,18 @@ def make_handler(state: StubState):
                     "kind": kind,
                     "model": payload.get("model"),
                     "images": [image_hash(url) for url in images],
+                    "max_tokens": payload.get("max_tokens"),
                 })
 
             if state.fail_first > 0:
                 state.fail_first -= 1
                 self._json({"error": "stub injected failure"}, status=503)
                 return
+
+            finish_reason = "stop"
+            if kind == "markdown" and state.truncate_first > 0:
+                state.truncate_first -= 1
+                finish_reason = "length"
 
             if kind == "layout":
                 content = layout_for_images(images)
@@ -310,7 +319,7 @@ def make_handler(state: StubState):
                 "choices": [{
                     "index": 0,
                     "message": {"role": "assistant", "content": content},
-                    "finish_reason": "stop",
+                    "finish_reason": finish_reason,
                 }],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
             })
@@ -349,8 +358,8 @@ def make_handler(state: StubState):
 class StubServer:
     """Context manager: runs the stub on an ephemeral port in a thread."""
 
-    def __init__(self, fail_first: int = 0, model: str = "stub-vl") -> None:
-        self.state = StubState(model=model, fail_first=fail_first)
+    def __init__(self, fail_first: int = 0, model: str = "stub-vl", truncate_first: int = 0) -> None:
+        self.state = StubState(model=model, fail_first=fail_first, truncate_first=truncate_first)
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.state))
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 

@@ -54,6 +54,36 @@ def test_reconstruct_markdown_from_stub(tmp_path):
     assert markdown.count("## Страница") == 3, "one section per page image"
 
 
+def test_truncated_chunk_splits_into_single_pages(tmp_path):
+    """finish_reason='length' на чанке из 2 стр. -> разбивка на одиночные."""
+    pages = [fixtures.make_png(tmp_path / f"p{index}.png") for index in range(2)]
+    with StubServer(truncate_first=1) as server:
+        settings.vl_endpoints = [server.endpoint]
+        try:
+            markdown = _run(reconstruct_markdown(pages))
+        finally:
+            settings.vl_endpoints = []
+    assert markdown.count("## Страница") == 2, "обе страницы должны дойти до текста"
+    # 1-й запрос — чанк из 2 изображений (обрезан), дальше 2 одиночных
+    assert [len(r["images"]) for r in server.state.requests] == [2, 1, 1]
+
+
+def test_truncated_single_page_retries_with_double_budget(tmp_path):
+    """Одиночная страница с обрезкой -> повтор с удвоенным max_tokens."""
+    page = fixtures.make_png(tmp_path / "p.png")
+    with StubServer(truncate_first=2) as server:
+        settings.vl_endpoints = [server.endpoint]
+        try:
+            markdown = _run(reconstruct_markdown([page]))
+        finally:
+            settings.vl_endpoints = []
+    assert "## Страница" in markdown
+    budgets = [r["max_tokens"] for r in server.state.requests]
+    assert len(budgets) == 3, "исходный запрос + два повтора с ростом бюджета"
+    assert budgets[1] == budgets[0] * 2
+    assert budgets[2] == budgets[0] * 4
+
+
 def test_retry_and_rotation_recovers(two_stubs, tmp_path):
     page = fixtures.make_png(tmp_path / "p.png")
     markdown = _run(reconstruct_markdown([page]))
