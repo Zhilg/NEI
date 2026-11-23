@@ -97,7 +97,17 @@ def _pdf_has_text_layer(pdf_path: Path, sample_pages: int = 3) -> bool:
     try:
         doc = fitz.open(str(pdf_path))
     except Exception as exc:  # noqa: BLE001 — битый pdf просто пропускаем
-        logger.warning("не открылся %s: %s", pdf_path.name, exc)
+        try:
+            size = pdf_path.stat().st_size
+        except OSError:
+            size = -1
+        if size == 0:
+            kind = "пустой файл"
+        elif size > 0 and not pdf_path.open("rb").read(5).startswith(b"%PDF"):
+            kind = "не PDF (нет заголовка %PDF)"
+        else:
+            kind = "битая структура (truncated/xref/encrypt)"
+        logger.warning("не открылся %s: %s [%s, %d байт]", pdf_path.name, exc, kind, size)
         return False
     try:
         for page in list(doc)[:sample_pages]:
