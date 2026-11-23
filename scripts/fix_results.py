@@ -180,7 +180,7 @@ def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
     stems: set[str] = set()
     with ThreadPoolExecutor(max_workers=16) as pool:
         bar = tqdm(total=len(pdfs), desc="скан pdf", unit="файл")
-        for path, has in pool.imap_unordered(_has_text_layer_star, pdfs, chunksize=32):
+        for path, has in pool.map(_has_text_layer_star, pdfs, chunksize=32):
             bar.update(1)
             if has:
                 stems.add(path.stem)
@@ -354,7 +354,7 @@ def phase_format(input_root: Path, output_root: Path) -> None:
     changed = 0
     with ThreadPoolExecutor(max_workers=32) as pool:
         bar = tqdm(total=len(txt_paths), desc="чистка txt", unit="файл")
-        for did in pool.imap_unordered(_normalize_txt_star, txt_paths, chunksize=64):
+        for did in pool.map(_normalize_txt_star, txt_paths, chunksize=64):
             bar.update(1)
             changed += did
         bar.close()
