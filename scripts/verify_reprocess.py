@@ -115,8 +115,11 @@ def main() -> int:
         elif rec.get("status") not in ("ok", "skip"):
             reason = f"status={rec.get('status')}"
         elif any(
-            isinstance(d, dict) and "text" in d for d in (rec.get("documents") or [])
+            isinstance(d, dict) and "text" in d and d.get("source") != "textlayer"
+            for d in (rec.get("documents") or [])
         ):
+            # текст внутри без метки textlayer — запись старого формата,
+            # pdf-requeue выкинул бы её при рестарте (не переработан)
             reason = "запись старого формата (тексты внутри) — не переработан"
         elif not _txt_exists(txts_root, stem):
             reason = "нет txt в output/txts"

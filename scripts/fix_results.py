@@ -207,8 +207,13 @@ def _classify_journal_line(line: bytes, stems: frozenset) -> bytes | None:
     except ValueError:
         return line if line.endswith(b"\n") else line + b"\n"
     fpath = str(rec.get("file", ""))
+    # Идемпотентность: выкидываем ТОЛЬКО записи старого формата (тексты
+    # документов внутри).  Схлопнутые записи после фазы format
+    # ({"rubricators": ...}) и записи быстрого пути (source=textlayer —
+    # чистый слой забран осознанно) не трогаем, иначе каждый перезапуск
+    # гонял бы одни и те же pdf по кругу.
     has_text = any(
-        isinstance(d, dict) and "text" in d
+        isinstance(d, dict) and "text" in d and d.get("source") != "textlayer"
         for d in (rec.get("documents") or [])
     )
     if (

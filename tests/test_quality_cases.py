@@ -9,6 +9,7 @@ VLM локально не эмулируется — эти тесты пров�
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -22,10 +23,12 @@ import fix_results  # noqa: E402
 from idp.config import settings  # noqa: E402
 from idp.plaintext import to_plain_text  # noqa: E402
 from idp.renderer import render_pdf_to_pngs  # noqa: E402
+from idp.worker import Worker  # noqa: E402
 from tests.test_worker import (  # noqa: E402
     _FONT,
     _read_results,
     _run,
+    make_scan_pdf,
     make_text_pdf,
     ocr_stub,  # noqa: F401 — фикстура, используется через аргументы
 )
@@ -280,6 +283,122 @@ def test_post_reconstruct_passes_through_other_errors():
 
     with pytest.raises(RuntimeError, match="500 internal"):
         asyncio.run(_post_reconstruct(_Http(), {}, lambda: {}))
+
+
+# ---------------------------------------------------------------------------
+# Быстрый путь: чистый текстовый слой -> сразу текст, мусор -> VLM
+# ---------------------------------------------------------------------------
+
+from idp.textlayer import extract_clean_text_layer, looks_like_clean_text  # noqa: E402
+
+
+def test_looks_like_clean_text_accepts_real_russian():
+    text = ("Война и мир. " * 500 + "\n") * 3
+    assert looks_like_clean_text(text, page_count=3)
+
+
+@pytest.mark.parametrize("bad", [
+    "█" * 3000,                                    # псевдографика
+    "Òàêñè èìåíà ñëîâàðÿ " * 150,                  # битая кодировка cp1251
+    "word " * 30,                                  # слишком мало текста
+    ("x" * 200 + " ") * 10 + "a" * 30,             # нет алфавитных слов
+    "абвгд " * 10 + "�" * 900,                     # replacement chars
+])
+def test_looks_like_clean_text_rejects_garbage(bad):
+    assert not looks_like_clean_text(bad, page_count=2), bad[:40]
+
+
+def _make_layer_pdf(path: Path, body: str, pages: int = 2) -> Path:
+    """PDF с реальным кириллическим текстовым слоем, крупная область текста."""
+    import fitz
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = fitz.open()
+    for _ in range(pages):
+        page = doc.new_page()
+        page.insert_textbox(
+            fitz.Rect(50, 50, 545, 780), body, fontsize=12,
+            fontname="lib", fontfile=str(_FONT),
+        )
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def test_extract_clean_text_layer_on_born_digital_pdf(tmp_path):
+    body = "Война и мир. " * 250  # ~3200 знаков на страницу
+    pdf = _make_layer_pdf(tmp_path / "book.pdf", body, pages=2)
+    got = extract_clean_text_layer(pdf)
+    assert got is not None
+    text, pages = got
+    assert pages == 2
+    assert "Война и мир" in text
+    assert looks_like_clean_text(text, pages)
+
+
+def test_extract_clean_text_layer_rejects_garbage_layer(tmp_path):
+    pdf = _make_layer_pdf(tmp_path / "junk.pdf", "█" * 3000, pages=2)
+    assert extract_clean_text_layer(pdf) is None
+
+
+def test_worker_clean_textlayer_bypasses_vlm(workspace, monkeypatch):
+    """Чистый слой обрабатывается сразу — VLM-фолбэк не дёргается."""
+    from idp import worker as worker_mod
+
+    calls: list = []
+
+    async def fake(self, file_path, relative):
+        calls.append(file_path)
+        return "", 0
+
+    monkeypatch.setattr(worker_mod.Worker, "_reconstruct_with_vlm", fake)
+    body = "Война и мир. " * 250
+    _make_layer_pdf(workspace.input / "book.pdf", body, pages=2)
+    _run(Worker())
+
+    assert calls == [], "VLM вызван для чистого текстового слоя!"
+    txt = (workspace.output / "txts" / "book.txt").read_text(encoding="utf-8")
+    assert "Война и мир" in txt
+    results = _read_results(workspace.output)
+    assert results[0]["documents"][0].get("source") == "textlayer"
+
+
+def test_worker_dirty_layer_falls_back_to_vlm(workspace, monkeypatch):
+    """Отравленный слой (битая кодировка) отсеивается эвристикой -> VLM-фолбэк."""
+    from idp import worker as worker_mod
+
+    calls: list = []
+
+    async def fake(self, file_path, relative):
+        calls.append(file_path)
+        return worker_mod._extract_text(file_path)
+
+    monkeypatch.setattr(worker_mod.Worker, "_reconstruct_with_vlm", fake)
+    body = "Òàêñè èìåíà ñëîâàðÿ. " * 200  # cp1251, прочитанная как latin1
+    _make_layer_pdf(workspace.input / "junk.pdf", body, pages=2)
+    _run(Worker())
+
+    assert len(calls) == 1, "VLM-фолбэк не вызван для отравленного слоя"
+    results = _read_results(workspace.output)
+    assert results[0]["status"] == "ok"
+    assert results[0]["documents"][0].get("source") != "textlayer"
+
+
+def test_pdf_requeue_keeps_textlayer_records():
+    """Записи быстрого пути (source=textlayer) не выкидываются как старый формат."""
+    import sys as _sys
+
+    _sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    rec = {"file": "sub/book.pdf", "status": "ok",
+           "documents": [{"text": "текст", "source": "textlayer", "rubricators": []}]}
+    line = (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8")
+    res = fix_results._classify_journal_line(line, frozenset({"book"}))
+    assert res is not None, "textlayer-запись ошибочно выкинута"
+    # контроль: та же запись без source — выкидывается
+    rec2 = {"file": "sub/book.pdf", "status": "ok",
+            "documents": [{"text": "текст", "rubricators": []}]}
+    line2 = (json.dumps(rec2, ensure_ascii=False) + "\n").encode("utf-8")
+    assert fix_results._classify_journal_line(line2, frozenset({"book"})) is None
 
 
 # ---------------------------------------------------------------------------

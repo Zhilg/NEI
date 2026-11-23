@@ -17,11 +17,12 @@ _FONT = Path(__file__).resolve().parents[1] / "src" / "idp" / "fonts" / "Liberat
 
 @pytest.fixture()
 def ocr_stub(monkeypatch):
-    """PDF теперь ВСЕГДА идут через VLM-OCR (текстовый слой игнорируется).
+    """VLM-фолбэк (сканы, «отравленные» текстовые слои) детерминированный.
 
     Тесты механики пайплайна (архив, журнал, watch) не должны требовать живой
     vLLM — подменяем OCR детерминированным извлечением текстового слоя,
-    имитируя идеальное распознавание.
+    имитируя идеальное распознавание.  Чистые born-digital слои этот путь
+    вообще не дёргают (см. test_worker_clean_textlayer_bypasses_vlm).
     """
     from idp import worker as worker_mod
 

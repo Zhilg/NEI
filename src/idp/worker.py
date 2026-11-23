@@ -48,6 +48,7 @@ from idp.renderer import (
 from idp.rubricator import extract_rubricators
 from idp.result_writer import ResultWriter
 from idp.stats_writer import FileTimer, StatsWriter
+from idp.textlayer import extract_clean_text_layer
 from idp.txt_export import TxtExporter
 from idp.vlm_client import get_vl_endpoints, reconstruct_markdown, strip_bbox_annotations
 
@@ -585,15 +586,21 @@ class Worker:
         )
 
         result: FileResult | None = None
+        used_textlayer = False
         try:
             if file_path.is_dir():
                 text = convert_html_folder_to_markdown(file_path)
                 pages = 1
             elif file_path.suffix.lower() == ".pdf":
-                # Текстовый слой в этом корпусе отравлен (битая кодировка,
-                # мусор) — игнорируем его ПОЛНОСТЬЮ и всегда идём через
-                # VLM-OCR по отрендеренным страницам.
-                text, pages = "", 0
+                # Текстовый слой PDF: чистый born-digital забираем сразу
+                # (секунды CPU), «отравленные» слои (битая кодировка,
+                # OCR-мусор) эвристика отсеивает — файл падает в VLM-ветку.
+                extracted = await asyncio.to_thread(extract_clean_text_layer, file_path)
+                if extracted is not None:
+                    text, pages = extracted
+                    used_textlayer = True
+                else:
+                    text, pages = "", 0
             else:
                 text, pages = await asyncio.to_thread(_extract_text, file_path)
             timer.pages = pages
@@ -636,13 +643,19 @@ class Worker:
                 doc_page = int(doc.get("page", 1) or 1)
                 rubricators = extract_rubricators(doc_text, page=doc_page)
                 # Тексты живут только в txts/ — в results.jsonl (и архиве)
-                # записываем только тип и номер рубрикатора.
-                doc_results.append({
+                # записываем только тип и номер рубрикатора.  source=textlayer
+                # помечает записи быстрого пути: pdf-requeue НЕ выкидывает их
+                # как «старый формат» (по признаку text внутри документов
+                # они на него похожи, но это осознанный текстовый слой).
+                doc_result: dict = {
                     "rubricators": [
                         {"type": r.get("type", ""), "number": r.get("number", "")}
                         for r in rubricators
                     ]
-                })
+                }
+                if used_textlayer:
+                    doc_result["source"] = "textlayer"
+                doc_results.append(doc_result)
 
             result = FileResult(
                 file=str(relative),
