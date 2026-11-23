@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 _local = threading.local()
 
+# Qwen3-VL processor отклоняет изображения с вырожденной стороной (400 Bad
+# Request «Failed to apply Qwen3VLProcessor»).  В корпусе встречаются
+# страницы-«полосы» (медиабокс в единицах пунктов) — при 300 dpi они дают
+# картинки вида 4x1250 px и убивают весь пакет запросов на всех репликах.
+# Гарантируем минимальную сторону после рендера.
+_MIN_PX = 64
+
 
 def open_pdf(pdf_path: Path):
     """fitz.open с фолбэком на pikepdf-ремонт битых файлов.
@@ -83,12 +90,31 @@ def _render_single_page(
 ) -> tuple[Path, int]:
     doc = _open_document(pdf_path)
     page = doc.load_page(page_index)
-    mat = fitz.Matrix(dpi / 72, dpi / 72)
+    zoom = dpi / 72
+    mat = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
+    if min(pix.width, pix.height) < _MIN_PX:
+        boost = _MIN_PX / min(pix.width, pix.height)
+        mat = fitz.Matrix(zoom * boost, zoom * boost)
+        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
+        logger.debug(
+            "Renderer: page %d boost x%.1f (вырожденная страница) -> %dx%d",
+            page_index + 1, boost, pix.width, pix.height,
+        )
     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     logger.debug("Renderer: page %d raw size: %dx%d", page_index + 1, pix.width, pix.height)
     img = _upscale_image(img, scale=upscale_factor)
     img = _resize_to_max_dimension(img, max_image_dimension)
+    if min(img.size) < _MIN_PX:
+        # Дикий aspect (полоса): resize_to_max ужал малую сторону обратно
+        # ниже минимума — поднимаем её финальным ресайзом (большая сторона
+        # при этом может превысить max_image_dimension, но уложится в лимит
+        # пикселей VLM).
+        scale = _MIN_PX / min(img.size)
+        img = img.resize(
+            (max(_MIN_PX, round(img.width * scale)), max(_MIN_PX, round(img.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
     if settings.preprocess_enabled:
         img = preprocess_for_ocr(
             img,
@@ -113,7 +139,11 @@ def _render_all_pages(pdf_path: Path, output_dir: Path) -> list[Path]:
     doc = open_pdf(pdf_path)
     num_pages = len(doc)
     doc.close()
-    max_workers = min(os.cpu_count() or 4, num_pages, 8)
+    if num_pages == 0:
+        # Битый page tree: fitz открывает документ, но в нём 0 страниц.
+        # Раньше падало тут же с непонятным «max_workers must be greater than 0».
+        raise ValueError("пустой документ: 0 страниц (битый page tree)")
+    max_workers = max(1, min(os.cpu_count() or 4, num_pages, 8))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(

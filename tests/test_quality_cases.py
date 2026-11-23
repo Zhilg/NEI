@@ -146,6 +146,46 @@ def test_compose_defaults_guard():
         )
 
 
+def test_degenerate_strip_page_boosted_to_min_side(tmp_path, monkeypatch):
+    """Страницы-«полосы» (медиабокс в пунктах) давали 4px-картинки, на которых
+    падал Qwen3VLProcessor (400 Bad Request на всех репликах сразу)."""
+    monkeypatch.setattr(settings, "render_dpi", 300)
+    monkeypatch.setattr(settings, "max_image_dimension", 3072)
+    import fitz
+
+    doc = fitz.open()
+    page = doc.new_page(width=2, height=500)  # узкая полоса ~8x2083 px @300dpi
+    page.insert_text((1, 250), "x")
+    pdf = tmp_path / "strip.pdf"
+    doc.save(str(pdf))
+    doc.close()
+
+    pngs = render_pdf_to_pngs(pdf, tmp_path / "pages")
+    assert len(pngs) == 1
+    from PIL import Image
+
+    with Image.open(pngs[0]) as im:
+        assert min(im.size) >= 64, f"вырожденная сторона не поднята: {im.size}"
+
+
+def test_zero_page_document_raises_clear_error(tmp_path):
+    """PDF с битым page tree открывается, но содержит 0 страниц — раньше это
+    умирало с непонятным «max_workers must be greater than 0»."""
+    pdf = tmp_path / "empty.pdf"
+    # fitz не даёт сохранить 0-страничный документ — пишем минимальный
+    # валидный PDF-контейнер без страниц (как у битых файлов корпуса,
+    # которые открываются fitz'ом, но дают page_count == 0).
+    pdf.write_bytes(
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+        b"trailer\n<< /Root 1 0 R >>\n%%EOF\n"
+    )
+
+    with pytest.raises(ValueError, match="0 страниц"):
+        render_pdf_to_pngs(pdf, tmp_path / "pages")
+
+
 # ---------------------------------------------------------------------------
 # Болевые типы документов: классификация и устойчивость пайплайна
 # ---------------------------------------------------------------------------
