@@ -10,7 +10,27 @@ from pathlib import Path
 
 from idp.worker import ARCHIVE_NAME, Worker
 
+import pytest
+
 _FONT = Path(__file__).resolve().parents[1] / "src" / "idp" / "fonts" / "LiberationSerif-Regular.ttf"
+
+
+@pytest.fixture()
+def ocr_stub(monkeypatch):
+    """PDF теперь ВСЕГДА идут через VLM-OCR (текстовый слой игнорируется).
+
+    Тесты механики пайплайна (архив, журнал, watch) не должны требовать живой
+    vLLM — подменяем OCR детерминированным извлечением текстового слоя,
+    имитируя идеальное распознавание.
+    """
+    from idp import worker as worker_mod
+
+    async def fake(self, file_path: Path, relative: Path) -> tuple[str, int]:
+        if file_path.suffix.lower() == ".pdf":
+            return worker_mod._extract_text(file_path)
+        return "", 0
+
+    monkeypatch.setattr(worker_mod.Worker, "_reconstruct_with_vlm", fake)
 
 
 def make_text_pdf(path: Path, heading: str, body: str, pages: int = 2) -> Path:
@@ -72,7 +92,7 @@ BODY = (
 )
 
 
-def test_pdf_to_txt_rubricators_and_archive(workspace):
+def test_pdf_to_txt_rubricators_and_archive(workspace, ocr_stub):
     make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
     _run(Worker())
 
@@ -105,7 +125,7 @@ def test_pdf_to_txt_rubricators_and_archive(workspace):
     assert zipped.replace("\r\n", "\n") == on_disk.replace("\r\n", "\n")
 
 
-def test_rerun_skips_processed_and_keeps_archive(workspace):
+def test_rerun_skips_processed_and_keeps_archive(workspace, ocr_stub):
     make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
     _run(Worker())
     _run(Worker())
@@ -115,7 +135,7 @@ def test_rerun_skips_processed_and_keeps_archive(workspace):
         assert len([n for n in zf.namelist() if n == "txts/report.txt"]) == 1
 
 
-def test_new_file_added_to_archive_incrementally(workspace):
+def test_new_file_added_to_archive_incrementally(workspace, ocr_stub):
     make_text_pdf(workspace.input / "first.pdf", "Первый отчёт", BODY)
     _run(Worker())
 
@@ -135,7 +155,7 @@ def test_new_file_added_to_archive_incrementally(workspace):
     assert len(zipped_records) == 2, "results.jsonl inside the zip must be re-synced"
 
 
-def test_watch_processes_file_appearing_later(workspace):
+def test_watch_processes_file_appearing_later(workspace, ocr_stub):
     async def scenario() -> None:
         worker = Worker()
         task = asyncio.create_task(worker.run(watch=True, interval=0.1, settle=0))
@@ -187,7 +207,7 @@ def test_startup_packs_preexisting_output_into_archive(workspace):
         assert "txts/legacy.txt" in zf.namelist()
 
 
-def test_startup_adds_files_missing_from_existing_archive(workspace):
+def test_startup_adds_files_missing_from_existing_archive(workspace, ocr_stub):
     """Файл, появившийся в output мимо воркера, докидывается в уже есть архив."""
     make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
     _run(Worker())
@@ -284,7 +304,7 @@ def test_archive_contains_only_text_results(workspace, stub_server):
     assert "entities.json" not in names
 
 
-def test_many_files_processed_in_parallel(workspace):
+def test_many_files_processed_in_parallel(workspace, ocr_stub):
     """Пачка файлов проходит быстро: очередь воркеров, а не файл за файлом."""
     for i in range(24):
         make_text_pdf(workspace.input / f"doc_{i:02d}.pdf", f"Отчёт {i}", BODY)

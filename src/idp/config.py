@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     vl_max_tokens: int = Field(default=512, ge=1, le=65536)
     vl_max_images: int = Field(default=2, gt=0)
     vl_max_context_chars: int = Field(default=500, ge=100, le=100000)
-    vl_concurrency: int = Field(default=12, ge=1, le=64)
+    vl_concurrency: int = Field(default=12, ge=1, le=256)
 
     # Сколько файлов обрабатывается параллельно (очередь воркеров и пул
     # потоков для CPU-части: текстовый слой, конвертеры, запись txt).
@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # Потоки пересборки results.zip: каждый файл жмётся в отдельный шард
     # параллельно (zlib отпускает GIL), швы склеиваются сырыми байтами.
     archive_threads: int = Field(default=64, ge=1, le=256)
+    # Сколько файлов максимум берётся в один пакет.  Без лимита первый пакет
+    # после массовой подгрузки книг жуётся часами — новые файлы ждут конца
+    # пакета, а в логах между 'Новых файлов' и 'Пакет завершён' тишина.
+    # 0 — без лимита.
+    max_batch_size: int = Field(default=2000, ge=0)
 
     test_mode: bool = Field(default=False)
     artifacts_mode: bool = Field(default=False)

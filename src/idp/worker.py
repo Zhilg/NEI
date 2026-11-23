@@ -38,6 +38,7 @@ from idp.config import settings
 from idp.document_classifier import detect_document_type
 from idp.docx_converter import extract_docx_text
 from idp.html_converter import extract_html_text, convert_html_folder_to_markdown
+from idp.plaintext import to_plain_text
 from idp.pptx_converter import extract_pptx_text
 from idp.renderer import (
     convert_image_to_png,
@@ -570,16 +571,31 @@ class Worker:
             if file_path.is_dir():
                 text = convert_html_folder_to_markdown(file_path)
                 pages = 1
+            elif file_path.suffix.lower() == ".pdf":
+                # Текстовый слой в этом корпусе отравлен (битая кодировка,
+                # мусор) — игнорируем его ПОЛНОСТЬЮ и всегда идём через
+                # VLM-OCR по отрендеренным страницам.
+                text, pages = "", 0
             else:
                 text, pages = await asyncio.to_thread(_extract_text, file_path)
             timer.pages = pages
 
             if not text.strip():
-                # Скан без текстового слоя (или PNG/JPEG): рендерим страницы
-                # и реконструируем текст через VLM — скипать сканы нельзя.
+                # Скан/PNG/JPEG/отравленный PDF: рендерим страницы и
+                # реконструируем текст через VLM — скипать нельзя.
                 text, pages = await self._reconstruct_with_vlm(file_path, relative)
                 timer.pages = pages
 
+            if not text.strip():
+                result = self._skip_result(file_path, relative, timer, file_type)
+                self._processed.add(str(relative))
+                pbar.set_postfix(file=file_path.name, stage="done")
+                return result.to_dict(), []
+
+            # Формат корпуса — чистый plain text: без markdown-разметки
+            # (заголовки #, **жирный**, таблицы |...|, ссылки), HTML-сущностей
+            # и служебных комментариев.  Имя файла — только в имени txt.
+            text = to_plain_text(text)
             if not text.strip():
                 result = self._skip_result(file_path, relative, timer, file_type)
                 self._processed.add(str(relative))
@@ -728,6 +744,15 @@ class Worker:
                     logger.info("Отложено (ещё копируется?): %s", ", ".join(f.name for f in fresh))
                 pending = [f for f in pending if f not in fresh]
             pending.sort(key=lambda p: p.stat().st_size if p.is_file() else 0)
+            # Пакет усечён — обработали N, перескан, новые файлы подхватываются
+            # быстро, в логах регулярно видно 'Сканирование input'.
+            batch_limit = settings.max_batch_size
+            if batch_limit and len(pending) > batch_limit:
+                logger.info(
+                    "Пакет усечён: %d из %d файлов (остальное — следующие циклы)",
+                    batch_limit, len(pending),
+                )
+                pending = pending[:batch_limit]
             if not pending:
                 return 0
             logger.info("Новых файлов для обработки: %d", len(pending))

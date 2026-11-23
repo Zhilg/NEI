@@ -50,8 +50,7 @@ def test_reconstruct_markdown_from_stub(tmp_path):
             markdown = _run(reconstruct_markdown(pages))
         finally:
             settings.vl_endpoints = []
-    assert "<!-- page 1 -->" in markdown
-    assert "<!-- page 2 -->" in markdown
+    # Маркеров <!-- page N --> больше нет — в корпусе только чистый текст.
     assert markdown.count("## Страница") == 3, "one section per page image"
 
 

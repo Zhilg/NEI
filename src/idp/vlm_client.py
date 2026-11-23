@@ -870,10 +870,9 @@ class VlmClient:
             tasks = [_process_chunk(chunk, http) for chunk in chunks]
             parts = await asyncio.gather(*tasks)
 
-        marked = []
-        for i, part in enumerate(parts):
-            marked.append(f"<!-- page {i + 1} -->\n{part}")
-        return "\n\n".join(marked)
+        # Без маркеров: в txt должен лежать только чистый текст документа
+        # (требование к корпусу — никаких служебных вставок).
+        return "\n\n".join(parts)
 
     async def reconstruct_layout(self, images: list[Path]) -> dict:
         if not images:

@@ -169,5 +169,7 @@ def convert_html_folder_to_markdown(folder_path: Path) -> str:
     for html_file in html_files:
         text = convert_html_to_markdown(html_file)
         if text.strip():
-            parts.append(f"<!-- file: {html_file.name} -->\n{text}")
+            # Имя файла — только в имени txt на диске, внутри содержимого
+            # его быть не должно (требование к чистоте корпуса).
+            parts.append(text)
     return "\n\n".join(parts)
