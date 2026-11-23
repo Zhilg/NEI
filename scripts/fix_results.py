@@ -56,6 +56,17 @@ to_plain_text = _plaintext.to_plain_text
 plan_merge = _plaintext.plan_merge
 merge_parts = _plaintext.merge_parts
 
+# Нормализация txt-файлов и склейка разбитых книг — общий модуль с воркером
+# (воркер прогоняет его при старте автоматически, фазы — по требованию).
+_spec_tn = importlib.util.spec_from_file_location(
+    "idp_txt_normalize",
+    Path(__file__).resolve().parents[1] / "src" / "idp" / "txt_normalize.py",
+)
+_txt_normalize = importlib.util.module_from_spec(_spec_tn)
+_spec_tn.loader.exec_module(_txt_normalize)
+clean_all_txts = _txt_normalize.clean_all_txts
+merge_split_documents = _txt_normalize.merge_split_documents
+
 _DOC_SUFFIX_RE = re.compile(r"_\d+$")
 
 
@@ -76,32 +87,6 @@ def _silence_mupdf() -> None:
 
 
 _silence_mupdf()
-
-
-def _normalize_txt_star(path: Path) -> int:
-    t0 = time.perf_counter()
-    try:
-        content = path.read_text(encoding="utf-8", errors="replace")
-        cleaned, did = _strip_markers(content)
-        if did:
-            path.write_text(cleaned, encoding="utf-8")
-        return int(did)
-    except OSError as exc:
-        logger.warning("чистка txt: пропущен %s: %s", path.name, exc)
-        return 0
-    finally:
-        dt = time.perf_counter() - t0
-        if dt > 30:
-            logger.warning(
-                "медленный txt %s: %.1f с (%d байт) — проверь, не повис ли он",
-                path.name, dt, path.stat().st_size if path.exists() else -1,
-            )
-
-
-def _strip_markers(text: str) -> tuple[str, bool]:
-    """Полная нормализация к plain text; True — текст реально изменился."""
-    cleaned = to_plain_text(text)
-    return cleaned, cleaned != text
 
 
 def _load_repair_module():
@@ -407,57 +392,16 @@ def phase_archive(input_root: Path, output_root: Path) -> None:
 def phase_merge(input_root: Path, output_root: Path) -> None:
     """Объединить разбитые на части документы, если это не газета/сборник.
 
-    Группы вида ``base.txt``, ``base_2.txt`` ... ``base_N.txt`` проверяются
-    эвристикой plan_merge: книга, расколотая на главы, склеивается в
-    ``base.txt``; сборники статей и газеты остаются разбитыми.
+    Делегирует общему модулю idp.txt_normalize (тем же кодом воркер
+    прогоняет склейку при старте автоматически).
     """
     logger.info("Фаза merge: поиск разбитых на части документов...")
-    t0 = time.perf_counter()
     txts_root = output_root / "txts"
     if not txts_root.is_dir():
         logger.info("txts/ нет — нечего объединять.")
         return
-
-    groups: dict[str, list[Path]] = {}
-    for txt in txts_root.glob("*.txt"):
-        if not txt.is_file():
-            continue  # директория с расширением .txt — не часть документа
-        base = txt.stem
-        m = _DOC_SUFFIX_RE.search(base)
-        key = _DOC_SUFFIX_RE.sub("", base) if m else base
-        groups.setdefault(key, []).append(txt)
-
-    merged = kept_split = 0
-    from tqdm import tqdm  # noqa: PLC0415
-
-    for key, paths in tqdm(sorted(groups.items()), desc="merge", unit="группа"):
-        if len(paths) < 2:
-            continue
-        # Части в порядке следования: base, base_2, base_3 ...
-        def sort_key(p: Path) -> tuple[int, str]:
-            m = _DOC_SUFFIX_RE.search(p.stem)
-            return (int(m.group(0)[1:]) if m else 1), p.name
-
-        parts_paths = sorted(paths, key=sort_key)
-        try:
-            parts = [p.read_text(encoding="utf-8", errors="replace") for p in parts_paths]
-        except OSError as exc:
-            # Одна недочитанная часть (пропала/занята/права) не должна валить
-            # фазу целиком — группа остаётся как есть, проблема видна в логе.
-            logger.warning("merge: группа %s пропущена, часть не читается: %s", key, exc)
-            continue
-        if plan_merge(parts):
-            combined = merge_parts(parts)
-            tmp = txts_root / f"{key}.merge.tmp"
-            tmp.write_text(combined + "\n", encoding="utf-8")
-            for p in parts_paths:
-                p.unlink()
-            tmp.replace(txts_root / f"{key}.txt")
-            merged += 1
-            if merged % 500 == 0:
-                logger.info("Объединено %d групп (%.0f с)...", merged, time.perf_counter() - t0)
-        else:
-            kept_split += 1
+    t0 = time.perf_counter()
+    merged, kept_split = merge_split_documents(txts_root)
     logger.info(
         "Фаза merge готова: %d групп объединено, %d оставлены разбитыми (сборники/газеты) за %.0f с",
         merged, kept_split, time.perf_counter() - t0,
@@ -470,24 +414,10 @@ def phase_format(input_root: Path, output_root: Path) -> None:
     txts_root = output_root / "txts"
 
     # 1. Почистить txt на диске (32 потока — чтение/запись мелких файлов).
-    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
-
     logger.info("Шаг 1/2: чистка маркеров в txts/ (32 потока)...")
-    from tqdm import tqdm  # noqa: PLC0415
-
     t1 = time.perf_counter()
-    txt_paths = [p for p in txts_root.glob("*.txt") if p.is_file()] if txts_root.is_dir() else []
-    changed = 0
-    from concurrent.futures import as_completed  # noqa: PLC0415
-
-    with ThreadPoolExecutor(max_workers=32) as pool:
-        futures = {pool.submit(_normalize_txt_star, p): p for p in txt_paths}
-        bar = tqdm(total=len(futures), desc="чистка txt", unit="файл")
-        for fut in as_completed(futures):
-            bar.update(1)
-            changed += fut.result()
-        bar.close()
-    logger.info("Шаг 1/2 готов: %d txt просмотрено, %d почищено (%.1f с)", len(txt_paths), changed, time.perf_counter() - t1)
+    changed, total = clean_all_txts(txts_root, threads=32)
+    logger.info("Шаг 1/2 готов: %d txt просмотрено, %d почищено (%.1f с)", total, changed, time.perf_counter() - t1)
 
     # 2. Схлопнуть встроенные тексты документов в results.jsonl: оставить
     #    только рубрикаторы.  5-гигабайтный журнал ужимается до десятков МБ.

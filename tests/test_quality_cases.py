@@ -402,6 +402,106 @@ def test_pdf_requeue_keeps_textlayer_records():
 
 
 # ---------------------------------------------------------------------------
+# Текстовые файлы книг: .txt/.fb2 идут на обработку сразу, без VLM
+# ---------------------------------------------------------------------------
+
+def test_txt_files_processed_immediately(workspace):
+    """.txt в input обрабатываются как обычные файлы (они раньше игнорировались —
+    не было в SUPPORTED_EXTENSIONS) — в любой кодировке."""
+    body = "Война и мир. " * 300
+    (workspace.input / "book.txt").write_text(body, encoding="utf-8")
+    (workspace.input / "legacy.txt").write_bytes(body.encode("cp1251"))
+    (workspace.input / "wide.txt").write_bytes(body.encode("utf-16"))
+    _run(Worker())
+
+    for name in ("book.txt", "legacy.txt", "wide.txt"):
+        stem = name.rsplit(".", 1)[0]
+        out = (workspace.output / "txts" / f"{stem}.txt").read_text(encoding="utf-8")
+        assert "Война и мир" in out, f"{name}: текст не извлёкся"
+    results = _read_results(workspace.output)
+    assert len(results) == 3
+    assert all(r["status"] == "ok" for r in results)
+
+
+def test_fb2_processed_immediately(workspace):
+    """FictionBook (.fb2) — XML, текст собирается без VLM."""
+    paragraphs = "\n".join(
+        f"<p>Глава {i}. Однажды в студёную зимнюю пору слово слово слово.</p>"
+        for i in range(1, 30)
+    )
+    fb2 = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        "<FictionBook><body><section><title><p>Книга</p></title>"
+        f"{paragraphs}"
+        "</section></body></FictionBook>"
+    )
+    (workspace.input / "novel.fb2").write_text(fb2, encoding="utf-8")
+    _run(Worker())
+
+    out = (workspace.output / "txts" / "novel.txt").read_text(encoding="utf-8")
+    assert "Однажды в студёную зимнюю пору" in out
+    results = _read_results(workspace.output)
+    assert results[0]["status"] == "ok"
+
+
+def test_worker_startup_normalizes_dirty_txts(workspace):
+    """Грязные txt в output/txts чистятся автоматически при старте воркера —
+    даже если input пуст и воркеру обрабатывать нечего."""
+    txts = workspace.output / "txts"
+    txts.mkdir()
+    dirty = (
+        "Оглавление\n"
+        "Глава первая ....... 3\n"
+        "Глава вторая ....... 27\n"
+        "\n"
+        "Страница 3 из 12\n"
+        "Наташа Ростова вышла в сад и задумалась о предстоящем вечере. "
+        "Вечер обещал быть интересным, гостей ждали много.\n"
+        "Страница 4 из 12\n"
+        "Пьер Безухов чувствовал себя не в своей тарелке. "
+        "Он давно не бывал на таких приёмах. "
+    )
+    (txts / "novel.txt").write_text(dirty, encoding="utf-8")
+    _run(Worker())
+
+    out = (txts / "novel.txt").read_text(encoding="utf-8")
+    assert "Страница 3 из 12" not in out
+    assert "Страница 4 из 12" not in out
+    assert "Глава первая ......." not in out
+    assert "Наташа Ростова" in out
+    assert "Пьер Безухов" in out
+
+
+def test_worker_startup_merges_split_book(workspace):
+    """Книга, ошибочно разбитая на части (base.txt + base_2.txt), склеивается
+    в один файл при старте воркера; сборники и газеты не трогаем."""
+    txts = workspace.output / "txts"
+    txts.mkdir()
+    sentence = (
+        "Долгие годы эта рукопись лежала в архиве, пока её не нашёл исследователь. "
+    )
+    (txts / "chronicle.txt").write_text(
+        "Глава 1\n\n" + sentence * 60, encoding="utf-8"
+    )
+    (txts / "chronicle_2.txt").write_text(
+        "Глава 2\n\n" + sentence * 60, encoding="utf-8"
+    )
+    # Сборник рассказов (3+ части с маркерами жанра) — должен остаться разбитым.
+    story = "Рассказ\n\n" + "Он вышел на улицу и задумался о прожитом дне. " * 40
+    (txts / "collection.txt").write_text(story, encoding="utf-8")
+    (txts / "collection_2.txt").write_text(story, encoding="utf-8")
+    (txts / "collection_3.txt").write_text(story, encoding="utf-8")
+    _run(Worker())
+
+    merged = (txts / "chronicle.txt").read_text(encoding="utf-8")
+    assert "Глава 1" in merged and "Глава 2" in merged
+    assert not (txts / "chronicle_2.txt").exists()
+    assert (txts / "collection.txt").exists()
+    assert (txts / "collection_2.txt").exists()
+    assert (txts / "collection_3.txt").exists()
+
+
+# ---------------------------------------------------------------------------
 # Болевые типы документов: классификация и устойчивость пайплайна
 # ---------------------------------------------------------------------------
 

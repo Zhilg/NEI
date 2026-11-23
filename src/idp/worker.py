@@ -50,11 +50,17 @@ from idp.result_writer import ResultWriter
 from idp.stats_writer import FileTimer, StatsWriter
 from idp.textlayer import extract_clean_text_layer
 from idp.txt_export import TxtExporter
+from idp.txt_normalize import normalize_all_txts
 from idp.vlm_client import get_vl_endpoints, reconstruct_markdown, strip_bbox_annotations
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".html", ".htm", ".png", ".jpg", ".jpeg"}
+SUPPORTED_EXTENSIONS = {
+    ".pdf", ".docx", ".pptx", ".html", ".htm", ".png", ".jpg", ".jpeg",
+    # Текстовые форматы книг: обрабатываются сразу (чтение + нормализация),
+    # без VLM.  Если файл не читается как текст — общий фолбэк ниже.
+    ".txt", ".md", ".fb2",
+}
 # CSS and JavaScript are never document content — skip them explicitly even if
 # they somehow appear under a supported extension list.
 IGNORED_EXTENSIONS = {".css", ".js", ".mjs", ".ts", ".tsx", ".jsx"}
@@ -305,9 +311,80 @@ def _extract_text(file_path: Path) -> tuple[str, int]:
         if not _has_meaningful_content(text):
             return "", 1
         return text, 1
+    if ext in (".txt", ".md"):
+        return _read_text_file(file_path), 1
+    if ext == ".fb2":
+        return _extract_fb2_text(file_path), 1
     # Images and unsupported formats: no OCR available without the VLM,
     # so they produce empty text.
     return "", 0
+
+
+# Порядок важен: utf-8 до cp1251 (байты ASCII совместимы с обоими, но
+# валидный utf-8 декодируется первым).  utf-16 без BOM идёт ПОСЛЕ cp1251
+# и только с проверкой правдоподобия — иначе байты cp1251 декодируются
+# как utf-16 без ошибок, но в мусор из private-use диапазона.
+_TEXT_ENCODINGS = ("utf-8-sig", "utf-8", "cp1251", "utf-16")
+
+_UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
+
+
+def _looks_like_garbage(text: str) -> bool:
+    """Эвристика против ложных декодировок: cp1251-байты, прочитанные как
+    utf-16, кишат символами private-use; utf-16-байты, прочитанные как
+    cp1251, дают поток управляющих \\x00.  Настоящий текст такого не содержит."""
+    if not text:
+        return True
+    bad = 0
+    for ch in text:
+        o = ord(ch)
+        if ch in "\n\r\t":
+            continue
+        if o < 32 or 0xE000 <= o <= 0xF8FF or 0xFFF0 <= o <= 0xFFFF:
+            bad += 1
+    return bad / len(text) > 0.02
+
+
+def _read_text_file(file_path: Path) -> str:
+    """Чтение .txt/.md с детектом кодировки.
+
+    Корпус собирался десятилетиями — txt встречаются в cp1251, utf-16 и
+    битом utf-8.  BOM идентифицирует utf-16/utf-8-sig однозначно (иначе
+    cp1251 декодировал бы их байты без ошибок и получался бы мусор),
+    дальше пробуем остальные кодировки по очереди; если ни одна не подошла —
+    читаем с заменой недекодируемых символов, чтобы файл не терялся (мусор
+    отсеет эвристика качества ниже по пайплайну).
+    """
+    raw = file_path.read_bytes()
+    if raw.startswith(_UTF16_BOMS):
+        return raw.decode("utf-16")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
+    for enc in _TEXT_ENCODINGS:
+        try:
+            decoded = raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        if enc in ("utf-16", "cp1251") and _looks_like_garbage(decoded):
+            continue
+        return decoded
+    return raw.decode("utf-8", errors="replace")
+
+
+def _extract_fb2_text(file_path: Path) -> str:
+    """FictionBook (.fb2) — XML: собираем весь текст, теги отбрасываются."""
+    from xml.etree import ElementTree  # noqa: PLC0415
+
+    raw = file_path.read_bytes()
+    for enc in _TEXT_ENCODINGS:
+        try:
+            root = ElementTree.fromstring(raw.decode(enc))
+            break
+        except (UnicodeDecodeError, ElementTree.ParseError):
+            continue
+    else:
+        return ""
+    return "".join(root.itertext())
 
 
 def _has_meaningful_content(text: str, min_chars: int = 200) -> bool:
@@ -736,6 +813,15 @@ class Worker:
         txt_exporter = TxtExporter()
         self._stats_writer = StatsWriter(settings.output_root / "stats.jsonl")
         self._processed = self._load_processed()
+        # Все txt результата — сразу в нормализованном виде: файлы от старых
+        # прогонов (маркеры страниц, оглавления, колонтитулы, книги, разбитые
+        # на части) чистим и склеиваем автоматически при старте — без ручного
+        # запуска фаз оркестратора.
+        txts_root = settings.output_root / "txts"
+        if txts_root.is_dir() and any(txts_root.glob("*.txt")):
+            await asyncio.to_thread(
+                normalize_all_txts, txts_root, settings.worker_threads
+            )
         logger.info(
             "Воркер запущен: модель %s | эндпоинты: %s | потоков: %d | "
             "VLM-конкуренция: %d | таймаут: %.0fс | уже обработано: %d",
