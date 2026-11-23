@@ -13,14 +13,20 @@
 #   6. сборка финального архива текстов
 #   7. воркер снова в работе
 #
-# Весь вывод дублируется в reprocess_<время>.log в корне репозитория.
+# Весь вывод дублируется в logs/reprocess_<время>.log (подпапка репо,
+# не корень).  REPROCESS_QUIET=1 — писать только в файл, в консоль тишина.
 # При ошибке на любом шаге воркер всё равно поднимается обратно.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
 COMPOSE="docker compose -f infra/compose/local.yml"
-LOG="reprocess_$(date +%Y%m%d_%H%M%S).log"
-exec > >(tee -a "$LOG") 2>&1
+mkdir -p logs
+LOG="logs/reprocess_$(date +%Y%m%d_%H%M%S).log"
+if [ "${REPROCESS_QUIET:-0}" = "1" ]; then
+    exec >> "$LOG" 2>&1
+else
+    exec > >(tee -a "$LOG") 2>&1
+fi
 
 finish() {
     echo "=== $(date '+%F %T') аварийное восстановление: поднимаю worker ==="
