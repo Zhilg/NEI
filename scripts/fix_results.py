@@ -105,40 +105,62 @@ def _load_repair_module():
 
 
 def _pdf_has_text_layer(pdf_path: Path, sample_pages: int = 3) -> bool:
+    """True, если в первых страницах есть текстовый слой.
+
+    НИКОГДА не бросает исключений: корпус полон файлов, которые открываются
+    fitz'ом, но падают при обращении к страницам (битый page tree и т.п.) —
+    для pdf-requeue/wait это просто «не текстовослойный».
+    """
     import fitz  # noqa: PLC0415 — pymupdf есть в контейнере воркера
 
     repaired: Path | None = None
+    doc = None
     try:
-        doc = fitz.open(str(pdf_path))
-    except Exception as exc:  # noqa: BLE001 — пробуем починить, иначе пропускаем
         try:
-            size = pdf_path.stat().st_size
-        except OSError:
-            size = -1
-        if size == 0:
-            kind = "пустой файл"
-        elif size > 0 and not pdf_path.open("rb").read(5).startswith(b"%PDF"):
-            kind = "не PDF (нет заголовка %PDF)"
-        else:
-            kind = "битая структура (truncated/xref/encrypt)"
-        logger.warning("не открылся %s: %s [%s, %d байт]", pdf_path.name, exc, kind, size)
-        repaired = _load_repair_module().repair_pdf(pdf_path)
-        if repaired is None:
-            return False
+            doc = fitz.open(str(pdf_path))
+        except Exception as exc:  # noqa: BLE001 — пробуем починить, иначе пропускаем
+            try:
+                size = pdf_path.stat().st_size
+            except OSError:
+                size = -1
+            if size == 0:
+                kind = "пустой файл"
+            elif size > 0 and not pdf_path.open("rb").read(5).startswith(b"%PDF"):
+                kind = "не PDF (нет заголовка %PDF)"
+            else:
+                kind = "битая структура (truncated/xref/encrypt)"
+            logger.warning("не открылся %s: %s [%s, %d байт]", pdf_path.name, exc, kind, size)
+            repaired = _load_repair_module().repair_pdf(pdf_path)
+            if repaired is None:
+                return False
+            try:
+                doc = fitz.open(str(repaired))
+            except Exception:  # noqa: BLE001 — и после ремонта не открылся
+                return False
         try:
-            doc = fitz.open(str(repaired))
-        except Exception:  # noqa: BLE001 — и после ремонта не открылся
-            repaired.unlink(missing_ok=True)
+            page_count = doc.page_count
+        except Exception:  # noqa: BLE001 — открылся, но page tree битый
+            logger.warning("не открылся %s: page_count упал — битый page tree", pdf_path.name)
             return False
-    try:
-        for page in list(doc)[:sample_pages]:
-            if page.get_text().strip():
-                return True
+        for i in range(min(sample_pages, page_count)):
+            try:
+                if doc.load_page(i).get_text().strip():
+                    return True
+            except Exception:  # noqa: BLE001 — одна битая страница не решает за файл
+                continue
         return False
     finally:
-        doc.close()
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:  # noqa: BLE001
+                pass
         if repaired is not None:
             repaired.unlink(missing_ok=True)
+
+
+def _has_text_layer_star(pdf_path: Path) -> tuple[Path, bool]:
+    return pdf_path, _pdf_has_text_layer(pdf_path)
 
 
 def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
@@ -152,12 +174,17 @@ def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
 
     logger.info("Шаг 1/3: скан input на PDF с текстовым слоем (16 потоков)...")
+    from tqdm import tqdm  # noqa: PLC0415
+
     pdfs = [p for p in sorted(input_root.rglob("*.pdf")) if p.is_file()]
     stems: set[str] = set()
     with ThreadPoolExecutor(max_workers=16) as pool:
-        for path, has in zip(pdfs, pool.map(_pdf_has_text_layer, pdfs, chunksize=32)):
+        bar = tqdm(total=len(pdfs), desc="скан pdf", unit="файл")
+        for path, has in pool.imap_unordered(_has_text_layer_star, pdfs, chunksize=32):
+            bar.update(1)
             if has:
                 stems.add(path.stem)
+        bar.close()
     n_pdfs = len(pdfs)
     logger.info(
         "Шаг 1/3 готов: %d pdf в input, из них с текстовым слоем (на переработку): %d (%.1f с)",
@@ -275,7 +302,9 @@ def phase_merge(input_root: Path, output_root: Path) -> None:
         groups.setdefault(key, []).append(txt)
 
     merged = kept_split = 0
-    for key, paths in sorted(groups.items()):
+    from tqdm import tqdm  # noqa: PLC0415
+
+    for key, paths in tqdm(sorted(groups.items()), desc="merge", unit="группа"):
         if len(paths) < 2:
             continue
         # Части в порядке следования: base, base_2, base_3 ...
@@ -318,12 +347,17 @@ def phase_format(input_root: Path, output_root: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
 
     logger.info("Шаг 1/2: чистка маркеров в txts/ (32 потока)...")
+    from tqdm import tqdm  # noqa: PLC0415
+
     t1 = time.perf_counter()
     txt_paths = list(txts_root.glob("*.txt")) if txts_root.is_dir() else []
     changed = 0
     with ThreadPoolExecutor(max_workers=32) as pool:
-        for did in pool.map(_normalize_txt_star, txt_paths, chunksize=64):
+        bar = tqdm(total=len(txt_paths), desc="чистка txt", unit="файл")
+        for did in pool.imap_unordered(_normalize_txt_star, txt_paths, chunksize=64):
+            bar.update(1)
             changed += did
+        bar.close()
     logger.info("Шаг 1/2 готов: %d txt просмотрено, %d почищено (%.1f с)", len(txt_paths), changed, time.perf_counter() - t1)
 
     # 2. Схлопнуть встроенные тексты документов в results.jsonl: оставить
@@ -334,8 +368,11 @@ def phase_format(input_root: Path, output_root: Path) -> None:
 
     tmp = results_path.with_suffix(".jsonl.new")
     n_rec = n_rec_changed = 0
+    total_bytes = results_path.stat().st_size
     with open(results_path, encoding="utf-8") as f, open(tmp, "w", encoding="utf-8") as g:
+        bar = tqdm(total=total_bytes, desc="журнал", unit="Б", unit_scale=True)
         for line in f:
+            bar.update(len(line.encode("utf-8")))
             s = line.strip()
             if not s:
                 continue

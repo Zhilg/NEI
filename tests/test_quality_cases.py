@@ -289,6 +289,28 @@ def test_repair_gives_up_on_empty_and_garbage(tmp_path):
     assert repair_pdf(garbage) is None
 
 
+def test_has_textlayer_never_raises_on_broken_page_tree(tmp_path, monkeypatch):
+    """fitz.open прошёл, а page_count/страницы падают — функция молчит False.
+
+    Регрессия: 'Анна Петровна.pdf' открывался, но len(doc) кидал исключение
+    посреди pdf-requeue/wait и валил весь прогон.
+    """
+    import fitz
+
+    class _DeadDoc:
+        @property
+        def page_count(self):
+            raise RuntimeError("damaged page tree")
+
+        def close(self):
+            raise RuntimeError("close also broken")
+
+    pdf = tmp_path / "dead.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")  # не важно: open подменён
+    monkeypatch.setattr(fitz, "open", lambda *a, **kw: _DeadDoc())
+    assert fix_results._pdf_has_text_layer(pdf) is False
+
+
 # ---------------------------------------------------------------------------
 # 'Лесенка' колонок: детерминированная эмуляция OCR-вывода
 # ---------------------------------------------------------------------------

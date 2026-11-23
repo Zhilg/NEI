@@ -197,13 +197,17 @@ def _rebuild_zip_parallel(
     tmp: Path,
     workers: int = 64,
     chunk: int = 512,
+    desc: str = "архив",
 ) -> int:
     """Пересобрать zip из items в tmp; вернуть число записей.
 
     Шарды пишутся на диск (не в память): многогигабайтный журнал не
     должен целиком лезть в RAM.  Страй-шарды с прошлых прерванных попыток
     убираем сразу — иначе каждый рестарт посреди пересборки плодил новые.
+    Ход работы — полоской tqdm (desc).
     """
+    from tqdm import tqdm  # noqa: PLC0415
+
     for stray in tmp.parent.glob("*.zipshard"):
         stray.unlink(missing_ok=True)
     asm = _ZipAssembler(tmp)
@@ -213,20 +217,22 @@ def _rebuild_zip_parallel(
     done = 0
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            for i in range(0, total, chunk):
-                packed = list(pool.map(
-                    lambda it: _pack_shard(it, tmp.parent),
-                    items[i:i + chunk],
-                ))
-                shards.extend(shard for _, shard in packed)
-                for info, shard in packed:
-                    asm.add(info, shard)
-                    done += 1
-                if done % 5000 < chunk or done == total:
-                    logger.info(
-                        "Пересборка архива: %d/%d файлов (%.0f с)",
-                        done, total, time.perf_counter() - t0,
-                    )
+            with tqdm(total=total, desc=desc, unit="файл") as bar:
+                for i in range(0, total, chunk):
+                    packed = list(pool.map(
+                        lambda it: _pack_shard(it, tmp.parent),
+                        items[i:i + chunk],
+                    ))
+                    shards.extend(shard for _, shard in packed)
+                    for info, shard in packed:
+                        asm.add(info, shard)
+                        done += 1
+                    bar.update(len(packed))
+                    if done % 5000 < chunk or done == total:
+                        logger.info(
+                            "Пересборка архива: %d/%d файлов (%.0f с)",
+                            done, total, time.perf_counter() - t0,
+                        )
         return asm.finish()
     finally:
         asm.close()
