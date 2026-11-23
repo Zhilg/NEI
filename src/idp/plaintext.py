@@ -40,6 +40,88 @@ _EM_STAR_RE = re.compile(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])")
 _EM_UNDER_RE = re.compile(r"(?<![\w_])_([^_\n]+)_(?![\w_])")
 # Маркер нумерованного списка сохраняем, но приводим пробелы.
 _NUM_LIST_RE = re.compile(r"^(\d{1,3})[.)]\s+")
+# Колонтитул-номер страницы: «Страница 5 из 12», «Стр. 3», «Page 7 of 90»,
+# а также виды «— 12 —» / «- 12 -».
+_PAGE_MARK_RE = re.compile(
+    r"^(?:страница|стр\.?|page)\s+\d{1,4}(?:\s+(?:из|of)\s+\d{1,4})?[.\s]*$",
+    re.IGNORECASE,
+)
+_PAGE_DASH_RE = re.compile(r"^[—–―-]\s*\d{1,4}\s*[—–―-]$")
+# Заголовок оглавления.
+_TOC_HEADING_RE = re.compile(r"^(?:оглавление|содержание)[:\s]*$", re.IGNORECASE)
+# Строка оглавления: «Название главы ....... 12» — название, лидеры
+# (точки/многоточия/тире/пробелы) и номер страницы.
+_TOC_ENTRY_RE = re.compile(
+    r"^.{2,100}?[.\s]*(?:\.{2,}|…+|·{2,}|‒{2,}|–{2,}|—{2,}|-{2,}| {3,})\s*\d{1,4}\s*$"
+)
+# Начало самостоятельного произведения — признак сборника (объединять НЕ надо).
+_ARTICLE_MARKER_RE = re.compile(
+    r"^(?:рассказ|повесть|новелла|очерк|статья|эссе|стихи|стихотворение|"
+    r"проза|поэзия|публицистика|интервью|заметка|документ|критика|"
+    r"рецензия|фельетон|корреспонденция|хроника|сказка|басня|пьеса|драма)\b",
+    re.IGNORECASE,
+)
+# Начало главы/части — признак одной книги, разбитой на главы (объединять надо).
+_CHAPTER_START_RE = re.compile(
+    r"^(?:глава|часть|раздел|отдел(?:ение)?|том|книга|параграф|предисловие|"
+    r"введение|заключение|послесловие|приложение|эпилог|пролог)\b"
+    r"|^[IVXLC]+\.\s"
+    r"|^\d{1,3}[.):]\s+\S",
+    re.IGNORECASE,
+)
+# VLM-аннотации визуалов: «[Image: stamp: Circular blue ink stamp...]» —
+# содержимого текста нет, выкидываем; «[HANDWRITTEN: 17]» — распаковываем,
+# внутри текст.
+_IMAGE_ANN_LINE_RE = re.compile(r"^\[Image:[^\]\n]*\]\s*$", re.IGNORECASE)
+_IMAGE_ANN_INLINE_RE = re.compile(r"\[Image:[^\]\n]*\]", re.IGNORECASE)
+_HANDWRITTEN_RE = re.compile(r"\[HANDWRITTEN:\s*([^\]\n]*)\]", re.IGNORECASE)
+# Правовые БД: шапки/колонтитулы КонсультантПлюс и Гарант.
+_LEGAL_BOILERPLATE_RES = [
+    re.compile(r"^консультантплюс\s*$", re.IGNORECASE),
+    re.compile(r"^документ предоставлен консультантплюс", re.IGNORECASE),
+    re.compile(r"^дата сохранения:", re.IGNORECASE),
+    re.compile(r"^над[её]жная правовая поддержка", re.IGNORECASE),
+    re.compile(r"^www\.(consultant|garant)\.(ru|com)", re.IGNORECASE),
+    re.compile(r"^гарант\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^см\. энциклопедии", re.IGNORECASE),
+    re.compile(r"^информация об изменениях\s*:\s*$", re.IGNORECASE),
+    re.compile(r"^см\. текст (пункта|наименования|статьи)", re.IGNORECASE),
+]
+# Перенос слова через дефис/мягкий дефис на следующей строке («Пери-\нод»).
+_DEHYPHEN_RE = re.compile(r"(?<![-\s])[-\u00ad]\n(?=[а-яёa-z])")
+# Заголовок оглавления и строка оглавления определены выше
+# (_TOC_HEADING_RE / _TOC_ENTRY_RE).
+
+
+def strip_toc(text: str) -> str:
+    """Вырезать блоки оглавления («Оглавление»/«Содержание» + строки глав с
+    номерами страниц).  Срабатывает только когда после заголовка идут минимум
+    две похожие на пункты оглавления строки — чтобы не съесть обычный текст,
+    где слово «содержание» стоит отдельной строкой."""
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if _TOC_HEADING_RE.match(lines[i].strip()):
+            j = i + 1
+            entries = 0
+            while j < n:
+                s = lines[j].strip()
+                if not s:
+                    j += 1
+                    continue
+                if _TOC_ENTRY_RE.match(s):
+                    entries += 1
+                    j += 1
+                    continue
+                break
+            if entries >= 2:
+                i = j  # заголовок + пункты выкидываем целиком
+                continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
 
 
 def _flatten_line(s: str) -> str:
@@ -68,6 +150,13 @@ def to_plain_text(text: str) -> str:
     if not text:
         return ""
     text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\f", "\n")
+    # Склейка перенесённых слов («Пери-\нод» -> «Период») — до построчной
+    # обработки, иначе части слова пойдут разными строками.
+    text = _DEHYPHEN_RE.sub("", text)
+    # HANDWRITTEN-обёртки: внутри текст, наружу его и выпускаем.
+    text = _HANDWRITTEN_RE.sub(r"\1", text)
+    # Image-аннотации в середине строки — без содержимого, вырезаем.
+    text = _IMAGE_ANN_INLINE_RE.sub("", text)
     out: list[str] = []
     in_code_fence = False
     for raw in text.split("\n"):
@@ -80,8 +169,16 @@ def to_plain_text(text: str) -> str:
             continue
         if _COMMENT_LINE_RE.match(s):
             continue
+        if _IMAGE_ANN_LINE_RE.match(s):
+            continue
+        if not in_code_fence and _PAGE_MARK_RE.match(s):
+            continue  # «Страница 5 из 12», «Стр. 3»
+        if not in_code_fence and _PAGE_DASH_RE.match(s):
+            continue  # «— 12 —»
         if not in_code_fence and _TABLE_HR_RE.match(s) and "-" in s:
             continue
+        if not in_code_fence and any(r.match(s) for r in _LEGAL_BOILERPLATE_RES):
+            continue  # шапки КонсультантПлюс/Гарант
         if in_code_fence:
             out.append(html.unescape(raw.rstrip()))
             continue
@@ -97,4 +194,62 @@ def to_plain_text(text: str) -> str:
         elif not blank:
             collapsed.append("")
             blank = True
-    return "\n".join(collapsed).strip("\n")
+    text = "\n".join(collapsed).strip("\n")
+    # Оглавления — не содержание, вырезаем блоки целиком.
+    text = strip_toc(text)
+    # Вырезка оглавления могла оставить двойные пустые строки — схлопываем.
+    final: list[str] = []
+    blank = False
+    for ln in text.split("\n"):
+        if ln:
+            final.append(ln)
+            blank = False
+        elif not blank:
+            final.append("")
+            blank = True
+    return "\n".join(final).strip("\n")
+
+
+def _first_nonempty_line(text: str) -> str:
+    for ln in text.split("\n"):
+        if ln.strip():
+            return ln.strip()
+    return ""
+
+
+def plan_merge(parts: list[str]) -> bool:
+    """Решить, нужно ли объединять части разбитого документа в один файл.
+
+    Разбивка на ``_2``, ``_3`` ... правильна только для газет и сборников
+    статей/рассказов.  Книга, расколотая на главы (из-за эвристики
+    коллекций), должна лежать одним файлом.
+
+    Правила:
+    * у двух и более частей первая строка — маркер жанра (Рассказ, Статья,
+      Очерк...) -> это сборник, НЕ объединяем;
+    * большинство частей начинается с «Глава/Часть/...» -> это одна книга,
+      объединяем;
+    * иначе: длинные сплошные тексты -> книга (объединяем), короткие
+      самостоятельные куски -> оставляем как есть.
+    """
+    texts = [p.strip() for p in parts if p and p.strip()]
+    if len(texts) < 2:
+        return False
+    starts = [_first_nonempty_line(t) for t in texts[1:]]
+    starts = [s for s in starts if s]
+    if not starts:
+        return True
+    genre = sum(1 for s in starts if _ARTICLE_MARKER_RE.match(s))
+    if genre >= 2:
+        return False  # сборник статей/рассказов
+    chapter = sum(1 for s in starts if _CHAPTER_START_RE.match(s))
+    if chapter >= max(1, round(0.5 * len(starts))):
+        return True  # книга с главами
+    avg = sum(len(t) for t in texts) // len(texts)
+    return avg > 1500
+
+
+def merge_parts(parts: list[str]) -> str:
+    """Склеить части в один текст (части уже в порядке следования)."""
+    texts = [p.strip() for p in parts if p and p.strip()]
+    return "\n\n".join(texts)

@@ -21,6 +21,8 @@ from idp.entity_schema import build_entity_type_descriptions
 _NOISE_RULES = """STRICTLY EXCLUDE the following noise elements:
 - Page numbers
 - Running headers and footers
+- Tables of contents / оглавление / содержание: a listing of chapters
+  with dot leaders and page numbers is NOT document content, drop it entirely
 - Journal names, magazine titles, publication names at page bottom or top
 - Watermarks
 - Copyright notices

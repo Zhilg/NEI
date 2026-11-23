@@ -28,16 +28,16 @@ trap finish ERR
 
 step() { echo; echo "=== $(date '+%F %T') $* ==="; }
 
-step "0/5 git pull + сборка образа"
+step "0/6 git pull + сборка образа"
 git pull
 $COMPOSE build worker
 $COMPOSE stop worker || true
 
-step "1/5 pdf-requeue: текстовослойные pdf на переработку"
+step "1/6 pdf-requeue: текстовослойные pdf на переработку"
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/fix_results.py pdf-requeue
 
-step "2/5 worker перерабатывает pdf (до 24 ч)"
+step "2/6 worker перерабатывает pdf (до 24 ч)"
 $COMPOSE up -d worker
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/wait_pdf_reprocess.py

@@ -38,7 +38,7 @@ from idp.config import settings
 from idp.document_classifier import detect_document_type
 from idp.docx_converter import extract_docx_text
 from idp.html_converter import extract_html_text, convert_html_folder_to_markdown
-from idp.plaintext import to_plain_text
+from idp.plaintext import to_plain_text, plan_merge, merge_parts
 from idp.pptx_converter import extract_pptx_text
 from idp.renderer import (
     convert_image_to_png,
@@ -616,6 +616,11 @@ class Worker:
 
             document_type = detect_document_type(file_path, text)
             documents = _split_into_documents(text, file_path)
+            # Эвристика коллекций иногда раскалывает одну книгу на главы —
+            # склеиваем обратно, если это не газета/сборник статей.
+            if len(documents) > 1 and plan_merge([d.get("text", "") for d in documents]):
+                merged = merge_parts([d.get("text", "") for d in documents])
+                documents = [{"text": merged, "page": 1}]
 
             doc_results: list[dict] = []
             for doc in documents:

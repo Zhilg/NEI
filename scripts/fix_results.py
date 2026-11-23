@@ -52,6 +52,8 @@ _spec = importlib.util.spec_from_file_location(
 _plaintext = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_plaintext)
 to_plain_text = _plaintext.to_plain_text
+plan_merge = _plaintext.plan_merge
+merge_parts = _plaintext.merge_parts
 
 _DOC_SUFFIX_RE = re.compile(r"_\d+$")
 
@@ -186,6 +188,56 @@ def phase_archive(input_root: Path, output_root: Path) -> None:
     )
 
 
+def phase_merge(input_root: Path, output_root: Path) -> None:
+    """Объединить разбитые на части документы, если это не газета/сборник.
+
+    Группы вида ``base.txt``, ``base_2.txt`` ... ``base_N.txt`` проверяются
+    эвристикой plan_merge: книга, расколотая на главы, склеивается в
+    ``base.txt``; сборники статей и газеты остаются разбитыми.
+    """
+    logger.info("Фаза merge: поиск разбитых на части документов...")
+    t0 = time.perf_counter()
+    txts_root = output_root / "txts"
+    if not txts_root.is_dir():
+        logger.info("txts/ нет — нечего объединять.")
+        return
+
+    groups: dict[str, list[Path]] = {}
+    for txt in txts_root.glob("*.txt"):
+        base = txt.stem
+        m = _DOC_SUFFIX_RE.search(base)
+        key = _DOC_SUFFIX_RE.sub("", base) if m else base
+        groups.setdefault(key, []).append(txt)
+
+    merged = kept_split = 0
+    for key, paths in sorted(groups.items()):
+        if len(paths) < 2:
+            continue
+        # Части в порядке следования: base, base_2, base_3 ...
+        def sort_key(p: Path) -> tuple[int, str]:
+            m = _DOC_SUFFIX_RE.search(p.stem)
+            return (int(m.group(0)[1:]) if m else 1), p.name
+
+        parts_paths = sorted(paths, key=sort_key)
+        parts = [p.read_text(encoding="utf-8", errors="replace") for p in parts_paths]
+        if plan_merge(parts):
+            combined = merge_parts(parts)
+            tmp = txts_root / f"{key}.merge.tmp"
+            tmp.write_text(combined + "\n", encoding="utf-8")
+            for p in parts_paths:
+                p.unlink()
+            tmp.replace(txts_root / f"{key}.txt")
+            merged += 1
+            if merged % 500 == 0:
+                logger.info("Объединено %d групп (%.0f с)...", merged, time.perf_counter() - t0)
+        else:
+            kept_split += 1
+    logger.info(
+        "Фаза merge готова: %d групп объединено, %d оставлены разбитыми (сборники/газеты) за %.0f с",
+        merged, kept_split, time.perf_counter() - t0,
+    )
+
+
 def phase_format(input_root: Path, output_root: Path) -> None:
     t0 = time.perf_counter()
     results_path = output_root / "results.jsonl"
@@ -250,7 +302,7 @@ def phase_format(input_root: Path, output_root: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=["pdf-requeue", "format", "archive", "all"])
+    parser.add_argument("phase", choices=["pdf-requeue", "merge", "format", "archive", "all"])
     parser.add_argument("--input", type=Path, default=None, help="input root (default: IDP_INPUT_ROOT)")
     parser.add_argument("--output", type=Path, default=None, help="output root (default: IDP_OUTPUT_ROOT)")
     args = parser.parse_args()
@@ -266,6 +318,8 @@ def main() -> int:
 
     if args.phase in ("pdf-requeue", "all"):
         phase_pdf_requeue(input_root, output_root)
+    if args.phase in ("merge", "all"):
+        phase_merge(input_root, output_root)
     if args.phase in ("format", "all"):
         phase_format(input_root, output_root)
     if args.phase == "archive":
