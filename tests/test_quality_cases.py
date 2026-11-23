@@ -27,6 +27,7 @@ from tests.test_worker import (  # noqa: E402
     _read_results,
     _run,
     make_text_pdf,
+    ocr_stub,  # noqa: F401 — фикстура, используется через аргументы
 )
 
 _pdf_has_text_layer = fix_results._pdf_has_text_layer
@@ -204,6 +205,30 @@ def test_corrupt_pdfs_never_crash_pipeline(workspace, stub_server):
     assert results.get("truncated.pdf") in ("ok", "error"), (
         f"обрезанный pdf потерялся: {results}"
     )
+
+
+def test_same_stem_in_nested_folders_survives_restart(workspace, ocr_stub):
+    """API/usermanual.pdf и API/API/usermanual.pdf — оба живут в output.
+
+    Без предзагрузки _used с диска второй запуск воркера перезаписал бы
+    чужой txt (экспортер пустой после рестарта).
+    """
+    from idp.worker import Worker
+
+    (workspace.input / "API" / "API").mkdir(parents=True)
+    make_text_pdf(workspace.input / "API" / "usermanual.pdf", "Первый файл",
+                  "Содержимое первого файла " * 5)
+    _run(Worker())
+    make_text_pdf(workspace.input / "API" / "API" / "usermanual.pdf", "Второй файл",
+                  "Содержимое второго файла " * 5)
+    _run(Worker())
+
+    txts = {p.name: p.read_text(encoding="utf-8")
+            for p in (workspace.output / "txts").glob("*.txt")}
+    assert "usermanual.txt" in txts, f"первый файл потерялся: {sorted(txts)}"
+    assert "usermanual_2.txt" in txts, f"второй файл перезаписал первый: {sorted(txts)}"
+    assert "Первый файл" in txts["usermanual.txt"]
+    assert "Второй файл" in txts["usermanual_2.txt"]
 
 
 # ---------------------------------------------------------------------------

@@ -38,7 +38,12 @@ class TxtExporter:
     def __init__(self, output_root: Path | None = None) -> None:
         self.root = (output_root or settings.output_root) / "txts"
         self.root.mkdir(parents=True, exist_ok=True)
-        self._used: set[str] = set()
+        # Занятые имена предзагружаем с диска: экспортер создаётся заново
+        # при каждом запуске воркера, и без этого одноимённый файл из другой
+        # папки (API/a.pdf и API/API/a.pdf — в корпусе часто) после рестарта
+        # перезаписал бы чужой txt.
+        self._used: set[str] = {p.stem for p in self.root.glob("*.txt")}
+        self._used.discard("")
         # export вызывается из потоков (asyncio.to_thread) параллельно —
         # выбор свободного имени должен быть атомарным.
         self._lock = threading.Lock()
