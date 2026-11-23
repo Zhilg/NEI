@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import fitz
@@ -124,7 +125,19 @@ def _render_all_pages(pdf_path: Path, output_dir: Path) -> list[Path]:
             )
             for i in range(num_pages)
         ]
-        results = [future.result() for future in concurrent.futures.as_completed(futures)]
+        done_pages = 0
+        t_render = time.perf_counter()
+        results = []
+        for future in concurrent.futures.as_completed(futures):
+            results.append(future.result())
+            done_pages += 1
+            # Документы с тысячами страниц рендерятся долго — без этого
+            # «зависание» неотличимо от обычной работы в логах.
+            if num_pages > 200 and (done_pages % 200 == 0 or done_pages == num_pages):
+                logger.info(
+                    "Рендеринг %s: %d/%d страниц (%.0f с)",
+                    pdf_path.name, done_pages, num_pages, time.perf_counter() - t_render,
+                )
     results.sort(key=lambda x: x[1])
     return [path for path, _ in results]
 
