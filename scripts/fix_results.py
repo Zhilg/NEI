@@ -68,6 +68,8 @@ clean_all_txts = _txt_normalize.clean_all_txts
 merge_split_documents = _txt_normalize.merge_split_documents
 
 _DOC_SUFFIX_RE = re.compile(r"_\d+$")
+# Потоки для фаз работы с txt/журналом: по умолчанию как у воркера (64).
+TXT_THREADS = int(os.environ.get("IDP_WORKER_THREADS", "64"))
 
 
 def _silence_mupdf() -> None:
@@ -346,11 +348,11 @@ def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
 
     # 2. Выкинуть их записи из results.jsonl (только ok/skip — error и так
     #    переработаются, processed-сет строится только из ok/skip).
-    logger.info("Шаг 2/3: фильтрация results.jsonl (32 потока, полоска по байтам)...")
+    logger.info("Шаг 2/3: фильтрация results.jsonl (%d потоков, полоска по байтам)...", TXT_THREADS)
     t1 = time.perf_counter()
     tmp = results_path.with_suffix(".jsonl.new")
     with open(tmp, "wb") as g:
-        kept, dropped = _filter_journal(results_path, stems, g)
+        kept, dropped = _filter_journal(results_path, stems, g, threads=TXT_THREADS)
     os.replace(tmp, results_path)
     logger.info("Шаг 2/3 готов: выкинуто %d записей, осталось %d (%.1f с)", dropped, kept, time.perf_counter() - t1)
 
@@ -432,10 +434,10 @@ def phase_format(input_root: Path, output_root: Path) -> None:
     results_path = output_root / "results.jsonl"
     txts_root = output_root / "txts"
 
-    # 1. Почистить txt на диске (32 потока — чтение/запись мелких файлов).
-    logger.info("Шаг 1/2: чистка маркеров в txts/ (32 потока)...")
+    # 1. Почистить txt на диске (чтение/запись мелких файлов — много потоков).
+    logger.info("Шаг 1/2: чистка маркеров в txts/ (%d потоков)...", TXT_THREADS)
     t1 = time.perf_counter()
-    changed, total = clean_all_txts(txts_root, threads=32)
+    changed, total = clean_all_txts(txts_root, threads=TXT_THREADS)
     logger.info("Шаг 1/2 готов: %d txt просмотрено, %d почищено (%.1f с)", total, changed, time.perf_counter() - t1)
 
     # 2. Схлопнуть встроенные тексты документов в results.jsonl: оставить

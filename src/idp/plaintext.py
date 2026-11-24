@@ -87,6 +87,18 @@ _LEGAL_BOILERPLATE_RES = [
     re.compile(r"^информация об изменениях\s*:\s*$", re.IGNORECASE),
     re.compile(r"^см\. текст (пункта|наименования|статьи)", re.IGNORECASE),
 ]
+# Шапка научного документа: «УДК 338.245», «ГРНТИ 06.58.01», «ББК 22.1я7» —
+# классификационные коды в первых строках, к содержанию отношения не имеют.
+_UDK_HEADER_RE = re.compile(r"^(?:удк|грнти|ббк|мрти|okso)\s*[:№]?\s*\S", re.IGNORECASE)
+# Заголовок списка источников (всё от него до конца документа — не основной текст).
+_REFS_HEADING_RE = re.compile(
+    r"^(?:список использованных (?:источников|литературы)|список литературы|"
+    r"использованные источники|литература|библиограф(?:ия|ический список)|"
+    r"references|bibliography)[.\s]*$",
+    re.IGNORECASE,
+)
+# Строка-источник: «12. Иванов И.И. ...», «[4] ...», «— М., 1985 ...».
+_REF_ENTRY_START_RE = re.compile(r"^\s*(?:\d{1,3}[.)]\s|\[\d{1,3}\]\s*|[—–-]\s+[А-ЯA-Z])")
 # Перенос слова через дефис/мягкий дефис на следующей строке («Пери-\нод»).
 _DEHYPHEN_RE = re.compile(r"(?<![-\s])[-\u00ad]\n(?=[а-яёa-z])")
 # Конец предложения / конструкции, после которой нужен разрыв строки.
@@ -177,6 +189,98 @@ def strip_toc(text: str) -> str:
     return "\n".join(out)
 
 
+def strip_references(text: str) -> str:
+    """Вырезать список литературы/источников — всё от заголовка до конца
+    документа.
+
+    Заголовок («Список использованных источников», «Литература» ...)
+    считаем списком только если он стоит в последней трети документа
+    ИЛИ после него идут минимум три строки, похожие на записи источников
+    («12. Иванов И.И. ...», «[4] ...», «— М., 1985 ...») — чтобы не съесть
+    обычный абзац, где слово «литература» стоит отдельной строкой."""
+    lines = text.split("\n")
+    n = len(lines)
+    for i, ln in enumerate(lines):
+        if not _REFS_HEADING_RE.match(ln.strip()):
+            continue
+        tail = lines[i + 1 :]
+        entries = sum(1 for s in tail if _REF_ENTRY_START_RE.match(s.strip()))
+        # 3+ записей-источников — точно список; в последней трети документа
+        # хватает и одной записи.  Просто слово «литература» посреди текста
+        # (без записей) не трогаем.
+        if entries >= 3 or (i >= (2 * n) // 3 and entries >= 1):
+            return "\n".join(lines[:i]).strip("\n")
+    return text
+
+
+# Строка, похожая на обрыв предложения, а не на заголовок (заканчивается
+# знаком препинания) — такую первую строку в заголовок документа не берём.
+_TITLE_BAD_END_RE = re.compile(r"[:;,.!?…]$")
+# Строка из одних цифр/разделителей — не заголовок.
+_TITLE_NUMERIC_RE = re.compile(r"^[\d\s.,:;()\-–—]+$")
+# Хвост-ссылка на страницу в конце заголовка: «(стр. 1)», «— страница 3».
+_TITLE_PAGE_TAIL_RE = re.compile(
+    r"(?:\s*[([]\s*(?:стр\.?|страница|страницы|page|с\.)\s*\d+.*?[)\]]"
+    r"|\s*[—–-]\s*(?:стр\.?|страница|page)\s*\d+.*)$",
+    re.IGNORECASE,
+)
+# Зарезервированные имена Windows (CON, PRN, AUX, NUL, COM1-9, LPT1-9).
+_RESERVED_NAME_RE = re.compile(
+    r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", re.IGNORECASE
+)
+_INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def extract_title(text: str, max_scan: int = 12) -> str | None:
+    """Первая похожая на заголовок строка документа (тема).
+
+    Смотрим первые непустые строки: заголовок — короткая строка без маркеров
+    страниц/колонтитулов/кодировок, не оглавление, не жанровый маркер, не
+    обрыв предложения.  None — уверенного заголовка не нашлось, имя не меняем.
+    """
+    scanned = 0
+    for ln in text.split("\n"):
+        s = ln.strip()
+        if not s:
+            continue
+        scanned += 1
+        if scanned > max_scan:
+            break
+        if not 3 <= len(s) <= 120:
+            continue
+        if _PAGE_MARK_RE.match(s) or _PAGE_DASH_RE.match(s):
+            continue
+        if _UDK_HEADER_RE.match(s):
+            continue
+        if any(r.match(s) for r in _LEGAL_BOILERPLATE_RES):
+            continue
+        if _TOC_HEADING_RE.match(s) or _TOC_ENTRY_RE.match(s):
+            continue
+        if _ARTICLE_MARKER_RE.match(s) or _REFS_HEADING_RE.match(s):
+            continue
+        if _CHAPTER_START_RE.match(s) and len(_CHAPTER_START_RE.sub("", s).strip()) < 3:
+            continue  # «Глава 1» без текста — не заголовок документа
+        if _TITLE_BAD_END_RE.search(s) or _TITLE_NUMERIC_RE.match(s) or s.isdigit():
+            continue
+        # «Название (стр. 1)», «Название — страница 3» — хвосты-ссылки на
+        # страницы в заголовок не включаем.
+        s = _TITLE_PAGE_TAIL_RE.sub("", s).strip(" .")
+        if len(s) >= 3:
+            return s
+    return None
+
+
+def sanitize_filename(title: str, limit: int = 120) -> str:
+    """Заголовок -> безопасное имя файла без расширения."""
+    name = _INVALID_FILENAME_CHARS_RE.sub("", title)
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    if len(name) > limit:
+        name = name[:limit].rstrip(" .")
+    if _RESERVED_NAME_RE.match(name):
+        name = f"_{name}"
+    return name
+
+
 def _flatten_line(s: str) -> str:
     # Таблица: | a | b | -> "a  b" (строки-разделители отсеяны выше).
     if s.startswith("|") and s.endswith("|") and s.count("|") >= 2:
@@ -212,6 +316,7 @@ def to_plain_text(text: str) -> str:
     text = _IMAGE_ANN_INLINE_RE.sub("", text)
     out: list[str] = []
     in_code_fence = False
+    head_lines = 0  # непустых содержательных строк сверху (для УДК-фильтра)
     for raw in text.split("\n"):
         s = raw.strip()
         if s.startswith("```"):
@@ -224,6 +329,8 @@ def to_plain_text(text: str) -> str:
             continue
         if _IMAGE_ANN_LINE_RE.match(s):
             continue
+        if not in_code_fence and head_lines < 15 and _UDK_HEADER_RE.match(s):
+            continue  # «УДК 338.245», «ГРНТИ ...», «ББК ...» — только в шапке
         if not in_code_fence and _PAGE_MARK_RE.match(s):
             continue  # «Страница 5 из 12», «Стр. 3»
         if not in_code_fence and _PAGE_DASH_RE.match(s):
@@ -237,6 +344,7 @@ def to_plain_text(text: str) -> str:
             continue
         flat = _flatten_line(s)
         out.append(flat if flat else "")
+        head_lines += 1
     # Схлопываем серии пустых строк до одной, режем края.
     collapsed: list[str] = []
     blank = False
@@ -250,6 +358,8 @@ def to_plain_text(text: str) -> str:
     text = "\n".join(collapsed).strip("\n")
     # Оглавления — не содержание, вырезаем блоки целиком.
     text = strip_toc(text)
+    # Список литературы/источников в конце — тоже не основной текст.
+    text = strip_references(text)
     # Склейка разорванных колонкой строк в абзацы.
     reflowed = _reflow(text.split("\n"))
     # Схлопываем серии пустых строк до одной, режем края.

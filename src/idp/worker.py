@@ -697,6 +697,11 @@ class Worker:
             # Формат корпуса — чистый plain text: без markdown-разметки
             # (заголовки #, **жирный**, таблицы |...|, ссылки), HTML-сущностей
             # и служебных комментариев.  Имя файла — только в имени txt.
+            # Рубрикаторы (УДК/ГРНТИ/ГНТИ) достаём из текста ДО to_plain_text:
+            # чистка вырезает коды классификации из шапки как мусор, а в
+            # журнал они должны попасть.  Файловые коды отдаём первому
+            # документу (шапка относится ко всему файлу целиком).
+            file_rubricators = extract_rubricators(text, page=1)
             text = to_plain_text(text)
             if not text.strip():
                 result = self._skip_result(file_path, relative, timer, file_type)
@@ -713,12 +718,18 @@ class Worker:
                 documents = [{"text": merged, "page": 1}]
 
             doc_results: list[dict] = []
-            for doc in documents:
+            for doc_idx, doc in enumerate(documents):
                 doc_text = doc.get("text", "").strip()
                 if not doc_text:
                     continue
                 doc_page = int(doc.get("page", 1) or 1)
                 rubricators = extract_rubricators(doc_text, page=doc_page)
+                if doc_idx == 0 and file_rubricators:
+                    seen = {(r.get("type"), r.get("number")) for r in rubricators}
+                    rubricators = rubricators + [
+                        r for r in file_rubricators
+                        if (r.get("type"), r.get("number")) not in seen
+                    ]
                 # Тексты живут только в txts/ — в results.jsonl (и архиве)
                 # записываем только тип и номер рубрикатора.  source=textlayer
                 # помечает записи быстрого пути: pdf-requeue НЕ выкидывает их

@@ -13,6 +13,7 @@ base_2.txt, ...), если это не газета/сборник (plan_merge).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -22,7 +23,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 try:  # обычный путь — внутри пакета idp
-    from idp.plaintext import merge_parts, plan_merge, to_plain_text
+    from idp.plaintext import (
+        extract_title,
+        merge_parts,
+        plan_merge,
+        sanitize_filename,
+        to_plain_text,
+    )
 except ModuleNotFoundError:  # standalone-загрузка скриптом по пути (fix_results)
     import importlib.util as _ilu
 
@@ -34,8 +41,11 @@ except ModuleNotFoundError:  # standalone-загрузка скриптом по
     to_plain_text = _m.to_plain_text
     plan_merge = _m.plan_merge
     merge_parts = _m.merge_parts
+    extract_title = _m.extract_title
+    sanitize_filename = _m.sanitize_filename
 
 _DOC_SUFFIX_RE = re.compile(r"_\d+$")
+NAMES_MAP_FILENAME = "_names_map.json"  # исходный стебель txt -> имя по теме
 
 
 def normalize_txt_file(path: Path) -> bool:
@@ -116,6 +126,97 @@ def merge_split_documents(txts_root: Path) -> tuple[int, int]:
     return merged, kept_split
 
 
+def _read_title(path: Path) -> tuple[Path, str | None]:
+    """(путь, заголовок|None) — для пула потоков; не бросает исключений."""
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        logger.warning("переименование: пропущен %s: %s", path.name, exc)
+        return path, None
+    try:
+        return path, extract_title(content)
+    except Exception as exc:  # noqa: BLE001 — один кривой файл не валит фазу
+        logger.warning("переименование: тема не извлечена %s: %s", path.name, exc)
+        return path, None
+
+
+def rename_by_theme(txts_root: Path, threads: int = 32) -> int:
+    """Переименовать txt по теме документа (первый похожий на заголовок текст).
+
+    Имя файла становится названием темы; исходное имя -> новое запоминается
+    в ``_names_map.json`` (его читает verify, иначе ок-записи журнала потеряли
+    бы свои txt).  Файлы без уверенного заголовка и уже переименованные
+    (значения карты) не трогаем.  Не бросает исключений.
+    """
+    if not txts_root.is_dir():
+        return 0
+    map_path = txts_root / NAMES_MAP_FILENAME
+    mapping: dict[str, str] = {}
+    if map_path.is_file():
+        try:
+            mapping = json.loads(map_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("карта имён %s не читается, начинаю с чистой: %s", map_path, exc)
+            mapping = {}
+    renamed_new = {v.lower() for v in mapping.values()}
+
+    files = [p for p in txts_root.glob("*.txt") if p.is_file()]
+    taken = {p.stem.lower() for p in files}
+    candidates: list[tuple[Path, str]] = []
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        try:
+            from tqdm import tqdm  # noqa: PLC0415
+
+            it = tqdm(
+                pool.map(_read_title, files),
+                total=len(files), desc="темы txt", unit="файл",
+            )
+        except ImportError:
+            it = pool.map(_read_title, files)
+        for path, title in it:
+            if title is None:
+                continue
+            stem = path.stem
+            if stem in mapping or stem.lower() in renamed_new:
+                continue  # уже переименован (или является новым именем другого)
+            new_stem = sanitize_filename(title)
+            if not new_stem or new_stem.lower() == stem.lower():
+                continue
+            candidates.append((path, new_stem))
+
+    renamed = 0
+    for path, new_stem in candidates:
+        candidate = new_stem
+        n = 2
+        while candidate.lower() in taken:
+            candidate = f"{new_stem} ({n})"
+            n += 1
+        target = path.with_name(f"{candidate}.txt")
+        try:
+            path.replace(target)
+        except OSError as exc:
+            logger.warning("переименование: не записан %s: %s", path.name, exc)
+            continue
+        taken.add(candidate.lower())
+        taken.discard(path.stem.lower())
+        mapping[path.stem] = candidate
+        renamed += 1
+
+    if candidates or not map_path.exists():
+        tmp = map_path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(mapping, ensure_ascii=False, indent=1, sort_keys=True),
+            encoding="utf-8",
+        )
+        tmp.replace(map_path)
+    logger.info(
+        "Переименование по теме: %d файлов из %d (%.0f с)",
+        renamed, len(files), time.perf_counter() - t0,
+    )
+    return renamed
+
+
 def clean_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int]:
     """Только чистка маркеров (без merge): (почищено, всего файлов)."""
     if not txts_root.is_dir():
@@ -144,12 +245,17 @@ def clean_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int]:
     return changed, len(txts)
 
 
-def normalize_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int, int]:
-    """Полная нормализация каталога: (почищено, склеено, всего файлов)."""
+def normalize_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int, int, int]:
+    """Полная нормализация каталога: (почищено, склеено, переименовано, всего).
+
+    Порядок важен: чистка -> склейка разбитых книг -> переименование по теме
+    (тема берётся из полного текста, а не из отдельной части).
+    """
     changed, total = clean_all_txts(txts_root, threads)
     merged, kept = merge_split_documents(txts_root)
     logger.info(
         "Нормализация txt: %d книг склеено, %d разбитых оставлено",
         merged, kept,
     )
-    return changed, merged, total
+    renamed = rename_by_theme(txts_root, threads)
+    return changed, merged, renamed, total

@@ -95,7 +95,11 @@ def _scan_statuses(results_path: Path) -> dict[str, str]:
 
 
 def _txt_bases(txts_root: Path) -> set[str]:
-    """Стебли всех txt: base для book.txt и book_2.txt — book."""
+    """Стебли всех txt: base для book.txt и book_2.txt — book.
+
+    Переименованные по теме файлы сопоставляются с журналом через
+    ``_names_map.json`` (исходный стебель -> новое имя): ок-записи живут
+    под исходными именами входных файлов."""
     bases: set[str] = set()
     if not txts_root.is_dir():
         return bases
@@ -105,6 +109,13 @@ def _txt_bases(txts_root: Path) -> set[str]:
         m = _DOC_SUFFIX_RE.search(stem)
         if m:
             bases.add(_DOC_SUFFIX_RE.sub("", stem))
+    map_path = txts_root / "_names_map.json"
+    if map_path.is_file():
+        try:
+            for orig in json.loads(map_path.read_text(encoding="utf-8")):
+                bases.add(orig)
+        except (OSError, ValueError) as exc:
+            logger.warning("карта имён %s не читается: %s", map_path, exc)
     return bases
 
 

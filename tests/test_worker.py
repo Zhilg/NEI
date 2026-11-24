@@ -147,7 +147,9 @@ def test_new_file_added_to_archive_incrementally(workspace, ocr_stub):
     assert len(_read_results(workspace.output)) == 2
     with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
         names = set(zf.namelist())
-        assert {"txts/first.txt", "txts/second.txt"} <= names
+        # первый файл к моменту второго прогона переименован по теме
+        # стартовой нормализацией, второй ещё под именем входного файла
+        assert {"txts/Первый отчёт.txt", "txts/second.txt"} <= names
         zipped_records = [
             json.loads(line)
             for line in zf.read("results.jsonl").decode("utf-8").splitlines()
@@ -204,8 +206,9 @@ def test_startup_packs_preexisting_output_into_archive(workspace):
 
     _run(Worker())  # вход пустой — обрабатывать нечего
 
+    # стартовая нормализация переименовала файл по теме (первая строка)
     with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        assert "txts/legacy.txt" in zf.namelist()
+        assert "txts/результат из прошлого прогона.txt" in zf.namelist()
 
 
 def test_startup_adds_files_missing_from_existing_archive(workspace, ocr_stub):
@@ -218,8 +221,10 @@ def test_startup_adds_files_missing_from_existing_archive(workspace, ocr_stub):
     _run(Worker())
 
     with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        assert "txts/manual.txt" in zf.namelist()
-        assert "txts/report.txt" in zf.namelist()
+        names = zf.namelist()
+        # ручной файл и report переименованы по теме стартовой нормализацией
+        assert "txts/скопировано вручную.txt" in names
+        assert "txts/Отчёт о работах.txt" in names
 
 
 def test_parallel_zip_rebuild_roundtrip(workspace):

@@ -667,7 +667,9 @@ def test_same_stem_in_nested_folders_survives_restart(workspace, ocr_stub):
     """API/usermanual.pdf и API/API/usermanual.pdf — оба живут в output.
 
     Без предзагрузки _used с диска второй запуск воркера перезаписал бы
-    чужой txt (экспортер пустой после рестарта).
+    чужой txt (экспортер пустой после рестарта).  После переименования по
+    теме первый файл живёт под именем темы, второй — под usermanual_2
+    (карта имён в _names_map.json связывает их с журналом).
     """
     from idp.worker import Worker
 
@@ -681,10 +683,17 @@ def test_same_stem_in_nested_folders_survives_restart(workspace, ocr_stub):
 
     txts = {p.name: p.read_text(encoding="utf-8")
             for p in (workspace.output / "txts").glob("*.txt")}
-    assert "usermanual.txt" in txts, f"первый файл потерялся: {sorted(txts)}"
-    assert "usermanual_2.txt" in txts, f"второй файл перезаписал первый: {sorted(txts)}"
-    assert "Первый файл" in txts["usermanual.txt"]
-    assert "Второй файл" in txts["usermanual_2.txt"]
+    assert "Первый файл.txt" in txts, f"первый файл потерялся: {sorted(txts)}"
+    # второй файл — под usermanual_2: стебель usermanual занят записью в
+    # журнале (экспортер считает занятыми имена из журнала, а не с диска)
+    assert "usermanual_2.txt" in txts, f"второй файл не записан: {sorted(txts)}"
+    assert "Содержимое первого файла" in txts["Первый файл.txt"]
+    assert "Содержимое второго файла" in txts["usermanual_2.txt"]
+    # исходное имя -> тема записаны в карту (verify свяжет с журналом)
+    names_map = json.loads(
+        (workspace.output / "txts" / "_names_map.json").read_text(encoding="utf-8")
+    )
+    assert names_map.get("usermanual") == "Первый файл"
 
 
 # ---------------------------------------------------------------------------
@@ -810,3 +819,138 @@ def test_reflow_keeps_tables_lists_and_headings_intact():
             assert i + 1 < len(lines) and "Длина" in lines[i + 1], (
                 "строки таблицы склеились с соседними"
             )
+
+
+# ---------------------------------------------------------------------------
+# Чистка 'не-основного текста': шапки УДК, списки литературы/источников
+# ---------------------------------------------------------------------------
+
+from idp.plaintext import (  # noqa: E402
+    extract_title,
+    sanitize_filename,
+    strip_references,
+)
+from idp.txt_normalize import rename_by_theme  # noqa: E402
+
+
+def test_strip_references_cuts_list_at_end():
+    """Список литературы в конце документа вырезается целиком."""
+    body = "В работе рассматриваются основные подходы к анализу данных. " * 20
+    text = (
+        "Методы исследования\n"
+        "\n"
+        + body
+        + "\n\n"
+        "Список использованных источников\n"
+        "1. Иванов И.И. Избранные труды. М., 1985. 234 с.\n"
+        "2. Петров П.П. Основы науки. Л., 1990. 150 с.\n"
+        "3. Сидоров С.С. Статистика. М., 1999. 88 с.\n"
+        "4. Кузнецов К.К. Анализ. СПб., 2001. 300 с.\n"
+        "5. Волков В.В. Методы. М., 2005. 120 с.\n"
+    )
+    out = strip_references(text)
+    assert "Список использованных источников" not in out
+    assert "Иванов И.И." not in out
+    assert "основные подходы" in out
+
+
+def test_strip_references_keeps_word_literature_mid_text():
+    """Слово «литература» отдельной строкой посреди текста не трогаем."""
+    body = ("В этом разделе даётся обзор литературы по теме исследования. "
+            "Рассматриваются ключевые работы. ") * 10
+    text = (
+        "Введение в предмет\n"
+        "\n"
+        + body
+        + "\n\n"
+        "Литература\n"
+        "\n"
+        "Далее идёт обычный абзац без списка источников, он должен остаться. "
+        "Продолжение абзаца с пояснениями."
+    )
+    out = strip_references(text)
+    assert "Литература" in out
+    assert "обычный абзац без списка источников" in out
+
+
+def test_to_plain_text_strips_udk_in_header_only():
+    """«УДК/ГРНТИ/ББК» вырезаются в шапке, но не в середине текста."""
+    body = "Документ описывает методику расчёта систем отопления. " * 10
+    text = (
+        "УДК 338.245\n"
+        "ГРНТИ 06.58.01\n"
+        "ББК 22.1я7\n"
+        "\n"
+        "Методика расчёта теплоснабжения\n"
+        "\n"
+        + body
+        + "\n\n"
+        "В приложении приводится классификатор УДК 621.3 для справок."
+    )
+    out = to_plain_text(text)
+    assert "УДК 338.245" not in out
+    assert "ГРНТИ 06.58.01" not in out
+    assert "ББК 22.1я7" not in out
+    assert "Методика расчёта теплоснабжения" in out
+    assert "УДК 621.3" in out  # упоминание в середине — содержание, оставляем
+
+
+def test_extract_title_prefers_real_heading():
+    assert extract_title("Война и мир\nТом первый\n\nНаташа вышла...") == "Война и мир"
+    # «Глава 1» без текста — не заголовок документа
+    assert extract_title("Глава 1\n\nТекст главы здесь. Ещё текст.") is None
+    # строки-обрывы предложений (с точкой на конце) — не заголовок
+    assert extract_title("Это был ясный морозный день. Далее текст. " * 5) is None
+    # короткий мусор и страницы пропускаются
+    assert extract_title("Страница 1 из 5\nУДК 123\n\nНастоящий заголовок") == "Настоящий заголовок"
+    assert extract_title("ab\n\nТекст.") is None
+
+
+def test_sanitize_filename():
+    assert sanitize_filename('Методика: расчет "тепла"/трубы?') == "Методика расчет теплатрубы"
+    assert sanitize_filename("A" * 200) == "A" * 120
+    assert sanitize_filename("CON") == "_CON"
+    assert sanitize_filename("...текст...") == "текст"
+
+
+def test_rename_by_theme_and_names_map(tmp_path):
+    """Переименование по теме: имя = заголовок, карта имён пишется, коллизии
+    не затираются, повторный прогон идемпотентен."""
+    txts = tmp_path / "txts"
+    txts.mkdir()
+    (txts / "scan0001.txt").write_text(
+        "Методика расчёта теплоснабжения\n\nТекст документа. " * 10, encoding="utf-8"
+    )
+    (txts / "scan0002.txt").write_text(
+        "Методика расчёта теплоснабжения\n\nДругой документ. " * 10, encoding="utf-8"
+    )
+    (txts / "plain.txt").write_text(
+        "Просто текст без заголовка, начинается с предложения. " * 10, encoding="utf-8"
+    )
+
+    assert rename_by_theme(txts, threads=4) == 2
+    names = sorted(p.name for p in txts.glob("*.txt"))
+    assert "Методика расчёта теплоснабжения.txt" in names
+    assert "Методика расчёта теплоснабжения (2).txt" in names
+    assert "plain.txt" in names  # заголовка нет — имя сохранилось
+    names_map = json.loads((txts / "_names_map.json").read_text(encoding="utf-8"))
+    assert names_map["scan0001"] == "Методика расчёта теплоснабжения"
+    assert names_map["scan0002"] == "Методика расчёта теплоснабжения (2)"
+
+    # второй прогон ничего не переименовывает (уже переименованные пропускаем)
+    assert rename_by_theme(txts, threads=4) == 0
+    assert sorted(p.name for p in txts.glob("*.txt")) == names
+
+
+def test_verify_matches_renamed_txt_via_names_map(workspace):
+    """ok-запись журнала находит переименованный по теме txt через карту."""
+    (workspace.output / "txts").mkdir()
+    (workspace.output / "txts" / "scan0001.txt").write_text(
+        "Тема документа\n\nСодержание. " * 5, encoding="utf-8"
+    )
+    rename_by_theme(workspace.output / "txts", threads=2)
+    _write_rec(workspace.output, "scan0001.pdf", "ok")
+
+    assert verify_reprocess.cmd_verify(workspace.input, workspace.output) == 0
+    state = json.loads((workspace.output / verify_reprocess.STATE_NAME).read_text(encoding="utf-8"))
+    assert state["retry"] == [] and state["quarantined"] == {}
