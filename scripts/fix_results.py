@@ -64,6 +64,7 @@ _spec_tn = importlib.util.spec_from_file_location(
 _txt_normalize = importlib.util.module_from_spec(_spec_tn)
 _spec_tn.loader.exec_module(_txt_normalize)
 clean_all_txts = _txt_normalize.clean_all_txts
+clean_and_name_txts = _txt_normalize.clean_and_name_txts
 merge_split_documents = _txt_normalize.merge_split_documents
 
 _DOC_SUFFIX_RE = re.compile(r"_\d+$")
@@ -446,9 +447,23 @@ def phase_format(input_root: Path, output_root: Path) -> None:
     logger.info("Фаза format завершена за %.1f с", time.perf_counter() - t0)
 
 
+def phase_finalize(input_root: Path, output_root: Path) -> None:
+    """Только удалить неосновной текст и обновить названия файлов по теме."""
+    txts_root = output_root / "txts"
+    if not txts_root.is_dir():
+        logger.info("txts/ нет — нечего обрабатывать.")
+        return
+    t0 = time.perf_counter()
+    changed, renamed, total = clean_and_name_txts(txts_root, TXT_THREADS)
+    logger.info(
+        "Финальная обработка готова: %d txt, почищено %d, переименовано %d за %.0f с",
+        total, changed, renamed, time.perf_counter() - t0,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=["pdf-requeue", "merge", "format", "all"])
+    parser.add_argument("phase", choices=["pdf-requeue", "merge", "format", "finalize", "all"])
     parser.add_argument("--input", type=Path, default=None, help="input root (default: IDP_INPUT_ROOT)")
     parser.add_argument("--output", type=Path, default=None, help="output root (default: IDP_OUTPUT_ROOT)")
     args = parser.parse_args()
@@ -468,6 +483,8 @@ def main() -> int:
         phase_merge(input_root, output_root)
     if args.phase in ("format", "all"):
         phase_format(input_root, output_root)
+    if args.phase == "finalize":
+        phase_finalize(input_root, output_root)
     return 0
 
 

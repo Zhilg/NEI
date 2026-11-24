@@ -112,27 +112,47 @@ _DEHYPHEN_RE = re.compile(r"(?<![-\s])[-\u00ad]\n(?=[а-яёa-z])")
 _SENTENCE_END_RE = re.compile(r"[.!?…:;»)\]]$")
 # Маркер списка — строку со списком не приклеиваем к предыдущей.
 _LIST_START_RE = re.compile(r"^(?:[-*•‣]|\d{1,3}[.)])\s")
+# Типовая шапка стандарта — только в начале документа. Упоминания ГОСТ внутри
+# содержательного текста этот фильтр не затрагивает.
+_COVER_BOILERPLATE_RE = re.compile(
+    r"^(?:издание\s+официальное\b|дата\s+введения\b|"
+    r"гост(?:\s+\d|\s*$)|межгосударственный\s+стандарт\b|"
+    r"единая\s+система\s+конструкторской\s+документации\b|"
+    r"unified\s+system\s+\w+\s+design\s+documentation\b|"
+    r"группа\s+[а-яa-z]\d+\b|[мm][кk][сc]\s*\d)",
+    re.IGNORECASE,
+)
+_STANDARD_CODE_LINE_RE = re.compile(r"^\d+(?:\.\d+)+\s*-\s*\d+$")
 
 
 def _reflow(lines: list[str]) -> list[str]:
-    """Склеить разорванные строки в абзацы.
+    """Склеить разорванные строки за линейное время.
 
-    В узкоколоночных PDF выгрузках каждая строка обрывается по ширине
-    колонки («Один / из / основоположников»), а не по смыслу.  Склеиваем,
-    пока предыдущая строка не заканчивается концом предложения.  Осторожные
-    исключения, когда склейку НЕ делаем: перед заголовком главы, маркером
-    жанра, пунктом списка, строкой В ВЕРХНЕМ РЕГИСТРЕ, а также рядом со
-    строками таблиц (двойные пробелы после расплющивания |...|) — чтобы не
-    склеивать строки стихов и табличные данные.
+    Признаки уже собранного абзаца хранятся в счётчиках, а части — в списке.
+    Ни поиск по всему буферу, ни повторное копирование строки на каждой новой
+    строке не выполняются: на TXT в сотни мегабайт старый вариант был O(n²).
     """
     out: list[str] = []
-    buf = ""
+    buf_lines: list[str] = []
+    buf_len = 0
+    buf_ends_sentence = False
+    buf_has_double_space = False
+    buf_is_list = False
+    buf_has_lower = False
+    buf_has_cased = False
 
     def flush() -> None:
-        nonlocal buf
-        if buf:
-            out.append(buf)
-            buf = ""
+        nonlocal buf_lines, buf_len, buf_ends_sentence, buf_has_double_space
+        nonlocal buf_is_list, buf_has_lower, buf_has_cased
+        if buf_lines:
+            out.append(" ".join(buf_lines))
+            buf_lines = []
+        buf_len = 0
+        buf_ends_sentence = False
+        buf_has_double_space = False
+        buf_is_list = False
+        buf_has_lower = False
+        buf_has_cased = False
 
     for ln in lines:
         s = ln.strip()
@@ -141,24 +161,43 @@ def _reflow(lines: list[str]) -> list[str]:
             if out and out[-1] != "":
                 out.append("")
             continue
-        if not buf:
-            buf = s
+        if not buf_lines:
+            buf_lines = [s]
+            buf_len = len(s)
+            buf_ends_sentence = bool(_SENTENCE_END_RE.search(s))
+            buf_has_double_space = "  " in s
+            buf_is_list = bool(_LIST_START_RE.match(s))
+            buf_has_lower = s.upper() != s
+            buf_has_cased = buf_has_lower or s.lower() != s
             continue
+        buf_is_upper = buf_has_cased and not buf_has_lower
         if (
-            _SENTENCE_END_RE.search(buf)
-            or "  " in buf
+            buf_ends_sentence
+            or buf_has_double_space
             or "  " in s
             or _CHAPTER_START_RE.match(s)
             or _ARTICLE_MARKER_RE.match(s)
             or _LIST_START_RE.match(s)
-            or (_LIST_START_RE.match(buf) and s[:1].isupper())
+            or (buf_is_list and s[:1].isupper())
             or (len(s) >= 4 and s.isupper())
-            or (len(buf) >= 4 and buf.isupper())
+            or (buf_len >= 4 and buf_is_upper)
         ):
             flush()
-            buf = s
+            buf_lines = [s]
+            buf_len = len(s)
+            buf_ends_sentence = bool(_SENTENCE_END_RE.search(s))
+            buf_has_double_space = "  " in s
+            buf_is_list = bool(_LIST_START_RE.match(s))
+            buf_has_lower = s.upper() != s
+            buf_has_cased = buf_has_lower or s.lower() != s
             continue
-        buf = f"{buf} {s}"
+        buf_lines.append(s)
+        buf_len += len(s) + 1
+        buf_ends_sentence = bool(_SENTENCE_END_RE.search(s))
+        buf_has_double_space = buf_has_double_space or "  " in s
+        s_has_lower = s.upper() != s
+        buf_has_lower = buf_has_lower or s_has_lower
+        buf_has_cased = buf_has_cased or s_has_lower or s.lower() != s
     flush()
     return out
 # Заголовок оглавления и строка оглавления определены выше
@@ -310,6 +349,18 @@ def _flatten_line(s: str) -> str:
     return html.unescape(s).strip()
 
 
+def _looks_like_spaced_ocr_garbage(s: str) -> bool:
+    """Строка преимущественно из одиночных букв/цифр: «М Е Ж...», «2 .1 0 9»."""
+    if len(s) < 7 or " " not in s:
+        return False
+    tokens = [t.strip(".,:;—–-_*()[]") for t in s.split()]
+    tokens = [t for t in tokens if t]
+    if len(tokens) < 4:
+        return False
+    singles = sum(len(t) == 1 and t.isalnum() for t in tokens)
+    return singles >= 4 and singles / len(tokens) >= 0.45
+
+
 def to_plain_text(text: str) -> str:
     """Привести markdown/HTML-мусор к чистому plain text."""
     if not text:
@@ -324,7 +375,7 @@ def to_plain_text(text: str) -> str:
     text = _IMAGE_ANN_INLINE_RE.sub("", text)
     out: list[str] = []
     in_code_fence = False
-    head_lines = 0  # непустых содержательных строк сверху (для УДК-фильтра)
+    head_lines = 0  # содержательные строки сверху (УДК и титульная шапка)
     for raw in text.split("\n"):
         s = raw.strip()
         if s.startswith("```"):
@@ -337,6 +388,12 @@ def to_plain_text(text: str) -> str:
             continue
         if _IMAGE_ANN_LINE_RE.match(s):
             continue
+        if not in_code_fence and _looks_like_spaced_ocr_garbage(s):
+            continue  # «ГО СТ 2 .1 0 9», «М Е Ж Г О С У Д...»
+        if not in_code_fence and head_lines < 30 and (
+            _COVER_BOILERPLATE_RE.match(s) or _STANDARD_CODE_LINE_RE.fullmatch(s)
+        ):
+            continue  # титульные реквизиты стандарта, не ссылки внутри документа
         if not in_code_fence and head_lines < 15 and _UDK_HEADER_RE.match(s):
             continue  # «УДК 338.245», «ГРНТИ ...», «ББК ...» — только в шапке
         if not in_code_fence and _PAGE_MARK_RE.match(s):

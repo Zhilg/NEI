@@ -47,7 +47,7 @@ from idp.result_writer import ResultWriter
 from idp.stats_writer import FileTimer, StatsWriter
 from idp.textlayer import extract_clean_text_layer
 from idp.txt_export import TxtExporter
-from idp.txt_normalize import normalize_all_txts
+from idp.txt_normalize import clean_and_name_txts
 from idp.vlm_client import get_vl_endpoints, reconstruct_markdown, strip_bbox_annotations
 
 logger = logging.getLogger(__name__)
@@ -699,14 +699,12 @@ class Worker:
         txt_exporter = TxtExporter()
         self._stats_writer = StatsWriter(settings.output_root / "stats.jsonl")
         self._processed = self._load_processed()
-        # Все txt результата — сразу в нормализованном виде: файлы от старых
-        # прогонов (маркеры страниц, оглавления, колонтитулы, книги, разбитые
-        # на части) чистим и склеиваем автоматически при старте — без ручного
-        # запуска фаз оркестратора.
+        # При старте только удаляем неосновной текст и обновляем названия
+        # по теме. Склейка частей и VLM-reflow здесь больше не запускаются.
         txts_root = settings.output_root / "txts"
         if txts_root.is_dir() and any(txts_root.glob("*.txt")):
             await asyncio.to_thread(
-                normalize_all_txts, txts_root, settings.worker_threads
+                clean_and_name_txts, txts_root, settings.worker_threads
             )
         # Карта переименования по теме (после нормализации — она её пополняет):
         # переработанный файл перезапишет свой txt под ТЕМ ЖЕ новым именем.

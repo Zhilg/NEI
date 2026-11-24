@@ -308,3 +308,14 @@ def normalize_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int, in
     )
     renamed = rename_by_theme(txts_root, threads)
     return changed, merged, renamed, total
+
+
+def clean_and_name_txts(txts_root: Path, threads: int = 32) -> tuple[int, int, int]:
+    """Только оставшиеся операции: чистка текста и названия по теме.
+
+    Склейка, VLM-reflow и форматирование results.jsonl сюда не входят.
+    Возвращает (почищено, переименовано, всего файлов).
+    """
+    changed, total = clean_all_txts(txts_root, threads)
+    renamed = rename_by_theme(txts_root, threads)
+    return changed, renamed, total

@@ -472,8 +472,8 @@ def test_worker_startup_normalizes_dirty_txts(workspace):
     assert "Пьер Безухов" in out
 
 
-def test_worker_startup_merges_all_split_documents(workspace):
-    """При нормализации склеиваются и книги, и сборники — без исключений."""
+def test_worker_startup_does_not_merge_split_documents(workspace):
+    """При старте остаются только чистка и названия, склейка не запускается."""
     txts = workspace.output / "txts"
     txts.mkdir()
     sentence = (
@@ -491,12 +491,12 @@ def test_worker_startup_merges_all_split_documents(workspace):
     (txts / "collection_3.txt").write_text(story, encoding="utf-8")
     _run(Worker())
 
-    merged = (txts / "chronicle.txt").read_text(encoding="utf-8")
-    assert "Глава 1" in merged and "Глава 2" in merged
-    assert not (txts / "chronicle_2.txt").exists()
+    first = (txts / "chronicle.txt").read_text(encoding="utf-8")
+    assert "Глава 1" in first and "Глава 2" not in first
+    assert (txts / "chronicle_2.txt").exists()
     assert (txts / "collection.txt").exists()
-    assert not (txts / "collection_2.txt").exists()
-    assert not (txts / "collection_3.txt").exists()
+    assert (txts / "collection_2.txt").exists()
+    assert (txts / "collection_3.txt").exists()
 
 
 def test_merge_glues_every_group_regardless_of_content(tmp_path):
