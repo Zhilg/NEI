@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 try:  # обычный путь — внутри пакета idp
     from idp.plaintext import (
         extract_title,
+        is_probable_title,
         merge_parts,
         sanitize_filename,
         to_plain_text,
@@ -40,6 +41,7 @@ except ModuleNotFoundError:  # standalone-загрузка скриптом по
     to_plain_text = _m.to_plain_text
     merge_parts = _m.merge_parts
     extract_title = _m.extract_title
+    is_probable_title = _m.is_probable_title
     sanitize_filename = _m.sanitize_filename
 
 _DOC_SUFFIX_RE = re.compile(r"_\d+$")
@@ -165,9 +167,10 @@ def merge_split_documents(txts_root: Path, threads: int = 16) -> tuple[int, int]
 
 
 def _read_title(path: Path) -> tuple[Path, str | None]:
-    """(путь, заголовок|None) — для пула потоков; не бросает исключений."""
+    """(путь, заголовок|None) — читаем только начало, а не весь большой TXT."""
     try:
-        content = path.read_text(encoding="utf-8", errors="replace")
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            content = f.read(65536)
     except OSError as exc:
         logger.warning("переименование: пропущен %s: %s", path.name, exc)
         return path, None
@@ -179,12 +182,10 @@ def _read_title(path: Path) -> tuple[Path, str | None]:
 
 
 def rename_by_theme(txts_root: Path, threads: int = 32) -> int:
-    """Переименовать txt по теме документа (первый похожий на заголовок текст).
+    """Исправить имена по содержимому, сохраняя связь с исходным именем.
 
-    Имя файла становится названием темы; исходное имя -> новое запоминается
-    в ``_names_map.json`` (его читает verify, иначе ок-записи журнала потеряли
-    бы свои txt).  Файлы без уверенного заголовка и уже переименованные
-    (значения карты) не трогаем.  Не бросает исключений.
+    Хорошие автоматические имена не трогаем. У мусорного имени ищем нормальный
+    заголовок; если его нет, возвращаем исходный stem из ``_names_map.json``.
     """
     if not txts_root.is_dir():
         return 0
@@ -196,38 +197,44 @@ def rename_by_theme(txts_root: Path, threads: int = 32) -> int:
         except (OSError, ValueError) as exc:
             logger.warning("карта имён %s не читается, начинаю с чистой: %s", map_path, exc)
             mapping = {}
-    renamed_new = {v.lower() for v in mapping.values()}
+    original_by_new = {value.casefold(): key for key, value in mapping.items()}
 
     files = [p for p in txts_root.glob("*.txt") if p.is_file()]
-    taken = {p.stem.lower() for p in files}
-    candidates: list[tuple[Path, str]] = []
+    taken = {p.stem.casefold() for p in files}
+    pending: dict[Path, str] = {}
+    for path in files:
+        original = original_by_new.get(path.stem.casefold())
+        if original is not None and is_probable_title(path.stem):
+            continue  # уже хорошее автоматическое имя
+        pending[path] = original or path.stem
+
+    candidates: list[tuple[Path, str, str, bool]] = []
     t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
         try:
             from tqdm import tqdm  # noqa: PLC0415
 
             it = tqdm(
-                pool.map(_read_title, files),
-                total=len(files), desc="темы txt", unit="файл",
+                pool.map(_read_title, pending),
+                total=len(pending), desc="темы txt", unit="файл",
             )
         except ImportError:
-            it = pool.map(_read_title, files)
+            it = pool.map(_read_title, pending)
         for path, title in it:
-            if title is None:
+            original = pending[path]
+            restore = title is None and original != path.stem
+            if title is None and not restore:
                 continue
-            stem = path.stem
-            if stem in mapping or stem.lower() in renamed_new:
-                continue  # уже переименован (или является новым именем другого)
-            new_stem = sanitize_filename(title)
-            if not new_stem or new_stem.lower() == stem.lower():
+            new_stem = original if restore else sanitize_filename(title or "")
+            if not new_stem or new_stem.casefold() == path.stem.casefold():
                 continue
-            candidates.append((path, new_stem))
+            candidates.append((path, new_stem, original, restore))
 
-    renamed = 0
-    for path, new_stem in candidates:
+    renamed = restored = 0
+    for path, new_stem, original, restore in candidates:
         candidate = new_stem
         n = 2
-        while candidate.lower() in taken:
+        while candidate.casefold() in taken:
             candidate = f"{new_stem} ({n})"
             n += 1
         target = path.with_name(f"{candidate}.txt")
@@ -236,12 +243,13 @@ def rename_by_theme(txts_root: Path, threads: int = 32) -> int:
         except OSError as exc:
             logger.warning("переименование: не записан %s: %s", path.name, exc)
             continue
-        taken.add(candidate.lower())
-        taken.discard(path.stem.lower())
-        mapping[path.stem] = candidate
+        taken.add(candidate.casefold())
+        taken.discard(path.stem.casefold())
+        mapping[original] = candidate
         renamed += 1
+        restored += restore
 
-    if candidates or not map_path.exists():
+    if renamed or not map_path.exists():
         tmp = map_path.with_suffix(".json.tmp")
         tmp.write_text(
             json.dumps(mapping, ensure_ascii=False, indent=1, sort_keys=True),
@@ -249,8 +257,9 @@ def rename_by_theme(txts_root: Path, threads: int = 32) -> int:
         )
         tmp.replace(map_path)
     logger.info(
-        "Переименование по теме: %d файлов из %d (%.0f с)",
-        renamed, len(files), time.perf_counter() - t0,
+        "Переименование по теме: %d файлов, восстановлено исходных имён %d "
+        "(проверено %d из %d, %.0f с)",
+        renamed, restored, len(pending), len(files), time.perf_counter() - t0,
     )
     return renamed
 

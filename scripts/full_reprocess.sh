@@ -5,10 +5,11 @@
 #
 # Только оставшиеся операции:
 #   1. git pull + сборка образа воркера
-#   2. удаление неосновного текста из txts + названия файлов по теме
-#   3. worker снова в работе
+#   2. явно битый OCR — на повторную обработку исходников
+#   3. удаление неосновного текста из txts + названия файлов по теме
+#   4. worker снова в работе
 #
-# Переработка input, merge, reflow и старый format здесь больше не запускаются.
+# Merge, reflow и старый format здесь не запускаются.
 # Весь вывод дублируется в logs/reprocess_<время>.log.
 # REPROCESS_QUIET=1 — писать только в файл, в консоль тишина.
 # Управление: scripts/reprocess_ctl.sh {start|stop|status|logs}.
@@ -38,7 +39,7 @@ finish() {
 trap finish ERR
 trap 'rm -f "$PID_FILE"' EXIT
 
-TOTAL_STEPS=3
+TOTAL_STEPS=4
 STEP_NO=0
 STEP_STARTED=$SECONDS
 finish_step() {
@@ -65,6 +66,10 @@ step "git pull + сборка образа"
 git pull
 $COMPOSE build worker
 $COMPOSE stop worker || true
+
+step "поиск явно битого OCR и постановка на переработку"
+$COMPOSE run --rm --no-deps worker \
+    python /workspace/scripts/requeue_bad_ocr.py
 
 step "чистка неосновного текста + названия по теме"
 $COMPOSE run --rm --no-deps worker \

@@ -123,6 +123,79 @@ _COVER_BOILERPLATE_RE = re.compile(
     re.IGNORECASE,
 )
 _STANDARD_CODE_LINE_RE = re.compile(r"^\d+(?:\.\d+)+\s*-\s*\d+$")
+_ADMIN_HEADER_START_RE = re.compile(
+    r"^(?:министерство\s+обороны\b|"
+    r"федеральное\s+государственное\s+(?:каз[её]нное\s+)?"
+    r"(?:военное\s+)?образовательное\s+учреждение\b)",
+    re.IGNORECASE,
+)
+_ADMIN_HEADER_END_RE = re.compile(r"^(?:согласовано|утверждаю)\b", re.IGNORECASE)
+_ADMIN_METADATA_RE = re.compile(
+    r"^(?:согласовано|утверждаю|экз\.?\s*№|рег\.?\s*№|министерств[оа]\s+обороны\b)",
+    re.IGNORECASE,
+)
+_PERIODICAL_HEADER_RE = re.compile(
+    r"^(?:[«\"']?зарубежное\s+военное\s+обозрение[»\"']?"
+    r"(?:\s*№\s*\d{1,2}/\d{4})?|issn\b.*|"
+    r"арубежное|оенное|бозрение|з\s+в\s+о|\d{1,2}\.\s*\d{4})$",
+    re.IGNORECASE,
+)
+_CONTENT_START_RE = re.compile(
+    r"^(?:основные\s+сокращения(?:\s+и\s+обозначения)?|предисловие|введение|"
+    r"глава\s+(?:1|первая)\b|1[.)]\s+\S|1\s+[А-ЯA-ZЁ])",
+    re.IGNORECASE,
+)
+_TOC_LEADER_RE = re.compile(r"(?:\.{3,}|…|·{3,}|‒{3,}|–{3,}|—{3,})")
+
+
+def _strip_admin_header_blocks(text: str) -> str:
+    """Удалить ведомственную шапку целиком до подписи согласования."""
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if i < 40 and _ADMIN_HEADER_START_RE.match(lines[i].strip()):
+            end = None
+            for j in range(i + 1, min(i + 31, len(lines))):
+                if _ADMIN_HEADER_END_RE.match(lines[j].strip()):
+                    end = j
+                    break
+            if end is not None:
+                i = end + 1
+                continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
+def _strip_front_matter(text: str) -> str:
+    """Отбросить титул, аннотацию и оглавление только при явном начале текста.
+
+    Без повторного содержательного заголовка после оглавления ничего не режем:
+    лучше оставить шапку, чем удалить начало документа по неуверенной эвристике.
+    """
+    lines = text.split("\n")
+    for i, line in enumerate(lines[:250]):
+        if not _TOC_HEADING_RE.match(line.strip()):
+            continue
+        toc_entries = 0
+        for j in range(i + 1, min(i + 251, len(lines))):
+            s = lines[j].strip()
+            if not s or _PAGE_MARK_RE.match(s) or _PAGE_DASH_RE.match(s):
+                continue
+            if _TOC_ENTRY_RE.match(s) or _TOC_LEADER_RE.search(s):
+                toc_entries += 1
+                continue
+            if toc_entries < 1 or not _CONTENT_START_RE.match(s):
+                continue
+            next_content = next(
+                (lines[k].strip() for k in range(j + 1, min(j + 8, len(lines))) if lines[k].strip()),
+                "",
+            )
+            if _TOC_ENTRY_RE.match(next_content) or _TOC_LEADER_RE.search(next_content):
+                continue  # это ещё пункт оглавления, а не повторный заголовок в тексте
+            return "\n".join(lines[j:])
+    return text
 
 
 def _reflow(lines: list[str]) -> list[str]:
@@ -275,6 +348,57 @@ _RESERVED_NAME_RE = re.compile(
     r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", re.IGNORECASE
 )
 _INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_TITLE_WORD_RE = re.compile(r"[^\W\d_]+(?:[-’'][^\W\d_]+)*|\d+(?:[.-]\d+)*")
+_TITLE_SENTENCE_START_RE = re.compile(
+    r"^(?:мы|вы|они|он|она|это|этот|эта|в\s+том\s+числе|также|кроме\s+того)\b",
+    re.IGNORECASE,
+)
+_TITLE_VERB_END_RE = re.compile(r"(?:ать|ять|еть|ить|аем|яем|уем|или|ели)$", re.IGNORECASE)
+_TITLE_VOWELS = frozenset("аеёиоуыэюяaeiouy")
+_TITLE_ALLOWED_PUNCT = frozenset(".,:;!?…—–-()[]«»\"'")
+_TITLE_BOILERPLATE = frozenset({
+    "утверждаю", "согласовано", "приложение", "содержание", "оглавление",
+    "межгосударственный стандарт", "стандарт", "издание официальное", "текст",
+})
+
+
+def is_probable_title(s: str) -> bool:
+    """Консервативно отличить заголовок от OCR-абракадабры и предложения."""
+    s = s.strip()
+    if not 3 <= len(s) <= 120:
+        return False
+    if _TITLE_BAD_END_RE.search(s) or _TITLE_NUMERIC_RE.match(s) or s.isdigit():
+        return False
+    if s.strip(" .—–-").casefold() in _TITLE_BOILERPLATE:
+        return False
+    if (
+        _TITLE_SENTENCE_START_RE.match(s)
+        or "," in s
+        or ";" in s
+        or re.search(r"[.!?…]\s+\S", s)
+    ):
+        return False  # два предложения или новостной обрывок — не название
+    if any(not (c.isalnum() or c.isspace() or c in _TITLE_ALLOWED_PUNCT) for c in s):
+        return False
+    words = _TITLE_WORD_RE.findall(s)
+    alpha_words = [w for w in words if any(c.isalpha() for c in w)]
+    if len(words) > 12 or not any(len(w) >= 3 for w in alpha_words):
+        return False
+    first_alpha = next((c for c in s if c.isalpha()), "")
+    if first_alpha and first_alpha.islower():
+        return False
+    for word in alpha_words:
+        if len(word) > 40:
+            return False
+        if len(word) > 6 and _TITLE_VERB_END_RE.search(word):
+            return False
+        for part in re.split(r"[-’']", word):
+            if len(part) >= 4 and not part.isupper():
+                if any(c.isupper() for c in part[1:]):
+                    return False  # SlliSiiaSSSP, ITvr — случайный регистр OCR
+                if not any(c.casefold() in _TITLE_VOWELS for c in part):
+                    return False  # длинные бессмысленные согласные
+    return True
 
 
 def extract_title(text: str, max_scan: int = 12) -> str | None:
@@ -306,12 +430,10 @@ def extract_title(text: str, max_scan: int = 12) -> str | None:
             continue
         if _CHAPTER_START_RE.match(s) and len(_CHAPTER_START_RE.sub("", s).strip()) < 3:
             continue  # «Глава 1» без текста — не заголовок документа
-        if _TITLE_BAD_END_RE.search(s) or _TITLE_NUMERIC_RE.match(s) or s.isdigit():
-            continue
         # «Название (стр. 1)», «Название — страница 3» — хвосты-ссылки на
         # страницы в заголовок не включаем.
         s = _TITLE_PAGE_TAIL_RE.sub("", s).strip(" .")
-        if len(s) >= 3:
+        if is_probable_title(s):
             return s
     return None
 
@@ -368,11 +490,14 @@ def to_plain_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\f", "\n")
     # Склейка перенесённых слов («Пери-\нод» -> «Период») — до построчной
     # обработки, иначе части слова пойдут разными строками.
+    text = text.replace("\u00ad", "")
     text = _DEHYPHEN_RE.sub("", text)
     # HANDWRITTEN-обёртки: внутри текст, наружу его и выпускаем.
     text = _HANDWRITTEN_RE.sub(r"\1", text)
     # Image-аннотации в середине строки — без содержимого, вырезаем.
     text = _IMAGE_ANN_INLINE_RE.sub("", text)
+    text = _strip_admin_header_blocks(text)
+    text = _strip_front_matter(text)
     out: list[str] = []
     in_code_fence = False
     head_lines = 0  # содержательные строки сверху (УДК и титульная шапка)
@@ -391,9 +516,12 @@ def to_plain_text(text: str) -> str:
         if not in_code_fence and _looks_like_spaced_ocr_garbage(s):
             continue  # «ГО СТ 2 .1 0 9», «М Е Ж Г О С У Д...»
         if not in_code_fence and head_lines < 30 and (
-            _COVER_BOILERPLATE_RE.match(s) or _STANDARD_CODE_LINE_RE.fullmatch(s)
+            _COVER_BOILERPLATE_RE.match(s)
+            or _STANDARD_CODE_LINE_RE.fullmatch(s)
+            or _ADMIN_METADATA_RE.match(s)
+            or _PERIODICAL_HEADER_RE.match(s)
         ):
-            continue  # титульные реквизиты стандарта, не ссылки внутри документа
+            continue  # реквизиты стандарта, ведомства или журнала в шапке
         if not in_code_fence and head_lines < 15 and _UDK_HEADER_RE.match(s):
             continue  # «УДК 338.245», «ГРНТИ ...», «ББК ...» — только в шапке
         if not in_code_fence and _PAGE_MARK_RE.match(s):
