@@ -7,8 +7,8 @@
 - фаза format оркестратора (scripts/fix_results.py) — тем же кодом.
 
 Нормализация = to_plain_text (маркеры «Страница X из Y», колонтитулы,
-оглавления, reflow) + склейка книг, разбитых на части (base.txt,
-base_2.txt, ...), если это не газета/сборник (plan_merge).
+оглавления, reflow) + безусловная склейка ВСЕХ разбитых файлов
+(base.txt, base_2.txt, ...), включая книги, газеты и сборники.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ try:  # обычный путь — внутри пакета idp
     from idp.plaintext import (
         extract_title,
         merge_parts,
-        plan_merge,
         sanitize_filename,
         to_plain_text,
     )
@@ -39,7 +38,6 @@ except ModuleNotFoundError:  # standalone-загрузка скриптом по
     _m = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_m)
     to_plain_text = _m.to_plain_text
-    plan_merge = _m.plan_merge
     merge_parts = _m.merge_parts
     extract_title = _m.extract_title
     sanitize_filename = _m.sanitize_filename
@@ -76,43 +74,38 @@ def normalize_txt_file(path: Path) -> bool:
 
 
 def _merge_one_group(key: str, paths: list[Path], txts_root: Path) -> str:
-    """Склеить одну группу.  Возвращает 'merged' | 'kept' | 'skipped'.
+    """Безусловно склеить одну группу. Возвращает 'merged' | 'skipped'.
 
-    Не бросает исключений: одна недочитанная часть не валит фазу — группа
-    остаётся как есть.
+    Тип и длина текста больше не влияют на решение: книги, газеты, сборники
+    и короткие части объединяются одинаково. Только ошибка ввода-вывода может
+    оставить группу несклеенной; она явно попадает в лог и итоговый счётчик.
     """
-    parts_paths = paths
-
     def sort_key(p: Path) -> tuple[int, str]:
         m = _DOC_SUFFIX_RE.search(p.stem)
         return (int(m.group(0)[1:]) if m else 1), p.name
 
-    parts_paths = sorted(parts_paths, key=sort_key)
+    parts_paths = sorted(paths, key=sort_key)
     try:
         parts = [p.read_text(encoding="utf-8", errors="replace") for p in parts_paths]
-    except OSError as exc:
-        # Одна недочитанная часть не валит фазу — группа остаётся как есть.
-        logger.warning("merge: группа %s пропущена, часть не читается: %s", key, exc)
-        return "skipped"
-    if plan_merge(parts):
         combined = merge_parts(parts)
         tmp = txts_root / f"{key}.merge.tmp"
         tmp.write_text(combined + "\n", encoding="utf-8")
         for p in parts_paths:
             p.unlink()
         tmp.replace(txts_root / f"{key}.txt")
-        return "merged"
-    return "kept"
+    except OSError as exc:
+        logger.warning("merge: группа %s НЕ склеена из-за ошибки ввода-вывода: %s", key, exc)
+        return "skipped"
+    return "merged"
 
 
 def merge_split_documents(txts_root: Path, threads: int = 16) -> tuple[int, int]:
-    """Склеить книги, разбитые на части.  Возвращает (merged, kept_split).
+    """Склеить ВСЕ разбитые документы. Возвращает (merged, skipped_io).
 
-    Группы вида ``base.txt``, ``base_2.txt`` ... ``base_N.txt``: если
-    plan_merge говорит, что это одна книга (не газета/сборник) — части
-    объединяются в ``base.txt``.  Группы обрабатываются пулом потоков —
-    чтение частей на старых корпусах это десятки гигабайт, в один поток
-    фаза шла часами.  Не бросает исключений.
+    Каждая группа вида ``base.txt``, ``base_2.txt`` ... ``base_N.txt``
+    объединяется в ``base.txt`` без исключений по жанру, типу или длине.
+    Группы обрабатываются пулом потоков; каждые 30 секунд в лог пишется
+    абсолютный прогресс, скорость и ориентировочное оставшееся время.
     """
     groups: dict[str, list[Path]] = {}
     for txt in txts_root.glob("*.txt"):
@@ -124,9 +117,14 @@ def merge_split_documents(txts_root: Path, threads: int = 16) -> tuple[int, int]
         groups.setdefault(key, []).append(txt)
 
     multi = {k: v for k, v in groups.items() if len(v) >= 2}
-    merged = kept_split = 0
+    merged = skipped = 0
     items = sorted(multi.items())
+    logger.info(
+        "merge: найдено %d групп (%d частей) — склеиваю ВСЕ без исключений",
+        len(items), sum(len(paths) for _, paths in items),
+    )
     t0 = time.perf_counter()
+    last_log = t0
     done = 0
     try:
         from tqdm import tqdm  # noqa: PLC0415
@@ -142,22 +140,28 @@ def merge_split_documents(txts_root: Path, threads: int = 16) -> tuple[int, int]
         for fut in as_completed(futures):
             result = fut.result()
             merged += result == "merged"
-            kept_split += result == "kept"
+            skipped += result == "skipped"
             done += 1
             if bar is not None:
                 bar.update(1)
-            elif done % 2000 == 0:
+            now = time.perf_counter()
+            if now - last_log >= 30:
+                remaining = len(items) - done
+                eta = remaining * (now - t0) / done
                 logger.info(
-                    "merge: %d/%d групп (склеено %d) за %.0f с",
-                    done, len(items), merged, time.perf_counter() - t0,
+                    "merge: %d/%d групп, осталось %d | склеено %d, ошибок %d | "
+                    "прошло %.0f с, ETA %.0f с | последняя: %s",
+                    done, len(items), remaining, merged, skipped,
+                    now - t0, eta, futures[fut],
                 )
+                last_log = now
     if bar is not None:
         bar.close()
     logger.info(
-        "merge: %d групп, склеено %d, разбитыми оставлены %d (%.0f с)",
-        len(items), merged, kept_split, time.perf_counter() - t0,
+        "merge: %d групп, склеено %d, не склеено из-за ошибок %d (%.0f с)",
+        len(items), merged, skipped, time.perf_counter() - t0,
     )
-    return merged, kept_split
+    return merged, skipped
 
 
 def _read_title(path: Path) -> tuple[Path, str | None]:
@@ -257,7 +261,8 @@ def clean_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int]:
         return 0, 0
     txts = [p for p in txts_root.glob("*.txt") if p.is_file()]
     t0 = time.perf_counter()
-    changed = 0
+    last_log = t0
+    changed = done = 0
     with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
         futures = {pool.submit(normalize_txt_file, p): p for p in txts}
         try:
@@ -268,8 +273,18 @@ def clean_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int]:
             bar = None
         for fut in as_completed(futures):
             changed += fut.result()
+            done += 1
             if bar is not None:
                 bar.update(1)
+            now = time.perf_counter()
+            if now - last_log >= 30:
+                remaining = len(txts) - done
+                eta = remaining * (now - t0) / done
+                logger.info(
+                    "Чистка txt: %d/%d, осталось %d, изменено %d | прошло %.0f с, ETA %.0f с",
+                    done, len(txts), remaining, changed, now - t0, eta,
+                )
+                last_log = now
         if bar is not None:
             bar.close()
     logger.info(
@@ -282,14 +297,14 @@ def clean_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int]:
 def normalize_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int, int, int]:
     """Полная нормализация каталога: (почищено, склеено, переименовано, всего).
 
-    Порядок важен: чистка -> склейка разбитых книг -> переименование по теме
-    (тема берётся из полного текста, а не из отдельной части).
+    Порядок важен: чистка -> безусловная склейка всех частей -> переименование
+    по теме (тема берётся из полного текста, а не из отдельной части).
     """
     changed, total = clean_all_txts(txts_root, threads)
-    merged, kept = merge_split_documents(txts_root, threads)
+    merged, skipped = merge_split_documents(txts_root, threads)
     logger.info(
-        "Нормализация txt: %d книг склеено, %d разбитых оставлено",
-        merged, kept,
+        "Нормализация txt: %d групп склеено, %d не склеено из-за ошибок",
+        merged, skipped,
     )
     renamed = rename_by_theme(txts_root, threads)
     return changed, merged, renamed, total

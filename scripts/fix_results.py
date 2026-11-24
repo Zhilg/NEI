@@ -372,7 +372,7 @@ def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
 
 
 def phase_merge(input_root: Path, output_root: Path) -> None:
-    """Объединить разбитые на части документы, если это не газета/сборник.
+    """Объединить ВСЕ разбитые на части документы без исключений.
 
     Делегирует общему модулю idp.txt_normalize (тем же кодом воркер
     прогоняет склейку при старте автоматически).
@@ -383,10 +383,10 @@ def phase_merge(input_root: Path, output_root: Path) -> None:
         logger.info("txts/ нет — нечего объединять.")
         return
     t0 = time.perf_counter()
-    merged, kept_split = merge_split_documents(txts_root, TXT_THREADS)
+    merged, skipped = merge_split_documents(txts_root, TXT_THREADS)
     logger.info(
-        "Фаза merge готова: %d групп объединено, %d оставлены разбитыми (сборники/газеты) за %.0f с",
-        merged, kept_split, time.perf_counter() - t0,
+        "Фаза merge готова: %d групп объединено, %d не объединено из-за ошибок ввода-вывода за %.0f с",
+        merged, skipped, time.perf_counter() - t0,
     )
 
 

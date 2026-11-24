@@ -48,8 +48,9 @@ case "${1:-}" in
         $COMPOSE ps 2>/dev/null || true
         latest=$(ls -t logs/reprocess_*.log 2>/dev/null | head -1 || true)
         if [ -n "$latest" ]; then
-            echo "--- $latest:"
-            tail -5 "$latest"
+            echo "--- $latest (последние 30 строк):"
+            tail -30 "$latest"
+            echo "--- смотреть непрерывно: scripts/reprocess_ctl.sh logs"
         fi
         ;;
     logs)

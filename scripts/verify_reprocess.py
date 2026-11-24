@@ -85,13 +85,36 @@ def _extract_file_status(line: bytes) -> tuple[str, str] | None:
     return None
 
 
+def _scan_progress(
+    stage: str, results_path: Path, offset: int, started: float, last_log: float,
+) -> float:
+    """Не чаще раза в 30 с: процент прочитанного журнала, скорость и ETA."""
+    now = time.perf_counter()
+    if now - last_log < 30:
+        return last_log
+    size = results_path.stat().st_size
+    elapsed = now - started
+    fraction = offset / size if size else 1.0
+    eta = (size - offset) * elapsed / offset if offset else 0.0
+    logger.info(
+        "verify: %s — %.1f%% (%.1f/%.1f МБ), прошло %.0f с, ETA %.0f с",
+        stage, min(100.0, fraction * 100), offset / 1e6, size / 1e6, elapsed, eta,
+    )
+    return now
+
+
 def _scan_statuses(results_path: Path) -> dict[str, str]:
     """Последний статус по каждому файлу (порядок строк = хронология)."""
     last: dict[str, str] = {}
     if not results_path.exists():
         return last
+    started = last_log = time.perf_counter()
     with open(results_path, "rb") as f:
-        for line in f:
+        for line_no, line in enumerate(f, 1):
+            if line_no % 4096 == 1:
+                last_log = _scan_progress(
+                    "чтение статусов", results_path, f.tell(), started, last_log,
+                )
             fs = _extract_file_status(line)
             if fs is not None:
                 last[fs[0]] = fs[1]
@@ -107,8 +130,13 @@ def _scan_txt_owners(results_path: Path) -> dict[str, list[str]]:
     owners: dict[str, list[str]] = {}
     if not results_path.exists():
         return owners
+    started = last_log = time.perf_counter()
     with open(results_path, "rb") as f:
-        for line in f:
+        for line_no, line in enumerate(f, 1):
+            if line_no % 4096 == 1:
+                last_log = _scan_progress(
+                    "чтение владельцев txt", results_path, f.tell(), started, last_log,
+                )
             fs = _extract_file_status(line)
             if fs is None:
                 continue
@@ -346,7 +374,12 @@ def cmd_wait(output_root: Path, timeout_sec: int = TIMEOUT_SEC) -> int:
         return 0
 
     deadline = time.time() + timeout_sec
-    logger.info("Жду переработки %d файлов (до %.0f ч)...", len(retry), timeout_sec / 3600)
+    started = time.perf_counter()
+    total = len(retry)
+    logger.info(
+        "Жду переработки %d файлов (до %.0f ч); статус каждые %d с...",
+        total, timeout_sec / 3600, POLL_SEC,
+    )
     stale_polls = 0
     last_count: int | None = None
     errors: dict[str, int] = {}  # файл -> число error-записей за ожидание
@@ -382,12 +415,17 @@ def cmd_wait(output_root: Path, timeout_sec: int = TIMEOUT_SEC) -> int:
         if errors:
             top = sorted(errors.items(), key=lambda kv: -kv[1])[:5]
             err_hint = " | ошибки: " + ", ".join(f"{Path(f).name}x{n}" for f, n in top)
+        completed = total - len(retry)
+        elapsed = time.perf_counter() - started
+        eta_hint = (
+            f", ETA {len(retry) * elapsed / completed / 60:.1f} мин"
+            if completed else ", ETA появится после первого завершения"
+        )
         logger.info(
-            "Осталось: %d из %d (%s)%s",
-            len(retry),
-            len(state.get("retry") or []),
+            "Worker: готово %d/%d, осталось %d (%s) | прошло %.1f мин%s%s",
+            completed, total, len(retry),
             ", ".join(sorted(retry)[:10]) + ("..." if len(retry) > 10 else ""),
-            err_hint,
+            elapsed / 60, eta_hint, err_hint,
         )
         if not retry:
             logger.info("Всё переработано.")

@@ -10,18 +10,18 @@
 #      что в error; error проверяются в input: живые — на переработку,
 #      мёртвые (0 байт/не PDF) — карантин, больше никого не блокируют
 #   2. воркер перерабатывает найденное (ждём до 24 ч, с прогрессом)
-#   3. merge: книги, расколотые эвристикой на главы, склеиваются обратно
+#   3. merge: ВСЕ разбитые файлы склеиваются, включая сборники и газеты
 #   4. reflow: 'лесенку' (строки, разорванные колонкой) склеивает VLM
 #   5. корректировка ВСЕХ файлов в output (plain text) + схлопывание results.jsonl
-#   6. сборка финального архива текстов
-#   7. воркер снова в работе
+#   6. воркер снова в работе
 #
 # Весь вывод дублируется в logs/reprocess_<время>.log (подпапка репо,
 # не корень).  REPROCESS_QUIET=1 — писать только в файл, в консоль тишина.
 # Управление: scripts/reprocess_ctl.sh {start|stop|status|logs} — запускает
 # этот скрипт в nohup, корректно гасит, показывает прогресс.
+# Долгие фазы каждые 30–120 секунд пишут сделано/осталось и ETA.
 # При ошибке на любом шаге воркер всё равно поднимается обратно.
-set -uo pipefail
+set -euo pipefail
 
 cd "$(dirname "$0")/.."
 COMPOSE="docker compose -f infra/compose/local.yml"
@@ -48,10 +48,18 @@ trap 'rm -f "$PID_FILE"' EXIT
 
 TOTAL_STEPS=7
 STEP_NO=0
+STEP_STARTED=$SECONDS
+finish_step() {
+    if [ "$STEP_NO" -gt 0 ]; then
+        echo "=== $(date '+%F %T') шаг $STEP_NO/$TOTAL_STEPS завершён за $((SECONDS - STEP_STARTED)) с ==="
+    fi
+}
 step() {
+    finish_step
     STEP_NO=$((STEP_NO + 1))
+    STEP_STARTED=$SECONDS
     echo
-    # Полоска общего прогресса по шагам: [##>    ] 3/6 merge: ...
+    # Полоска общего прогресса по шагам: [##>....] 3/7 merge: ...
     local filled=$((STEP_NO > TOTAL_STEPS ? TOTAL_STEPS : STEP_NO))
     local bar=""
     for ((i = 1; i <= TOTAL_STEPS; i++)); do
@@ -79,7 +87,7 @@ $COMPOSE up -d --force-recreate worker
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/verify_reprocess.py wait
 
-step "merge: склейка книг, разбитых на главы (сборники/газеты не трогаем)"
+step "merge: склейка ВСЕХ разбитых файлов без исключений"
 $COMPOSE stop worker || true
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/fix_results.py merge
@@ -94,6 +102,7 @@ $COMPOSE run --rm --no-deps worker \
 
 step "worker снова в строю"
 $COMPOSE up -d worker
+finish_step
 
 echo
 echo "=== $(date '+%F %T') ГОТОВО. Лог: $LOG ==="

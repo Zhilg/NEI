@@ -472,9 +472,8 @@ def test_worker_startup_normalizes_dirty_txts(workspace):
     assert "Пьер Безухов" in out
 
 
-def test_worker_startup_merges_split_book(workspace):
-    """Книга, ошибочно разбитая на части (base.txt + base_2.txt), склеивается
-    в один файл при старте воркера; сборники и газеты не трогаем."""
+def test_worker_startup_merges_all_split_documents(workspace):
+    """При нормализации склеиваются и книги, и сборники — без исключений."""
     txts = workspace.output / "txts"
     txts.mkdir()
     sentence = (
@@ -486,7 +485,6 @@ def test_worker_startup_merges_split_book(workspace):
     (txts / "chronicle_2.txt").write_text(
         "Глава 2\n\n" + sentence * 60, encoding="utf-8"
     )
-    # Сборник рассказов (3+ части с маркерами жанра) — должен остаться разбитым.
     story = "Рассказ\n\n" + "Он вышел на улицу и задумался о прожитом дне. " * 40
     (txts / "collection.txt").write_text(story, encoding="utf-8")
     (txts / "collection_2.txt").write_text(story, encoding="utf-8")
@@ -497,8 +495,40 @@ def test_worker_startup_merges_split_book(workspace):
     assert "Глава 1" in merged and "Глава 2" in merged
     assert not (txts / "chronicle_2.txt").exists()
     assert (txts / "collection.txt").exists()
-    assert (txts / "collection_2.txt").exists()
-    assert (txts / "collection_3.txt").exists()
+    assert not (txts / "collection_2.txt").exists()
+    assert not (txts / "collection_3.txt").exists()
+
+
+def test_merge_glues_every_group_regardless_of_content(tmp_path):
+    """Короткие части, сборники, газеты и группы без base.txt склеиваются ВСЕ."""
+    from idp.txt_normalize import merge_split_documents
+
+    txts = tmp_path / "txts"
+    txts.mkdir()
+    groups = {
+        "book": ["Глава 1\n\nНачало.", "Глава 2\n\nКонец."],
+        "collection": ["Рассказ\n\nПервый.", "Рассказ\n\nВторой.", "Рассказ\n\nТретий."],
+        "newspaper": ["Номер 1", "Номер 2"],
+        "short": ["А", "Б"],
+    }
+    for base, parts in groups.items():
+        for index, part in enumerate(parts, 1):
+            suffix = "" if index == 1 else f"_{index}"
+            (txts / f"{base}{suffix}.txt").write_text(part, encoding="utf-8")
+    # Нумерованные части без исходного base.txt тоже образуют полноценную группу.
+    groups["no_base"] = ["Вторая часть", "Третья часть"]
+    for index, part in enumerate(groups["no_base"], 2):
+        (txts / f"no_base_{index}.txt").write_text(part, encoding="utf-8")
+    (txts / "single.txt").write_text("Одиночный файл", encoding="utf-8")
+
+    merged, skipped = merge_split_documents(txts, threads=2)
+
+    assert (merged, skipped) == (len(groups), 0)
+    for base, parts in groups.items():
+        assert (txts / f"{base}.txt").read_text(encoding="utf-8") == "\n\n".join(parts) + "\n"
+    assert sorted(p.name for p in txts.glob("*.txt")) == sorted(
+        [f"{base}.txt" for base in groups] + ["single.txt"]
+    )
 
 
 # ---------------------------------------------------------------------------
