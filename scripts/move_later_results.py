@@ -1,18 +1,14 @@
-"""Перекинуть результаты обработки перенесённых книг из output в data/later/results.
+"""Перекинуть txt перенесённых книг из output/txts в data/later/results.
 
 Логика: папки из data/input уже переехали в data/later (move_html_books.py).
 По results.jsonl находим записи, чьи исходники лежали внутри этих папок
-(совпадение по первому компоненту относительного пути), и:
+(совпадение по первому компоненту относительного пути), и переносим
+соответствующие txt из data/output/txts в data/later/results (вместе с
+частями вида stem_2.txt). Журнал НЕ трогаем.
 
-  1. переносим соответствующие txt из data/output/txts в data/later/results
-     (вместе с частями вида stem_2.txt, stem_3.txt ...);
-  2. сами записи дописываем в data/later/results/results.jsonl и выкидываем
-     из основного журнала — иначе verify увидит «ok без txt» и отправит их
-     в карантин, хотя книги просто переехали, а не умерли.
-
-Ничего не удаляет кроме перенесённого: журнал переписывается атомарно,
-txt двигаются mv'ом. Скрипт идемпотентен: повторный запуск найдёт только
-то, что осталось.
+Внимание: после этого в основном журнале останутся ok-записи без txt — verify
+при следующем прогоне отправит такие файлы в карантин (исходников нет в input).
+Если это нежелательно, верни записи назад или не гони verify по ним.
 
 Использование:
     python scripts/move_later_results.py            # перенести
@@ -36,7 +32,7 @@ def main() -> int:
     ap.add_argument("--later", type=Path, default=Path("data/later"))
     ap.add_argument("--output", type=Path, default=Path("data/output"))
     ap.add_argument("--dst", type=Path, default=None,
-                    help="куда класть (default: <later>/results)")
+                    help="куда класть txt (default: <later>/results)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -60,24 +56,19 @@ def main() -> int:
         print(f"В {later_root} нет папок — нечего сопоставлять.")
         return 0
 
-    # Проход 1: какие записи журнала относятся к перенесённым книгам.
-    matched: dict[str, set[str]] = {}  # rel file -> стебли txt
-    kept_lines: list[bytes] = []
-    n_total = 0
+    # Стебли txt по записям журнала, относящимся к перенесённым книгам.
+    stems: set[str] = set()
+    n_matched = 0
     with open(results_path, "rb") as f:
         for line in f:
-            if not line.strip():
-                continue
-            n_total += 1
             m = _QUICK_FILE_RE.search(line)
             rel = m.group(1).decode("utf-8", errors="replace") if m else ""
             first = re.split(r"[/\\]", rel, maxsplit=1)[0]
             if rel and first in later_names:
+                n_matched += 1
                 last = re.split(r"[/\\]", rel)[-1]
                 stem = re.sub(r"\.[a-z0-9]+$", "", last, flags=re.IGNORECASE)
-                matched.setdefault(rel, set()).add(stem)
-            else:
-                kept_lines.append(line if line.endswith(b"\n") else line + b"\n")
+                stems.add(stem)
 
     # Индекс txt: stem -> пути (части вида base_2 кладём и на base).
     on_disk: dict[str, list[Path]] = {}
@@ -88,7 +79,6 @@ def main() -> int:
             if base != p.stem:
                 on_disk.setdefault(base, []).append(p)
 
-    stems = set().union(*matched.values()) if matched else set()
     move_txts: list[Path] = []
     missing: list[str] = []
     for stem in stems:
@@ -97,8 +87,7 @@ def main() -> int:
             missing.append(stem)
         move_txts.extend(paths)
 
-    print(f"Записей в журнале: {n_total}")
-    print(f"Записей по перенесённым книгам: {len(matched)} (стеблей: {len(stems)})")
+    print(f"Записей по перенесённым книгам: {n_matched} (стеблей: {len(stems)})")
     print(f"txt на перенос: {len(move_txts)}, без txt на диске: {len(missing)}")
 
     if args.dry_run:
@@ -106,7 +95,7 @@ def main() -> int:
             print(f"  [dry-run] нет txt: {s}")
         return 0
 
-    # Перенос txt (коллизии в dst получают _2, _3 ... — ничего не затираем).
+    # Перенос (коллизии в dst получают _2, _3 ... — ничего не затираем).
     taken: set[str] = {p.name for p in dst_root.glob("*.txt")}
     moved = 0
     for p in move_txts:
@@ -120,23 +109,7 @@ def main() -> int:
         shutil.move(str(p), str(dst_root / name))
         moved += 1
 
-    # Записи: дописываем в dst/results.jsonl, основной журнал переписываем
-    # без них (атомарно).
-    if matched:
-        with open(dst_root / "results.jsonl", "ab") as g:
-            with open(results_path, "rb") as f:
-                for line in f:
-                    m = _QUICK_FILE_RE.search(line)
-                    rel = m.group(1).decode("utf-8", errors="replace") if m else ""
-                    if rel in matched:
-                        g.write(line if line.endswith(b"\n") else line + b"\n")
-        tmp = results_path.with_suffix(".jsonl.new")
-        with open(tmp, "wb") as g:
-            g.writelines(kept_lines)
-        import os  # noqa: PLC0415
-        os.replace(tmp, results_path)
-
-    print(f"\nГотово: {moved} txt -> {dst_root}, {len(matched)} записей -> {dst_root / 'results.jsonl'}")
+    print(f"\nГотово: {moved} txt -> {dst_root}. Журнал не тронут.")
     if missing:
         print(f"Не найдено txt для {len(missing)} стеблей (список выше).")
     return 0
