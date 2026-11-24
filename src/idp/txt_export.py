@@ -48,21 +48,30 @@ class TxtExporter:
         # выбор свободного имени должен быть атомарным.
         self._lock = threading.Lock()
 
-    def export(self, text: str, *, name: str) -> Path:
+    def export(self, text: str, *, name: str, reuse: str | None = None) -> Path:
         """Write ``text`` to ``txts/<name>.txt``.
 
         ``name`` is the original file stem.  Name collisions (the same stem in
         different folders, or several documents from one collection) get a
         ``_2``, ``_3`` ... suffix so nothing is overwritten.
+
+        ``reuse`` — прежнее имя этого же файла (из журнала): перезаписываем
+        его на месте, не плодя ``_2`` рядом со старой версией.
         """
-        base = _sanitize_name(name)
-        with self._lock:
-            candidate = base
-            counter = 2
-            while candidate in self._used:
-                candidate = f"{base}_{counter}"
-                counter += 1
-            self._used.add(candidate)
-        out_path = self.root / f"{candidate}.txt"
+        if reuse is not None:
+            with self._lock:
+                candidate = _sanitize_name(reuse)
+                self._used.add(candidate)
+            out_path = self.root / f"{candidate}.txt"
+        else:
+            base = _sanitize_name(name)
+            with self._lock:
+                candidate = base
+                counter = 2
+                while candidate in self._used:
+                    candidate = f"{base}_{counter}"
+                    counter += 1
+                self._used.add(candidate)
+            out_path = self.root / f"{candidate}.txt"
         out_path.write_text((text or "").strip() + "\n", encoding="utf-8")
         return out_path

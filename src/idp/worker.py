@@ -277,9 +277,12 @@ class FileResult:
     error: str | None
     documents: list[dict]
     document_type: str
+    # Стебли записанных txt (без .txt) — журнал помнит, какой txt кому
+    # принадлежит: переработка перезапишет его на месте, а не плодит _2.
+    txts: list[str] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        record = {
             "file": self.file,
             "type": self.type,
             "size_bytes": self.size_bytes,
@@ -290,6 +293,22 @@ class FileResult:
             "documents": self.documents,
             "document_type": self.document_type,
         }
+        if self.txts is not None:
+            record["txts"] = self.txts
+        return record
+
+
+def _load_names_map(txts_root: Path) -> dict[str, str]:
+    """Карта переименования по теме: исходный стебель txt -> новое имя."""
+    map_path = txts_root / "_names_map.json"
+    if map_path.is_file():
+        try:
+            data = json.loads(map_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items()}
+        except (OSError, ValueError) as exc:
+            logger.warning("карта имён %s не читается: %s", map_path, exc)
+    return {}
 
 
 def _extract_text(file_path: Path) -> tuple[str, int]:
@@ -488,6 +507,14 @@ class Worker:
         # успешной CRC-сверки: совпала сигнатура — пропускаем перечитывание
         # многогигабайтного файла ради CRC.
         self._live_sig: dict[str, tuple[int, int]] = {}
+        # Какой txt (стебель) принадлежит какому входному файлу: из поля
+        # txts журнала; переработка перезаписывает его, а не плодит _2.
+        self._txt_by_rel: dict[str, list[str]] = {}
+        # Имена, занятые в ТЕКУЩЕМ прогоне: повторное использование (два
+        # файла с одним стеблем из старых записей) → свежее имя, не перезапись.
+        self._reused_stems: set[str] = set()
+        # Карта переименования по теме (исходный стебель -> новое имя).
+        self._names_map: dict[str, str] = {}
 
     def _find_files(self, input_root: Path) -> list[Path]:
         # ОДИН проход по дереву.  Раньше здесь был is_relative_to() против
@@ -546,8 +573,6 @@ class Worker:
 
     def _load_processed(self) -> set[str]:
         processed: set[str] = set()
-        if self.force:
-            return processed
         results_path = settings.output_root / "results.jsonl"
         if not results_path.exists():
             return processed
@@ -559,6 +584,15 @@ class Worker:
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                # Владение txt собираем ВСЕГДА (даже с --force): это не
+                # «обработано/нет», а «какой txt принадлежит файлу» —
+                # без этого полный перепрогон расплодил бы _2 рядом
+                # с каждым существующим результатом.
+                rec_txts = record.get("txts")
+                if isinstance(rec_txts, list):
+                    self._txt_by_rel[record["file"]] = [str(t) for t in rec_txts]
+                if self.force:
                     continue
                 if record.get("status") in ("ok", "skip"):
                     processed.add(record["file"])
@@ -758,6 +792,7 @@ class Worker:
             )
             self._processed.add(str(relative))
             produced = await self._export_txt_bundle(file_path, relative, documents, txt_exporter)
+            result.txts = [p.stem for p in produced]
             pbar.set_postfix(file=file_path.name, stage="done")
             return result.to_dict(), produced
         except Exception as exc:
@@ -767,6 +802,26 @@ class Worker:
             return result.to_dict(), []
         finally:
             self._record_stats(timer, result)
+
+    def _prev_txt_stems(self, relative: Path) -> list[str]:
+        """Имена txt, которые принадлежат этому файлу (для перезаписи).
+
+        Явное владение — поле txts журнала; имена прогоняются через карту
+        переименования по теме: переименованный файл перезаписывается ПОД
+        ТЕМ ЖЕ новым именем, а не плодит дубликат под старым стеблем.
+        Записи старого формата (без поля txts) перезаписываем только когда
+        txt реально лежит на диске — иначе это новый файл, и свободное имя
+        ему выделит обычная аллокация.  Имена, уже занятые другим файлом в
+        этом прогоне (один стебель у двух файлов), отсекаем — чужой результат
+        не затираем.
+        """
+        prev = [str(p) for p in self._txt_by_rel.get(str(relative), [])]
+        if not prev:
+            stem_txt = settings.output_root / "txts" / f"{relative.stem}.txt"
+            if stem_txt.is_file():
+                prev = [relative.stem]
+        prev = [self._names_map.get(p, p) for p in prev]
+        return [p for p in prev if p not in self._reused_stems]
 
     async def _export_txt_bundle(
         self,
@@ -778,25 +833,39 @@ class Worker:
         """Записать txt документа; вернуть пути записанных файлов (для архива).
 
         Берёт полные документы (с текстом) из сплиттера — в result.documents
-        текста уже нет, там только рубрикаторы.
+        текста уже нет, там только рубрикаторы.  Переработанный файл
+        перезаписывает свой прежний txt (reuse), новый получает свободное имя.
         """
         written: list[Path] = []
         try:
+            reuse_queue = self._prev_txt_stems(relative)
             docs = [d for d in documents if d.get("text", "").strip()]
             if not docs:
                 # Файл обработан, но документов не вышло — всё равно пишем
                 # пустой TXT, чтобы в выходе (и архиве) была запись о файле.
-                path = await asyncio.to_thread(txt_exporter.export, "", name=relative.stem)
+                path = await asyncio.to_thread(
+                    txt_exporter.export, "",
+                    name=relative.stem,
+                    reuse=reuse_queue[0] if reuse_queue else None,
+                )
+                self._reused_stems.add(path.stem)
                 written.append(path)
+                self._txt_by_rel[str(relative)] = [path.stem]
                 return written
             # Flat output: txts/<original name>.txt, no subfolders, no meta.json.
-            # Several documents from one collection get _2, _3 ... suffixes.
+            # Несколько документов из одной коллекции получают _2, _3 ...
             base_name = relative.stem
             for index, doc in enumerate(docs):
                 doc_text = doc.get("text", "").strip()
                 name = f"{base_name}_{index + 1}" if len(docs) > 1 else base_name
-                path = await asyncio.to_thread(txt_exporter.export, doc_text, name=name)
+                path = await asyncio.to_thread(
+                    txt_exporter.export, doc_text,
+                    name=name,
+                    reuse=reuse_queue.pop(0) if reuse_queue else None,
+                )
+                self._reused_stems.add(path.stem)
                 written.append(path)
+            self._txt_by_rel[str(relative)] = [p.stem for p in written]
         except Exception as exc:
             logger.warning("Txt export failed for %s: %s", file_path.name, exc)
         return written
@@ -833,6 +902,21 @@ class Worker:
             await asyncio.to_thread(
                 normalize_all_txts, txts_root, settings.worker_threads
             )
+        # Карта переименования по теме (после нормализации — она её пополняет):
+        # переработанный файл перезапишет свой txt под ТЕМ ЖЕ новым именем.
+        self._names_map = _load_names_map(txts_root)
+        # Владельцы txt из последнего verify (scripts/verify_reprocess.py):
+        # сброшенные на переработку файлы перезапишут свои txt на месте, а не
+        # плодят _2 рядом со старой версией.
+        state_path = settings.output_root / "verify_state.json"
+        if state_path.is_file():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                for rel, stems in (state.get("owners") or {}).items():
+                    if isinstance(stems, list):
+                        self._txt_by_rel[str(rel)] = [str(s) for s in stems]
+            except (OSError, ValueError) as exc:
+                logger.warning("состояние verify %s не читается: %s", state_path, exc)
         logger.info(
             "Воркер запущен: модель %s | эндпоинты: %s | потоков: %d | "
             "VLM-конкуренция: %d | таймаут: %.0fс | уже обработано: %d",

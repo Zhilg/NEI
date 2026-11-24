@@ -973,3 +973,49 @@ def test_to_plain_text_strips_embedded_base64_images():
     assert "Методика расчёта" in out
     assert "Основной текст документа" in out
     assert "конец строки" in out
+
+
+def test_reprocess_overwrites_own_txt_no_dups(workspace):
+    """Переработка (verify -> retry) перезаписывает свой txt на месте —
+    в том числе под переименованным по теме именем.  Никаких _2 и сирот."""
+    from idp.worker import Worker
+
+    make_text_pdf(workspace.input / "report.pdf", "Старый заголовок",
+                  "Первая версия текста " * 100)
+    _run(Worker())
+    txts = workspace.output / "txts"
+    assert (txts / "report.txt").is_file()
+
+    # стартовая нормализация второго прогона переименует txt по теме
+    make_text_pdf(workspace.input / "report.pdf", "Новый заголовок",
+                  "Вторая версия текста " * 100)
+    # verify сбросил запись в retry и запомнил владельца txt
+    state = {
+        "retry": ["report.pdf"],
+        "quarantined": {},
+        "owners": {"report.pdf": ["report"]},
+        "journal_offset": 0,
+    }
+    (workspace.output / "verify_state.json").write_text(
+        json.dumps(state), encoding="utf-8"
+    )
+    (workspace.output / "results.jsonl").write_text("", encoding="utf-8")
+    _run(Worker())
+
+    names = sorted(p.name for p in txts.glob("*.txt"))
+    assert names == ["Старый заголовок.txt"], f"плодятся копии/сироты: {names}"
+    content = (txts / "Старый заголовок.txt").read_text(encoding="utf-8")
+    assert "Вторая версия" in content
+    assert "Первая версия" not in content
+
+
+def test_verify_records_txt_owners_in_state(workspace):
+    """verify кладёт владельцев txt (поле txts журнала) в verify_state.json —
+    воркер перезапишет эти файлы при переработке, а не создаст _2."""
+    make_text_pdf(workspace.input / "lost.pdf", "Документ", "Текст " * 50)
+    _write_rec(workspace.output, "lost.pdf", "ok", txts=["lost"])
+    (workspace.output / "txts").mkdir(exist_ok=True)
+
+    assert verify_reprocess.cmd_verify(workspace.input, workspace.output) == 0
+    state = json.loads((workspace.output / verify_reprocess.STATE_NAME).read_text(encoding="utf-8"))
+    assert state["owners"]["lost.pdf"] == ["lost"]

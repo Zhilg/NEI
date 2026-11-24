@@ -61,6 +61,10 @@ TIMEOUT_SEC = 24 * 3600
 _DOC_SUFFIX_RE = fix_results._DOC_SUFFIX_RE
 
 
+_QUICK_TXTS_RE = re.compile(rb'"txts"\s*:\s*\[([^\]]*)\]')
+_QUICK_STR_RE = re.compile(rb'"((?:[^"\\]|\\.)*)"')
+
+
 def _extract_file_status(line: bytes) -> tuple[str, str] | None:
     """(file, status) из строки журнала без полного json.loads, если можно."""
     mf = _QUICK_FILE_RE.search(line)
@@ -92,6 +96,34 @@ def _scan_statuses(results_path: Path) -> dict[str, str]:
             if fs is not None:
                 last[fs[0]] = fs[1]
     return last
+
+
+def _scan_txt_owners(results_path: Path) -> dict[str, list[str]]:
+    """Последние значения поля txts (стебли записанных txt) по файлу.
+
+    Быстрый байтовый проход — полный json.loads на многогигабайтном журнале
+    не нужен: поле txts короткое и всегда на одной строке с записью.
+    """
+    owners: dict[str, list[str]] = {}
+    if not results_path.exists():
+        return owners
+    with open(results_path, "rb") as f:
+        for line in f:
+            fs = _extract_file_status(line)
+            if fs is None:
+                continue
+            rel = fs[0]
+            mt = _QUICK_TXTS_RE.search(line)
+            if mt is None:
+                continue
+            stems = []
+            for m in _QUICK_STR_RE.finditer(mt.group(1)):
+                try:
+                    stems.append(json.loads(b'"' + m.group(1) + b'"'))
+                except ValueError:
+                    stems.append(m.group(1).decode("utf-8", errors="replace"))
+            owners[rel] = stems
+    return owners
 
 
 def _txt_bases(txts_root: Path) -> set[str]:
@@ -182,6 +214,7 @@ def cmd_verify(input_root: Path, output_root: Path) -> int:
 
     logger.info("Сканирую журнал (output-only)...")
     last = _scan_statuses(results_path)
+    owners = _scan_txt_owners(results_path)
     logger.info("Записей в журнале: %d (%.1f с)", len(last), time.perf_counter() - t0)
 
     bases = _txt_bases(txts_root)
@@ -253,6 +286,22 @@ def cmd_verify(input_root: Path, output_root: Path) -> int:
         os.replace(tmp, results_path)
     new_size = results_path.stat().st_size if results_path.exists() else 0
 
+    # Владельцы txt для retry-списка: воркер при переработке ПЕРЕЗАПИШЕТ эти
+    # файлы на месте (в т.ч. под переименованным по теме именем), а не плодит
+    # _2 рядом со старой версией.  Явное поле txts журнала; для старых
+    # записей без него — стебель файла через карту переименования.
+    names_map: dict[str, str] = {}
+    map_path = txts_root / "_names_map.json"
+    if map_path.is_file():
+        try:
+            names_map = json.loads(map_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("карта имён %s не читается: %s", map_path, exc)
+    retry_owners = {
+        rel: owners.get(rel) or [names_map.get(Path(rel).stem, Path(rel).stem)]
+        for rel in sorted(retry)
+    }
+
     # Отчёт о карантине — рядом с журналом (в архив не попадает:
     # не входит в LIVE_FILES воркера).
     q_path = output_root / QUARANTINE_NAME
@@ -265,6 +314,7 @@ def cmd_verify(input_root: Path, output_root: Path) -> int:
             {
                 "retry": sorted(retry),
                 "quarantined": quarantined,
+                "owners": retry_owners,
                 "journal_offset": new_size,
             },
             ensure_ascii=False,
