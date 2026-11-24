@@ -286,6 +286,8 @@ def cmd_wait(output_root: Path, timeout_sec: int = TIMEOUT_SEC) -> int:
 
     deadline = time.time() + timeout_sec
     logger.info("Жду переработки %d файлов (до %.0f ч)...", len(retry), timeout_sec / 3600)
+    stale_polls = 0
+    last_count: int | None = None
     while retry:
         if results_path.exists():
             size = results_path.stat().st_size
@@ -298,6 +300,18 @@ def cmd_wait(output_root: Path, timeout_sec: int = TIMEOUT_SEC) -> int:
                     if fs is not None and fs[1] in ("ok", "skip") and fs[0] in retry:
                         retry.discard(fs[0])
                 offset = f.tell()
+        if len(retry) == last_count:
+            stale_polls += 1
+        else:
+            stale_polls = 0
+            last_count = len(retry)
+        if stale_polls and stale_polls % 5 == 0:
+            logger.warning(
+                "Прогресса нет уже %d мин: воркер, скорее всего, поднялся со "
+                "старым журналом (autoheal) или модели лежат. Проверь: "
+                "docker compose -f infra/compose/local.yml logs worker --tail 30",
+                stale_polls * POLL_SEC // 60,
+            )
         logger.info(
             "Осталось: %d из %d (%s)",
             len(retry),

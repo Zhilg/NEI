@@ -58,7 +58,10 @@ $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/verify_reprocess.py verify
 
 step "2/7 worker перерабатывает найденное (до 24 ч)"
-$COMPOSE up -d worker
+# --force-recreate ОБЯЗАТЕЛЕН: autoheal/руками воркер мог подняться ПОСЛЕ verify,
+# но с журналом, прочитанным ДО его перезаписи — тогда up -d не пересоздаёт
+# контейнер, воркер сидит с протухшим processed-сетом и ничего не жуёт.
+$COMPOSE up -d --force-recreate worker
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/verify_reprocess.py wait
 
