@@ -75,12 +75,44 @@ def normalize_txt_file(path: Path) -> bool:
     return cleaned != content
 
 
-def merge_split_documents(txts_root: Path) -> tuple[int, int]:
+def _merge_one_group(key: str, paths: list[Path], txts_root: Path) -> str:
+    """Склеить одну группу.  Возвращает 'merged' | 'kept' | 'skipped'.
+
+    Не бросает исключений: одна недочитанная часть не валит фазу — группа
+    остаётся как есть.
+    """
+    parts_paths = paths
+
+    def sort_key(p: Path) -> tuple[int, str]:
+        m = _DOC_SUFFIX_RE.search(p.stem)
+        return (int(m.group(0)[1:]) if m else 1), p.name
+
+    parts_paths = sorted(parts_paths, key=sort_key)
+    try:
+        parts = [p.read_text(encoding="utf-8", errors="replace") for p in parts_paths]
+    except OSError as exc:
+        # Одна недочитанная часть не валит фазу — группа остаётся как есть.
+        logger.warning("merge: группа %s пропущена, часть не читается: %s", key, exc)
+        return "skipped"
+    if plan_merge(parts):
+        combined = merge_parts(parts)
+        tmp = txts_root / f"{key}.merge.tmp"
+        tmp.write_text(combined + "\n", encoding="utf-8")
+        for p in parts_paths:
+            p.unlink()
+        tmp.replace(txts_root / f"{key}.txt")
+        return "merged"
+    return "kept"
+
+
+def merge_split_documents(txts_root: Path, threads: int = 16) -> tuple[int, int]:
     """Склеить книги, разбитые на части.  Возвращает (merged, kept_split).
 
     Группы вида ``base.txt``, ``base_2.txt`` ... ``base_N.txt``: если
     plan_merge говорит, что это одна книга (не газета/сборник) — части
-    объединяются в ``base.txt``.  Не бросает исключений.
+    объединяются в ``base.txt``.  Группы обрабатываются пулом потоков —
+    чтение частей на старых корпусах это десятки гигабайт, в один поток
+    фаза шла часами.  Не бросает исключений.
     """
     groups: dict[str, list[Path]] = {}
     for txt in txts_root.glob("*.txt"):
@@ -91,38 +123,40 @@ def merge_split_documents(txts_root: Path) -> tuple[int, int]:
         key = _DOC_SUFFIX_RE.sub("", base) if m else base
         groups.setdefault(key, []).append(txt)
 
-    def sort_key(p: Path) -> tuple[int, str]:
-        m = _DOC_SUFFIX_RE.search(p.stem)
-        return (int(m.group(0)[1:]) if m else 1), p.name
-
+    multi = {k: v for k, v in groups.items() if len(v) >= 2}
     merged = kept_split = 0
-    items = sorted(groups.items())
+    items = sorted(multi.items())
+    t0 = time.perf_counter()
+    done = 0
     try:
         from tqdm import tqdm  # noqa: PLC0415
 
-        items = tqdm(items, desc="merge", unit="группа")
+        bar = tqdm(total=len(items), desc="merge", unit="группа")
     except ImportError:
-        pass
-    for key, paths in items:
-        if len(paths) < 2:
-            continue
-        parts_paths = sorted(paths, key=sort_key)
-        try:
-            parts = [p.read_text(encoding="utf-8", errors="replace") for p in parts_paths]
-        except OSError as exc:
-            # Одна недочитанная часть не валит фазу — группа остаётся как есть.
-            logger.warning("merge: группа %s пропущена, часть не читается: %s", key, exc)
-            continue
-        if plan_merge(parts):
-            combined = merge_parts(parts)
-            tmp = txts_root / f"{key}.merge.tmp"
-            tmp.write_text(combined + "\n", encoding="utf-8")
-            for p in parts_paths:
-                p.unlink()
-            tmp.replace(txts_root / f"{key}.txt")
-            merged += 1
-        else:
-            kept_split += 1
+        bar = None
+    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        futures = {
+            pool.submit(_merge_one_group, key, paths, txts_root): key
+            for key, paths in items
+        }
+        for fut in as_completed(futures):
+            result = fut.result()
+            merged += result == "merged"
+            kept_split += result == "kept"
+            done += 1
+            if bar is not None:
+                bar.update(1)
+            elif done % 2000 == 0:
+                logger.info(
+                    "merge: %d/%d групп (склеено %d) за %.0f с",
+                    done, len(items), merged, time.perf_counter() - t0,
+                )
+    if bar is not None:
+        bar.close()
+    logger.info(
+        "merge: %d групп, склеено %d, разбитыми оставлены %d (%.0f с)",
+        len(items), merged, kept_split, time.perf_counter() - t0,
+    )
     return merged, kept_split
 
 
@@ -252,7 +286,7 @@ def normalize_all_txts(txts_root: Path, threads: int = 32) -> tuple[int, int, in
     (тема берётся из полного текста, а не из отдельной части).
     """
     changed, total = clean_all_txts(txts_root, threads)
-    merged, kept = merge_split_documents(txts_root)
+    merged, kept = merge_split_documents(txts_root, threads)
     logger.info(
         "Нормализация txt: %d книг склеено, %d разбитых оставлено",
         merged, kept,

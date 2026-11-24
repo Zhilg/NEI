@@ -422,7 +422,7 @@ def phase_merge(input_root: Path, output_root: Path) -> None:
         logger.info("txts/ нет — нечего объединять.")
         return
     t0 = time.perf_counter()
-    merged, kept_split = merge_split_documents(txts_root)
+    merged, kept_split = merge_split_documents(txts_root, TXT_THREADS)
     logger.info(
         "Фаза merge готова: %d групп объединено, %d оставлены разбитыми (сборники/газеты) за %.0f с",
         merged, kept_split, time.perf_counter() - t0,
