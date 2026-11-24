@@ -234,11 +234,9 @@ def cmd_verify(input_root: Path, output_root: Path) -> int:
             with open(tmp, "ab") as g:
                 for rel, reason in sorted(quarantined.items()):
                     g.write(_quarantine_record(rel, reason).encode("utf-8"))
-        # У карантинных удаляем обрывки txt — результат им не положен.
-        for rel in quarantined:
-            stem = Path(rel).stem
-            for candidate in (txts_root / f"{stem}.txt",):
-                candidate.unlink(missing_ok=True)
+        # txt карантинных НЕ трогаем: карантин отключает только повторную
+        # обработку из input, а имеющийся в output текст остаётся в корпусе
+        # и улучшается наравне со всеми (чистка, склейка, reflow).
         import os  # noqa: PLC0415
 
         os.replace(tmp, results_path)
