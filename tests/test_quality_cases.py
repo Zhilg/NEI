@@ -1019,3 +1019,22 @@ def test_verify_records_txt_owners_in_state(workspace):
     assert verify_reprocess.cmd_verify(workspace.input, workspace.output) == 0
     state = json.loads((workspace.output / verify_reprocess.STATE_NAME).read_text(encoding="utf-8"))
     assert state["owners"]["lost.pdf"] == ["lost"]
+
+
+def test_plan_merge_glues_numbered_practice_book_parts():
+    """«..._1»-«..._N» без жанровых маркеров (практикумы/учебники) склеиваются
+    ВСЕ, даже если куски короткие.  Сборники с маркерами жанра не трогаем."""
+    from idp.plaintext import plan_merge
+
+    # 6 коротких частей одного практикума, ни одного маркера жанра
+    parts = [
+        f"Практикум по метрологии. Раздел {i}. Задания и методики выполнения. " * 5
+        for i in range(1, 7)
+    ]
+    assert plan_merge(parts) is True
+    # та же картина, но 2 части — правило минимума 4 не применяется,
+    # короткие куски остаются раздельными
+    assert plan_merge(parts[:2]) is False
+    # сборник: части начинаются с маркеров жанра — НЕ склеиваем даже при 5+
+    stories = [f"Рассказ\n\nСодержание рассказа номер {i}. " * 30 for i in range(5)]
+    assert plan_merge(stories) is False

@@ -402,6 +402,8 @@ def plan_merge(parts: list[str]) -> bool:
     Правила:
     * у двух и более частей первая строка — маркер жанра (Рассказ, Статья,
       Очерк...) -> это сборник, НЕ объединяем;
+    * 4+ частей подряд без единого жанрового маркера -> книга, расколотая
+      на куски (практикумы/учебники «..._1»-«..._N»), объединяем ВСЕ;
     * большинство частей начинается с «Глава/Часть/...» -> это одна книга,
       объединяем;
     * иначе: длинные сплошные тексты -> книга (объединяем), короткие
@@ -417,6 +419,8 @@ def plan_merge(parts: list[str]) -> bool:
     genre = sum(1 for s in starts if _ARTICLE_MARKER_RE.match(s))
     if genre >= 2:
         return False  # сборник статей/рассказов
+    if len(texts) >= 4 and genre == 0:
+        return True  # _1.._N без маркеров жанра — одна книга, склеить все
     chapter = sum(1 for s in starts if _CHAPTER_START_RE.match(s))
     if chapter >= max(1, round(0.5 * len(starts))):
         return True  # книга с главами

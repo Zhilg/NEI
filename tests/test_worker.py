@@ -1,14 +1,13 @@
-"""Tests for the text-only worker: TXT export, rubricators, watch mode, archive."""
+"""Tests for the text-only worker: TXT export, rubricators, watch mode."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import time
-import zipfile
 from pathlib import Path
 
-from idp.worker import ARCHIVE_NAME, Worker
+from idp.worker import Worker
 
 import pytest
 
@@ -93,7 +92,7 @@ BODY = (
 )
 
 
-def test_pdf_to_txt_rubricators_and_archive(workspace, ocr_stub):
+def test_pdf_to_txt_rubricators(workspace, ocr_stub):
     make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
     _run(Worker())
 
@@ -114,29 +113,17 @@ def test_pdf_to_txt_rubricators_and_archive(workspace, ocr_stub):
     assert ("УДК", "51.78") in codes
     assert ("ГРНТИ", "12.34.56") in codes
 
-    archive = workspace.output / ARCHIVE_NAME
-    assert archive.is_file(), "results.zip must be created"
-    with zipfile.ZipFile(archive) as zf:
-        names = set(zf.namelist())
-        assert "txts/report.txt" in names
-        assert "results.jsonl" in names
-        # Живой журнал в архиве свежий, а не первая версия
-        zipped = zf.read("results.jsonl").decode("utf-8")
-    on_disk = (workspace.output / "results.jsonl").read_bytes().decode("utf-8")
-    assert zipped.replace("\r\n", "\n") == on_disk.replace("\r\n", "\n")
 
 
-def test_rerun_skips_processed_and_keeps_archive(workspace, ocr_stub):
+def test_rerun_skips_processed(workspace, ocr_stub):
     make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
     _run(Worker())
     _run(Worker())
 
     assert len(_read_results(workspace.output)) == 1, "second run must skip the file"
-    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        assert len([n for n in zf.namelist() if n == "txts/report.txt"]) == 1
 
 
-def test_new_file_added_to_archive_incrementally(workspace, ocr_stub):
+def test_new_file_processed_in_second_run(workspace, ocr_stub):
     make_text_pdf(workspace.input / "first.pdf", "Первый отчёт", BODY)
     _run(Worker())
 
@@ -145,17 +132,6 @@ def test_new_file_added_to_archive_incrementally(workspace, ocr_stub):
 
     assert (workspace.output / "txts" / "second.txt").is_file()
     assert len(_read_results(workspace.output)) == 2
-    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        names = set(zf.namelist())
-        # первый файл к моменту второго прогона переименован по теме
-        # стартовой нормализацией, второй ещё под именем входного файла
-        assert {"txts/Первый отчёт.txt", "txts/second.txt"} <= names
-        zipped_records = [
-            json.loads(line)
-            for line in zf.read("results.jsonl").decode("utf-8").splitlines()
-            if line.strip()
-        ]
-    assert len(zipped_records) == 2, "results.jsonl inside the zip must be re-synced"
 
 
 def test_watch_processes_file_appearing_later(workspace, ocr_stub):
@@ -177,8 +153,6 @@ def test_watch_processes_file_appearing_later(workspace, ocr_stub):
     assert (workspace.output / "txts" / "late.txt").is_file()
     results = _read_results(workspace.output)
     assert len(results) == 1 and results[0]["file"] == "late.pdf"
-    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        assert "txts/late.txt" in zf.namelist()
 
 
 def test_watch_settle_delays_fresh_files(workspace):
@@ -198,63 +172,6 @@ def test_watch_settle_delays_fresh_files(workspace):
     assert not (workspace.output / "txts" / "copying.pdf").exists()
 
 
-def test_startup_packs_preexisting_output_into_archive(workspace):
-    """Файлы, лежавшие в output до запуска воркера, попадают в архив."""
-    legacy = workspace.output / "txts" / "legacy.txt"
-    legacy.parent.mkdir(parents=True, exist_ok=True)
-    legacy.write_text("результат из прошлого прогона", encoding="utf-8")
-
-    _run(Worker())  # вход пустой — обрабатывать нечего
-
-    # стартовая нормализация переименовала файл по теме (первая строка)
-    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        assert "txts/результат из прошлого прогона.txt" in zf.namelist()
-
-
-def test_startup_adds_files_missing_from_existing_archive(workspace, ocr_stub):
-    """Файл, появившийся в output мимо воркера, докидывается в уже есть архив."""
-    make_text_pdf(workspace.input / "report.pdf", "Отчёт о работах", BODY)
-    _run(Worker())
-
-    manual = workspace.output / "txts" / "manual.txt"
-    manual.write_text("скопировано вручную", encoding="utf-8")
-    _run(Worker())
-
-    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        names = zf.namelist()
-        # ручной файл и report переименованы по теме стартовой нормализацией
-        assert "txts/скопировано вручную.txt" in names
-        assert "txts/Отчёт о работах.txt" in names
-
-
-def test_parallel_zip_rebuild_roundtrip(workspace):
-    """Параллельная пересборка: архив читается штатным zipfile, имена
-    (включая кириллицу) и содержимое совпадают, CRC сходятся."""
-    from idp.worker import _rebuild_zip_parallel
-
-    items = []
-    for i in range(300):
-        path = workspace.output / "txts" / f"файл_{i:03d}.txt"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"Содержимое документа номер {i}.\n" * (i % 7 + 1), encoding="utf-8")
-        items.append((f"txts/файл_{i:03d}.txt", path))
-
-    tmp = workspace.output / "rebuilt.zip.tmp"
-    count = _rebuild_zip_parallel(items, tmp, workers=8)
-
-    assert count == len(items)
-    with zipfile.ZipFile(tmp) as zf:
-        assert zf.testzip() is None
-        names = zf.namelist()
-        assert len(names) == len(items)
-        for arcname, path in items:
-            assert arcname in names
-            assert zf.read(arcname) == path.read_bytes()
-    # Шард-остатков не осталось
-    assert not list(workspace.output.glob("*.zipshard"))
-    tmp.unlink()
-
-
 def test_scan_pdf_without_text_layer_goes_through_vlm(workspace, stub_server):
     """Скан без текстового слоя обязан обрабатываться, а не скипаться."""
     make_scan_pdf(workspace.input / "scan.pdf")
@@ -271,8 +188,6 @@ def test_scan_pdf_without_text_layer_goes_through_vlm(workspace, stub_server):
     assert txt.read_text(encoding="utf-8").strip(), "VLM must return some text"
     # Рендеры страниц — временные, на диске не остаются
     assert not (workspace.output / "rendered").exists()
-    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        assert "txts/scan.txt" in zf.namelist()
 
 
 def test_png_scan_goes_through_vlm(workspace, stub_server):
@@ -289,27 +204,6 @@ def test_png_scan_goes_through_vlm(workspace, stub_server):
     assert (workspace.output / "txts" / "photo.txt").is_file()
 
 
-def test_archive_contains_only_text_results(workspace, stub_server):
-    """В results.zip — только txts и журналы: никаких рендеров и прочего мусора."""
-    make_scan_pdf(workspace.input / "scan.pdf")
-    make_text_pdf(workspace.input / "text.pdf", "Отчёт о работах", BODY)
-    # Мусор от старых прогонов в output
-    junk = workspace.output / "rendered" / "old"
-    junk.mkdir(parents=True)
-    (junk / "page_00001.png").write_bytes(b"\x89PNG")
-    (workspace.output / "entities.json").write_text("{}", encoding="utf-8")
-
-    _run(Worker())
-
-    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        names = zf.namelist()
-    assert "txts/scan.txt" in names
-    assert "txts/text.txt" in names
-    assert "results.jsonl" in names
-    assert not any(n.startswith("rendered/") for n in names)
-    assert "entities.json" not in names
-
-
 def test_many_files_processed_in_parallel(workspace, ocr_stub):
     """Пачка файлов проходит быстро: очередь воркеров, а не файл за файлом."""
     for i in range(24):
@@ -323,8 +217,6 @@ def test_many_files_processed_in_parallel(workspace, ocr_stub):
     assert len(results) == 24
     assert all(r["status"] == "ok" for r in results)
     assert len(list((workspace.output / "txts").glob("*.txt"))) == 24
-    with zipfile.ZipFile(workspace.output / ARCHIVE_NAME) as zf:
-        assert len([n for n in zf.namelist() if n.startswith("txts/")]) == 24
     assert elapsed < 30, f"24 files took {elapsed:.1f}s — parallelism regressed"
 
 

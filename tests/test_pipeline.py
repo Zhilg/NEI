@@ -1,15 +1,14 @@
 """End-to-end pipeline tests against the VLM stub (no GPU).
 
 Tests the text-only pipeline: flat TXT output (no subfolders, no meta.json),
-rubricator extraction, idempotent re-processing, results.zip archiving and
-watch-mode pickup of new files dropped into data/input.
+rubricator extraction, idempotent re-processing and watch-mode pickup
+of new files dropped into data/input.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import zipfile
 from pathlib import Path
 
 from idp.worker import Worker
@@ -82,17 +81,6 @@ def test_stats_written(workspace, sample_pdf, stub_server):
     _run_worker()
     stats = (workspace.output / "stats.jsonl").read_text(encoding="utf-8").splitlines()
     assert stats and json.loads(stats[-1])["status"] == "ok"
-
-
-def test_archive_created_after_run(workspace, sample_pdf, stub_server):
-    _run_worker()
-    archive = workspace.output / "results.zip"
-    assert archive.exists(), "results.zip не создан"
-    with zipfile.ZipFile(archive) as zf:
-        names = zf.namelist()
-    assert any(n.endswith(".txt") for n in names), f"в архиве нет .txt: {names}"
-    assert "results.zip" not in names, "архив не должен содержать сам себя"
-    assert any(n.endswith("results.jsonl") for n in names), "в архиве есть results.jsonl"
 
 
 def test_watch_mode_picks_up_new_file(workspace, stub_server):

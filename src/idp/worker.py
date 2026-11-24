@@ -24,11 +24,8 @@ import logging
 import os
 import re
 import shutil
-import struct
 import tempfile
 import time
-import zlib
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,186 +62,6 @@ SUPPORTED_EXTENSIONS = {
 # they somehow appear under a supported extension list.
 IGNORED_EXTENSIONS = {".css", ".js", ".mjs", ".ts", ".tsx", ".jsx"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
-
-# Top-level journals that keep changing while the worker runs.  The archive
-# adds new files incrementally, but these must be re-synced (full repack)
-# whenever their content changed, otherwise the zip holds a stale first copy.
-LIVE_FILES = ("results.jsonl", "results_readable.json", "stats.jsonl")
-
-ARCHIVE_NAME = "results.zip"
-
-
-# --- Параллельная пересборка архива ---------------------------------------
-#
-# Каждый файл жмётся в собственный одноразовый шард (zlib отпускает GIL —
-# реальный параллелизм), затем швы склеиваются СЫРЫМИ сжатыми байтами без
-# пережатия.  Оглавление пишем сами, в том числе ZIP64: на больших прогонах
-# записей больше 65535 и архив больше 4 ГБ — оба случая обязаны читаться
-# любым zip-ридером.  Раньше пересборка 80k файлов занимала ~14 минут
-# одним потоком; в 64 потока — считанные минуты.
-
-_ZIP64_EXTRA_ID = 0x0001
-_LOCAL_HEADER = struct.Struct("<IHHHHHIIIHH")          # 30 байт
-_CENTRAL_HEADER = struct.Struct("<IHHHHHHIIIHHHHHII")  # 46 байт
-_ZIP64_EOCD = struct.Struct("<IQHHIIQQQQ")
-_ZIP64_LOCATOR = struct.Struct("<IIQI")
-_EOCD = struct.Struct("<IHHHHIIH")
-
-
-def _dos_datetime(dt: tuple[int, ...]) -> tuple[int, int]:
-    year, month, day, hour, minute, sec = (list(dt) + [0] * 6)[:6]
-    year = max(1980, min(year, 2107))
-    return (
-        (hour << 11) | (minute << 5) | (sec // 2),
-        ((year - 1980) << 9) | (month << 5) | day,
-    )
-
-
-def _pack_shard(item: tuple[str, Path], shard_dir: Path) -> tuple[zipfile.ZipInfo, Path]:
-    """Сжать один файл в отдельный zip-шард (на диске, не в памяти)."""
-    arcname, path = item
-    fd, name = tempfile.mkstemp(suffix=".zipshard", dir=shard_dir)
-    os.close(fd)
-    shard = Path(name)
-    with zipfile.ZipFile(shard, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(path, arcname)
-    with zipfile.ZipFile(shard, "r") as zf:
-        info = zf.infolist()[0]
-    return info, shard
-
-
-class _ZipAssembler:
-    """Склейка шардов в один zip: локальные заголовки копируются как есть,
-    центральное оглавление (с ZIP64 при необходимости) пишется один раз в
-    самом конце — поэтому добавлять записи можно чанками."""
-
-    def __init__(self, tmp: Path) -> None:
-        self._out = open(tmp, "wb")
-        self._offset = 0
-        self._centrals: list[tuple[zipfile.ZipInfo, int]] = []
-
-    def add(self, info: zipfile.ZipInfo, shard: Path) -> None:
-        with open(shard, "rb") as sf:
-            head = sf.read(_LOCAL_HEADER.size)
-            (_sig, _ver, _flag, _method, _mt, _md, _crc,
-             _cs, _us, nlen, xlen) = _LOCAL_HEADER.unpack(head)
-            self._out.write(head)
-            self._out.write(sf.read(nlen + xlen))
-            # ТОЛЬКО сжатые данные: length в copyfileobj — это размер БУФЕРА,
-            # копируется до EOF, включая оглавление и EOCD шарда.  Мусор между
-            # записями ломал Проводник Windows (Linux читал терпеливо).
-            remaining = info.compress_size
-            while remaining > 0:
-                buf = sf.read(min(1 << 20, remaining))
-                if not buf:
-                    raise RuntimeError(
-                        f"шард {shard.name}: оборвался после "
-                        f"{info.compress_size - remaining} из {info.compress_size} байт"
-                    )
-                self._out.write(buf)
-                remaining -= len(buf)
-        self._centrals.append((info, self._offset))
-        self._offset = self._out.tell()
-
-    def finish(self) -> int:
-        out, offset = self._out, self._offset
-        cd_start = offset
-        for info, local_off in self._centrals:
-            name_b = info.filename.encode("utf-8" if (info.flag_bits & 0x800) else "cp437")
-            big_size = info.file_size > 0xFFFFFFFF or info.compress_size > 0xFFFFFFFF
-            big_off = local_off > 0xFFFFFFFF
-            vals: list[int] = []
-            if big_size:
-                vals.extend((info.file_size, info.compress_size))
-            if big_off:
-                vals.append(local_off)
-            extra = b""
-            if vals:
-                payload = struct.pack(f"<{len(vals)}Q", *vals)
-                extra = struct.pack("<HH", _ZIP64_EXTRA_ID, len(payload)) + payload
-            mtime, mdate = _dos_datetime(info.date_time)
-            out.write(_CENTRAL_HEADER.pack(
-                0x02014B50,
-                ((info.create_system & 0xFF) << 8) | (info.create_version & 0xFF),
-                info.extract_version, info.flag_bits, info.compress_type,
-                mtime, mdate, info.CRC,
-                0xFFFFFFFF if big_size else info.compress_size,
-                0xFFFFFFFF if big_size else info.file_size,
-                len(name_b), len(extra), 0, 0, 0, info.external_attr & 0xFFFFFFFF,
-                0xFFFFFFFF if big_off else local_off,
-            ))
-            out.write(name_b)
-            out.write(extra)
-            offset = out.tell()
-        cd_size = offset - cd_start
-        count = len(self._centrals)
-        # Больше 65535 записей или оглавление за 4 ГБ — только через ZIP64 EOCD.
-        need_z64 = count > 0xFFFF or cd_start > 0xFFFFFFFF or cd_size > 0xFFFFFFFF
-        if need_z64:
-            z64_off = offset
-            out.write(_ZIP64_EOCD.pack(
-                0x06064B50, 44, 45, 45, 0, 0, count, count, cd_size, cd_start))
-            out.write(_ZIP64_LOCATOR.pack(0x07064B50, 0, z64_off, 1))
-        out.write(_EOCD.pack(
-            0x06054B50,
-            45 if need_z64 else 20,
-            45 if need_z64 else 20,
-            min(count, 0xFFFF), min(count, 0xFFFF),
-            min(cd_size, 0xFFFFFFFF), min(cd_start, 0xFFFFFFFF),
-            0,
-        ))
-        return count
-
-    def close(self) -> None:
-        self._out.close()
-
-
-def _rebuild_zip_parallel(
-    items: list[tuple[str, Path]],
-    tmp: Path,
-    workers: int = 64,
-    chunk: int = 512,
-    desc: str = "архив",
-) -> int:
-    """Пересобрать zip из items в tmp; вернуть число записей.
-
-    Шарды пишутся на диск (не в память): многогигабайтный журнал не
-    должен целиком лезть в RAM.  Страй-шарды с прошлых прерванных попыток
-    убираем сразу — иначе каждый рестарт посреди пересборки плодил новые.
-    Ход работы — полоской tqdm (desc).
-    """
-    from tqdm import tqdm  # noqa: PLC0415
-
-    for stray in tmp.parent.glob("*.zipshard"):
-        stray.unlink(missing_ok=True)
-    asm = _ZipAssembler(tmp)
-    shards: list[Path] = []
-    total = len(items)
-    t0 = time.perf_counter()
-    done = 0
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            with tqdm(total=total, desc=desc, unit="файл") as bar:
-                for i in range(0, total, chunk):
-                    packed = list(pool.map(
-                        lambda it: _pack_shard(it, tmp.parent),
-                        items[i:i + chunk],
-                    ))
-                    shards.extend(shard for _, shard in packed)
-                    for info, shard in packed:
-                        asm.add(info, shard)
-                        done += 1
-                    bar.update(len(packed))
-                    if done % 5000 < chunk or done == total:
-                        logger.info(
-                            "Пересборка архива: %d/%d файлов (%.0f с)",
-                            done, total, time.perf_counter() - t0,
-                        )
-        return asm.finish()
-    finally:
-        asm.close()
-        for shard in shards:
-            shard.unlink(missing_ok=True)
 
 # Keywords that hint the source is a collection / journal / newspaper issue
 # that should be split into individual articles or stories.
@@ -496,17 +313,6 @@ class Worker:
         self._input_root: Path = settings.input_root
         self._processed: set[str] = set()
         self._stats_writer: StatsWriter | None = None
-        # Архивируется между вызовами _archive_results, чтобы не перечитывать
-        # оглавление zip после каждого файла.  None — ещё не читали.
-        self._archived: set[str] | None = None
-        # Полная сверка архива (CRC журналов + поиск недостающих файлов)
-        # не чаще, чем раз в archive_sync_interval секунд.
-        self._archive_sync_interval = settings.archive_sync_interval
-        self._last_archive_sync = 0.0
-        # Сигнатуры (size, mtime_ns) живых журналов на момент последней
-        # успешной CRC-сверки: совпала сигнатура — пропускаем перечитывание
-        # многогигабайтного файла ради CRC.
-        self._live_sig: dict[str, tuple[int, int]] = {}
         # Какой txt (стебель) принадлежит какому входному файлу: из поля
         # txts журнала; переработка перезаписывает его, а не плодит _2.
         self._txt_by_rel: dict[str, list[str]] = {}
@@ -928,27 +734,6 @@ class Worker:
             len(self._processed),
         )
 
-        # Разовая сверка при запуске: докинуть в архив всё, что лежит в output,
-        # но ещё не попало в results.zip — результаты прогонов до появления
-        # архива, восстановленные вручную файлы и т.п.  На больших output
-        # (десятки тысяч txt) пересборка занимает минуты — без этих строк
-        # воркер выглядит мёртвым между 'Воркер запущен' и первым циклом.
-        # Выключается archive_enabled: тогда финальный архив собирает фаза
-        # archive оркестратора один раз после нормализации результатов.
-        if settings.archive_enabled:
-            logger.info("Сверка архива при запуске (может занять минуты)...")
-            sync_start = time.perf_counter()
-            self._archive_results(settings.output_root, full_sync=True)
-            logger.info(
-                "Сверка архива при запуске завершена за %.1f с",
-                time.perf_counter() - sync_start,
-            )
-        else:
-            logger.info(
-                "Автоархив выключен (IDP_ARCHIVE_ENABLED=false): воркер не трогает "
-                "results.zip, финальный архив соберёт фаза archive"
-            )
-
         async def _process_batch() -> int:
             batch_start = time.perf_counter()
             files = self._find_files(root)
@@ -1002,7 +787,7 @@ class Worker:
                     item = await queue.get()
                     if item is None:
                         return
-                    result, produced = await self._process_file(item, result_writer, txt_exporter, pbar)
+                    result, _produced = await self._process_file(item, result_writer, txt_exporter, pbar)
                     # Строка в лог на каждый файл — чтобы по логам было видно,
                     # что сканер жуёт (без этого только tqdm-мусор в stderr).
                     if result.get("status") == "ok":
@@ -1017,9 +802,6 @@ class Worker:
                         logger.error("ERROR %s: %s", result.get("file"), result.get("error"))
                     result_writer.write(result)
                     result_writer.flush()
-                    # Точечная дозапись в архив только что созданных txt —
-                    # без сканирования всего output после каждого файла.
-                    self._archive_file_results(produced)
                     pbar.update(1)
 
             try:
@@ -1027,18 +809,6 @@ class Worker:
             finally:
                 pbar.close()
             self._stats_writer.flush()
-            # Свежий pretty-JSON после каждой пачки, а не только при остановке
-            # watch-режима.  Полная сверка архива (CRC журналов + недостающие
-            # файлы) — не чаще archive_sync_interval: на больших output
-            # перепаковка zip после каждой пачки слишком дорогая.
-            result_writer.finalize()
-            if settings.archive_enabled:
-                now = time.monotonic()
-                if now - self._last_archive_sync >= self._archive_sync_interval:
-                    self._archive_results(settings.output_root, full_sync=True)
-                    self._last_archive_sync = now
-                else:
-                    self._archive_results(settings.output_root)
             logger.info(
                 "Пакет завершён: %d файлов за %.1f с (всего обработано: %d)",
                 len(pending), time.perf_counter() - batch_start, len(self._processed),
@@ -1049,8 +819,6 @@ class Worker:
             await _process_batch()
             result_writer.finalize()
             self._stats_writer.flush()
-            if settings.archive_enabled:
-                self._archive_results(settings.output_root, full_sync=True)
             return
 
         logger.info(
@@ -1083,183 +851,6 @@ class Worker:
         finally:
             result_writer.finalize()
             self._stats_writer.flush()
-            if settings.archive_enabled:
-                self._archive_results(settings.output_root, full_sync=True)
-
-    @staticmethod
-    def _archivable(path: Path, output_root: Path) -> bool:
-        """В архив идут только текстовые результаты: ``txts/**/*.txt`` и журналы.
-
-        Рендеры страниц, бандлы, картинки и прочие промежуточные артефакты —
-        мусор, они в results.zip не попадают.
-        """
-        if path.name == ARCHIVE_NAME:
-            return False
-        rel = path.relative_to(output_root)
-        if len(rel.parts) == 1:
-            return rel.name in LIVE_FILES
-        return rel.parts[0] == "txts" and path.suffix.lower() == ".txt"
-
-    def _archive_index(self, archive: Path) -> set[str]:
-        """Оглавление архива (лениво читается один раз и кэшируется)."""
-        if self._archived is None:
-            self._archived = set()
-            if archive.exists():
-                try:
-                    with zipfile.ZipFile(archive, "r") as zf:
-                        self._archived = set(zf.namelist())
-                except (zipfile.BadZipFile, OSError) as exc:
-                    logger.warning("Архив %s не читается (%s) — будет пересобран при полной сверке", archive, exc)
-                    self._archived = set()
-        return self._archived
-
-    def _archive_file_results(self, paths: list[Path]) -> None:
-        """Дозаписать в архив txt одного обработанного документа.
-
-        Быстрый путь после каждого файла: пакуются только что созданные
-        файлы, без rglob по всему output.  Журналы и всё пропущенное
-        докидывает периодическая :meth:`_archive_results`.
-        """
-        if not paths:
-            return
-        output_root = settings.output_root
-        archive = output_root / ARCHIVE_NAME
-        archived = self._archive_index(archive)
-        new_entries: list[tuple[Path, str]] = []
-        for path in paths:
-            if not path.is_file():
-                continue
-            arcname = path.relative_to(output_root).as_posix()
-            if arcname not in archived:
-                new_entries.append((path, arcname))
-        if not new_entries:
-            return
-        mode = "a" if archive.exists() else "w"
-        with zipfile.ZipFile(archive, mode, zipfile.ZIP_DEFLATED) as zf:
-            for path, arcname in new_entries:
-                zf.write(path, arcname)
-                archived.add(arcname)
-
-    def _archive_results(self, output_root: Path, full_sync: bool = False) -> None:
-        """Обновить сжатый архив ``results.zip`` с результатами.
-
-        Обычный вызов инкрементально дозаписывает файлы, которых ещё нет
-        в архиве (результат каждого файла попадает в zip сразу после записи,
-        так что при аварийной остановке обработанное не теряется).
-
-        ``full_sync=True`` дополнительно сверяет «живые» журналы
-        (``results.jsonl``, ``results_readable.json``, ``stats.jsonl``): они
-        растут по ходу прогона, поэтому при расхождении CRC архив
-        пересобирается целиком.  Без этого в zip осталась бы первая версия
-        журнала.
-        """
-        archive = output_root / ARCHIVE_NAME
-        current: dict[str, Path] = {}
-        for path in sorted(output_root.rglob("*")):
-            if path.is_file() and self._archivable(path, output_root):
-                # as_posix: zip хранит имена с "/", иначе на Windows один и тот
-                # же файл выглядит то как "txts\a.txt" (на диске), то как
-                # "txts/a.txt" (в архиве) и дозаписывается второй раз.
-                current[path.relative_to(output_root).as_posix()] = path
-
-        self._archive_index(archive)
-
-        stale = False
-        if full_sync:
-            if archive.exists():
-                try:
-                    with zipfile.ZipFile(archive, "r") as zf:
-                        infos = {info.filename: info for info in zf.infolist()}
-                    for name in LIVE_FILES:
-                        path = current.get(name)
-                        if path is None:
-                            continue
-                        info = infos.get(name)
-                        # Быстрая проверка по сигнатуре (size, mtime_ns):
-                        # CRC журнала в 5 ГБ читать каждые 60 секунд —
-                        # это лишний постоянный I/O на больших прогонах.
-                        try:
-                            st = path.stat()
-                            sig = (st.st_size, st.st_mtime_ns)
-                        except OSError:
-                            continue
-                        if self._live_sig.get(name) == sig:
-                            continue
-                        if info is None or info.CRC != zlib.crc32(path.read_bytes()):
-                            stale = True
-                            break
-                        self._live_sig[name] = sig
-                except (zipfile.BadZipFile, OSError):
-                    stale = True
-            elif self._archived:
-                # Архив удалили снаружи, а результаты на диске остались.
-                stale = True
-
-        if stale:
-            # Атомарно: пишем во временный файл и переименовываем.  Прямая
-            # запись рвалась при рестарте/остановке посреди пересборки —
-            # тогда следующий запуск снова видел битый zip и пересобирал
-            # (бесконечный цикл «не зип файла» при каждом старте).
-            # Ошибка сборки НЕ роняет воркер: честный лог, tmp подчищен,
-            # следующая сверка через archive_sync_interval попробует снова.
-            tmp = archive.with_name(archive.name + ".tmp")
-            t0 = time.perf_counter()
-            try:
-                count = _rebuild_zip_parallel(
-                    sorted(current.items()), tmp,
-                    workers=settings.archive_threads,
-                )
-                os.replace(tmp, archive)
-            except Exception as exc:  # noqa: BLE001 — архив не должен ронять воркер
-                logger.exception("Пересборка архива не удалась: %s", exc)
-                return
-            finally:
-                tmp.unlink(missing_ok=True)
-            self._archived = set(current)
-            logger.info(
-                "Архив %s пересобран (%d файлов, %.1f с, %d потоков)",
-                archive, count, time.perf_counter() - t0, settings.archive_threads,
-            )
-            return
-
-        if full_sync and archive.exists():
-            logger.info(
-                "Сверка архива: журналы совпадают, актуально %d файлов",
-                len(self._archived or ()),
-            )
-
-        new_names = [arcname for arcname in current if arcname not in self._archived]
-        if not new_names:
-            return
-        if not archive.exists():
-            # Архива нет, а файлов много (удалили zip, txt остались) —
-            # та же атомарная параллельная сборка, иначе ZipFile(mode="w")
-            # пишет 80k файлов одним потоком и рвётся каждым рестартом.
-            # Ошибка не роняет воркер — попробуем снова на следующей сверке.
-            tmp = archive.with_name(archive.name + ".tmp")
-            t0 = time.perf_counter()
-            try:
-                count = _rebuild_zip_parallel(
-                    [(name, current[name]) for name in new_names],
-                    tmp, workers=settings.archive_threads,
-                )
-                os.replace(tmp, archive)
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Создание архива не удалось: %s", exc)
-                return
-            finally:
-                tmp.unlink(missing_ok=True)
-            self._archived.update(new_names)
-            logger.info(
-                "Архив %s создан (%d файлов, %.1f с, %d потоков)",
-                archive, count, time.perf_counter() - t0, settings.archive_threads,
-            )
-            return
-        with zipfile.ZipFile(archive, "a", zipfile.ZIP_DEFLATED) as zf:
-            for arcname in new_names:
-                zf.write(current[arcname], arcname)
-        self._archived.update(new_names)
-        logger.info("В архив %s добавлено %d файлов", archive, len(new_names))
 
 
 def _parse_args() -> argparse.Namespace:

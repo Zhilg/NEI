@@ -46,18 +46,32 @@ finish() {
 trap finish ERR
 trap 'rm -f "$PID_FILE"' EXIT
 
-step() { echo; echo "=== $(date '+%F %T') $* ==="; }
+TOTAL_STEPS=7
+STEP_NO=0
+step() {
+    STEP_NO=$((STEP_NO + 1))
+    echo
+    # Полоска общего прогресса по шагам: [##>    ] 3/6 merge: ...
+    local filled=$((STEP_NO > TOTAL_STEPS ? TOTAL_STEPS : STEP_NO))
+    local bar=""
+    for ((i = 1; i <= TOTAL_STEPS; i++)); do
+        if [ "$i" -lt "$filled" ]; then bar="${bar}#";
+        elif [ "$i" -eq "$filled" ]; then bar="${bar}>";
+        else bar="${bar}."; fi
+    done
+    echo "=== $(date '+%F %T') [$bar] $STEP_NO/$TOTAL_STEPS $* ==="
+}
 
-step "0/7 git pull + сборка образа"
+step "git pull + сборка образа"
 git pull
 $COMPOSE build worker
 $COMPOSE stop worker || true
 
-step "1/7 verify: сверка output (журнал vs txts), карантин мёртвых"
+step "verify: сверка output (журнал vs txts), карантин мёртвых"
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/verify_reprocess.py verify
 
-step "2/7 worker перерабатывает найденное (до 24 ч)"
+step "worker перерабатывает найденное (до 24 ч)"
 # --force-recreate ОБЯЗАТЕЛЕН: autoheal/руками воркер мог подняться ПОСЛЕ verify,
 # но с журналом, прочитанным ДО его перезаписи — тогда up -d не пересоздаёт
 # контейнер, воркер сидит с протухшим processed-сетом и ничего не жуёт.
@@ -65,24 +79,20 @@ $COMPOSE up -d --force-recreate worker
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/verify_reprocess.py wait
 
-step "3/7 merge: склейка книг, разбитых на главы (сборники/газеты не трогаем)"
+step "merge: склейка книг, разбитых на главы (сборники/газеты не трогаем)"
 $COMPOSE stop worker || true
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/fix_results.py merge
 
-step "4/7 reflow: 'лесенку' склеивает VLM (только разорванные колонкой файлы)"
+step "reflow: 'лесенку' склеивает VLM (только разорванные колонкой файлы)"
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/reflow_vlm.py
 
-step "5/7 format: plain text для всех txts + схлопывание results.jsonl"
+step "format: plain text для всех txts + схлопывание results.jsonl"
 $COMPOSE run --rm --no-deps worker \
     python /workspace/scripts/fix_results.py format
 
-step "6/7 archive: финальная сборка results.zip"
-$COMPOSE run --rm --no-deps worker \
-    python /workspace/scripts/fix_results.py archive
-
-step "7/7 worker снова в строю"
+step "worker снова в строю"
 $COMPOSE up -d worker
 
 echo

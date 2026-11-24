@@ -6,8 +6,7 @@
    обработаны через отравленный слой), выкинуть их ok/skip-записи из
    results.jsonl и удалить их txt.  Воркер после рестарта переработает их
    заново — теперь все PDF идут через VLM-OCR.  Сканы (без слоя) не трогаем:
-   они уже шли через VLM.  Архив results.zip после чистки удаляется — воркер
-   пересоберёт его при старте.
+   они уже шли через VLM.
 
 2. ``format`` — привести оставшееся к финальному формату:
    * txt на диске — через нормализатор в чистый plain text (без
@@ -371,44 +370,6 @@ def phase_pdf_requeue(input_root: Path, output_root: Path) -> None:
                 removed += 1
     logger.info("Шаг 3/3 готов: удалено %d txt (%.1f с)", removed, time.perf_counter() - t2)
 
-    # 4. Архив теперь рассинхронизирован с журналом — проще пересобрать с нуля.
-    archive = output_root / "results.zip"
-    if archive.exists():
-        archive.unlink()
-        logger.info("Архив %s удалён — воркер пересоберёт его при старте", archive)
-    for shard in output_root.glob("*.zipshard"):
-        shard.unlink()
-
-
-def phase_archive(input_root: Path, output_root: Path) -> None:
-    """Пересобрать results.zip с нуля из текущего output.
-
-    Только текстовые результаты (txts/**) и живые журналы — по правилам
-    _archivable воркера.  Старый архив и шарды убираются, сборка идёт во
-    временный файл и атомарно подменяет готовый.
-    """
-    from idp.worker import ARCHIVE_NAME, Worker, _rebuild_zip_parallel  # noqa: PLC0415
-
-    logger.info("Фаза archive: сборка %s из %s...", ARCHIVE_NAME, output_root)
-    t0 = time.perf_counter()
-    items: list[tuple[str, Path]] = []
-    for p in sorted(output_root.rglob("*")):
-        if p.is_file() and Worker._archivable(p, output_root):
-            arcname = p.relative_to(output_root).as_posix()
-            items.append((arcname, p))
-    logger.info("В архив пойдёт %d файлов", len(items))
-
-    archive = output_root / ARCHIVE_NAME
-    tmp = output_root / (ARCHIVE_NAME + ".tmp")
-    count = _rebuild_zip_parallel(items, tmp, workers=64)
-    for shard in output_root.glob("*.zipshard"):
-        shard.unlink()
-    os.replace(tmp, archive)
-    logger.info(
-        "Фаза archive готова: %d записей, %.2f ГБ за %.0f с -> %s",
-        count, archive.stat().st_size / 2**30, time.perf_counter() - t0, archive,
-    )
-
 
 def phase_merge(input_root: Path, output_root: Path) -> None:
     """Объединить разбитые на части документы, если это не газета/сборник.
@@ -487,7 +448,7 @@ def phase_format(input_root: Path, output_root: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=["pdf-requeue", "merge", "format", "archive", "all"])
+    parser.add_argument("phase", choices=["pdf-requeue", "merge", "format", "all"])
     parser.add_argument("--input", type=Path, default=None, help="input root (default: IDP_INPUT_ROOT)")
     parser.add_argument("--output", type=Path, default=None, help="output root (default: IDP_OUTPUT_ROOT)")
     args = parser.parse_args()
@@ -507,8 +468,6 @@ def main() -> int:
         phase_merge(input_root, output_root)
     if args.phase in ("format", "all"):
         phase_format(input_root, output_root)
-    if args.phase == "archive":
-        phase_archive(input_root, output_root)
     return 0
 
 

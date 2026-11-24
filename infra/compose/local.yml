@@ -78,14 +78,6 @@ services:
 
       # Параллельная обработка файлов: очередь воркеров и пул потоков
       IDP_WORKER_THREADS: ${IDP_WORKER_THREADS:-64}
-      # Полная сверка архива не чаще раза в N секунд (между сверками —
-      # точечная дозапись txt после каждого файла)
-      IDP_ARCHIVE_SYNC_INTERVAL: ${IDP_ARCHIVE_SYNC_INTERVAL:-60}
-      # Автоархив воркером (стартовая/периодическая сверка results.zip).
-      # По умолчанию выключен: пересборка zip на 80k файлов занимает 15–20
-      # минут и блокирует обработку на старте.  Финальный архив один раз
-      # собирает фаза archive оркестратора (scripts/full_reprocess.sh).
-      IDP_ARCHIVE_ENABLED: ${IDP_ARCHIVE_ENABLED:-false}
 
       IDP_TEST_MODE: ${IDP_TEST_MODE:-false}
       IDP_ARTIFACTS_MODE: ${IDP_ARTIFACTS_MODE:-false}
