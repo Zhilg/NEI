@@ -288,6 +288,7 @@ def cmd_wait(output_root: Path, timeout_sec: int = TIMEOUT_SEC) -> int:
     logger.info("Жду переработки %d файлов (до %.0f ч)...", len(retry), timeout_sec / 3600)
     stale_polls = 0
     last_count: int | None = None
+    errors: dict[str, int] = {}  # файл -> число error-записей за ожидание
     while retry:
         if results_path.exists():
             size = results_path.stat().st_size
@@ -297,8 +298,12 @@ def cmd_wait(output_root: Path, timeout_sec: int = TIMEOUT_SEC) -> int:
                 f.seek(offset)
                 for line in f:
                     fs = _extract_file_status(line)
-                    if fs is not None and fs[1] in ("ok", "skip") and fs[0] in retry:
+                    if fs is None or fs[0] not in retry:
+                        continue
+                    if fs[1] in ("ok", "skip"):
                         retry.discard(fs[0])
+                    elif fs[1] == "error":
+                        errors[fs[0]] = errors.get(fs[0], 0) + 1
                 offset = f.tell()
         if len(retry) == last_count:
             stale_polls += 1
@@ -307,16 +312,21 @@ def cmd_wait(output_root: Path, timeout_sec: int = TIMEOUT_SEC) -> int:
             last_count = len(retry)
         if stale_polls and stale_polls % 5 == 0:
             logger.warning(
-                "Прогресса нет уже %d мин: воркер, скорее всего, поднялся со "
-                "старым журналом (autoheal) или модели лежат. Проверь: "
-                "docker compose -f infra/compose/local.yml logs worker --tail 30",
+                "Прогресса нет уже %d мин: файлы либо жуются через VLM (текст "
+                "появится по завершении), либо падают с error — смотри лог "
+                "воркера: docker compose -f infra/compose/local.yml logs worker --tail 50 | grep ERROR",
                 stale_polls * POLL_SEC // 60,
             )
+        err_hint = ""
+        if errors:
+            top = sorted(errors.items(), key=lambda kv: -kv[1])[:5]
+            err_hint = " | ошибки: " + ", ".join(f"{Path(f).name}x{n}" for f, n in top)
         logger.info(
-            "Осталось: %d из %d (%s)",
+            "Осталось: %d из %d (%s)%s",
             len(retry),
             len(state.get("retry") or []),
             ", ".join(sorted(retry)[:10]) + ("..." if len(retry) > 10 else ""),
+            err_hint,
         )
         if not retry:
             logger.info("Всё переработано.")
