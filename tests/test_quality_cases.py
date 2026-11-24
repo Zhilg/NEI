@@ -954,3 +954,22 @@ def test_verify_matches_renamed_txt_via_names_map(workspace):
     assert verify_reprocess.cmd_verify(workspace.input, workspace.output) == 0
     state = json.loads((workspace.output / verify_reprocess.STATE_NAME).read_text(encoding="utf-8"))
     assert state["retry"] == [] and state["quarantined"] == {}
+
+
+def test_to_plain_text_strips_embedded_base64_images():
+    """base64-вставки картинок (data-URI или голый блоб) — не текст, вырезаем."""
+    blob = "Qk028QUAAAAAADYAAAAoAAAAoAEAAOoAAAABACAAAwAAAADxBQ" * 4  # ~200 символов
+    text = (
+        "Методика расчёта\n"
+        "\n"
+        f"data:image/bitmap;base64,{blob}\n"
+        f"{blob}\n"
+        "Основной текст документа, который должен остаться. "
+        f"Рисунок: data:image/png;base64,{blob} конец строки.\n"
+    )
+    out = to_plain_text(text)
+    assert "Qk028QU" not in out
+    assert "data:image" not in out
+    assert "Методика расчёта" in out
+    assert "Основной текст документа" in out
+    assert "конец строки" in out

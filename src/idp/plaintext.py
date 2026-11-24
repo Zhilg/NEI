@@ -97,8 +97,15 @@ _REFS_HEADING_RE = re.compile(
     r"references|bibliography)[.\s]*$",
     re.IGNORECASE,
 )
-# Строка-источник: «12. Иванов И.И. ...», «[4] ...», «— М., 1985 ...».
+# Строка, похожая на записи источников: «12. Иванов И.И. ...», «[4] ...», «— М., 1985 ...».
 _REF_ENTRY_START_RE = re.compile(r"^\s*(?:\d{1,3}[.)]\s|\[\d{1,3}\]\s*|[—–-]\s+[А-ЯA-Z])")
+# Встроенные картинки/вложения, снятые текстовым слоем как текст: data-URI
+# целиком («data:image/bitmap;base64,Qk02...») или голый base64-блоб одной
+# строкой (вложения FB2/DOCX, шрифты, картинки PDF) — содержимого текста нет.
+_BASE64_DATAURI_RE = re.compile(
+    r"data:image/[a-z0-9.+-]*;base64,[a-z0-9+/=\s]+", re.IGNORECASE
+)
+_BASE64_BLOB_LINE_RE = re.compile(r"^[a-z0-9+/]{120,}={0,3}$", re.IGNORECASE)
 # Перенос слова через дефис/мягкий дефис на следующей строке («Пери-\нод»).
 _DEHYPHEN_RE = re.compile(r"(?<![-\s])[-\u00ad]\n(?=[а-яёa-z])")
 # Конец предложения / конструкции, после которой нужен разрыв строки.
@@ -282,6 +289,7 @@ def sanitize_filename(title: str, limit: int = 120) -> str:
 
 
 def _flatten_line(s: str) -> str:
+    s = _BASE64_DATAURI_RE.sub(" ", s).strip()  # встроенная картинка — не текст
     # Таблица: | a | b | -> "a  b" (строки-разделители отсеяны выше).
     if s.startswith("|") and s.endswith("|") and s.count("|") >= 2:
         cells = [c.strip() for c in s.strip("|").split("|")]
@@ -333,6 +341,8 @@ def to_plain_text(text: str) -> str:
             continue  # «УДК 338.245», «ГРНТИ ...», «ББК ...» — только в шапке
         if not in_code_fence and _PAGE_MARK_RE.match(s):
             continue  # «Страница 5 из 12», «Стр. 3»
+        if not in_code_fence and _BASE64_BLOB_LINE_RE.match(s):
+            continue  # base64-вложение (картинка/шрифт), снятое слоем как текст
         if not in_code_fence and _PAGE_DASH_RE.match(s):
             continue  # «— 12 —»
         if not in_code_fence and _TABLE_HR_RE.match(s) and "-" in s:
