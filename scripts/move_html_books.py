@@ -1,12 +1,8 @@
-"""Перенести HTML-книги из input в later.
+"""Перенести ВСЕ папки из data/input в data/later.
 
-Книга-коллекция — та же логика, что у воркера при сканировании:
-  - папка с именем *.html / *.htm (выгрузки wget), или
-  - папка с html-файлами ПРЯМО внутри (корень книги).
-
-Переносятся только верхние папки-книги (вложенные уезжают вместе с родителем),
-с сохранением относительной структуры в data/later. Никаких файлов не удаляет:
-mv в пределах одного диска — мгновенный и обратимый (переназад — тем же mv).
+Каждая непосредственная подпапка data/input уезжает в data/later с сохранением
+имени; файлы, лежащие прямо в корне input, не трогаются. Никаких файлов не
+удаляет: mv в пределах одного диска — мгновенный и обратимый (назад — тем же mv).
 
 Использование:
     python scripts/move_html_books.py            # перенести
@@ -20,37 +16,6 @@ import argparse
 import shutil
 import sys
 from pathlib import Path
-
-BOOK_EXTS = (".html", ".htm")
-
-
-def _is_book_dir(path: Path) -> bool:
-    name = path.name.lower()
-    if name.endswith(BOOK_EXTS):
-        return True
-    try:
-        return any(
-            p.suffix.lower() in BOOK_EXTS
-            for p in path.iterdir()
-            if p.is_file()
-        )
-    except OSError:
-        return False
-
-
-def find_books(root: Path) -> list[Path]:
-    """Все папки-книги; вложенные книги внутри уже найденной родителя отсекаем."""
-    books: list[Path] = []
-    for dirpath, dirnames, _filenames in root.walk():
-        p = Path(dirpath)
-        # не лезем внутрь найденной книги — она уедет целиком
-        if any(p.is_relative_to(b) and p != b for b in books):
-            dirnames[:] = []
-            continue
-        if _is_book_dir(p):
-            books.append(p)
-            dirnames[:] = []  # вложенное не сканируем
-    return books
 
 
 def main() -> int:
@@ -67,35 +32,27 @@ def main() -> int:
         return 1
     dst_root.mkdir(parents=True, exist_ok=True)
 
-    books = find_books(src_root)
-    if not books:
-        print("HTML-книг в input не нашлось.")
+    dirs = sorted(p for p in src_root.iterdir() if p.is_dir())
+    if not dirs:
+        print("Подпапок в input нет.")
         return 0
 
-    moved = 0
-    for b in sorted(books):
-        rel = b.relative_to(src_root)
-        dst = dst_root / rel
-        print(f"{'[dry-run] ' if args.dry_run else ''}{rel}")
+    moved = skipped = 0
+    for d in dirs:
+        dst = dst_root / d.name
+        print(f"{'[dry-run] ' if args.dry_run else ''}{d.name}")
         if args.dry_run:
             moved += 1
             continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
             print(f"  ПРОПУСК: в later уже есть {dst}", file=sys.stderr)
+            skipped += 1
             continue
-        shutil.move(str(b), str(dst))
-        # подчищаем пустые родительские папки
-        parent = b.parent
-        while parent != src_root and parent.is_dir():
-            try:
-                parent.rmdir()
-            except OSError:
-                break
-            parent = parent.parent
+        shutil.move(str(d), str(dst))
         moved += 1
 
-    print(f"\nГотово: {moved} из {len(books)} книг {'были бы перенесены' if args.dry_run else 'перенесены'} в {dst_root}")
+    print(f"\nГотово: {moved} {'были бы перенесены' if args.dry_run else 'перенесены'}, "
+          f"{skipped} пропущено (уже есть в later) -> {dst_root}")
     return 0
 
 
