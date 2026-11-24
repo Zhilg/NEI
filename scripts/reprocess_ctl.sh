@@ -5,6 +5,8 @@
 #   scripts/reprocess_ctl.sh stop     # остановить прогон и все контейнеры
 #   scripts/reprocess_ctl.sh status   # что сейчас происходит + последние строки лога
 #   scripts/reprocess_ctl.sh logs     # следить за логом (tail -f, Ctrl+C чтобы выйти)
+#   scripts/reprocess_ctl.sh reset          # стоп + удалить журналы (txts сохраняются)
+#   scripts/reprocess_ctl.sh reset --all    # и txts, и архив — прогон совсем с нуля
 #
 # Можно рвать SSH-соединение сразу после start — прогон доживёт сам.
 set -uo pipefail
@@ -59,8 +61,31 @@ case "${1:-}" in
             exit 1
         fi
         ;;
+    reset)
+        # Полный сброс результатов: стоп + удаление журналов и служебных файлов.
+        # txts НЕ трогаем — старый корпус в data/output/txts может не иметь
+        # источников в input; стартовая нормализация сама почистит/переименует.
+        # Полный wipe включая txt: reset --all (источники только с флешки!).
+        p=$(pid)
+        if running; then
+            kill "$p" && echo "прогон остановлен (pid $p)"
+        fi
+        $COMPOSE stop 2>/dev/null || true
+        rm -f data/output/results.jsonl data/output/results_readable.json \
+              data/output/stats.jsonl data/output/verify_state.json \
+              data/output/quarantine.txt data/output/txts/_names_map.json
+        echo "журналы удалены"
+        if [ "${2:-}" = "--all" ]; then
+            rm -rf data/output/txts
+            rm -f data/output/results.zip
+            echo "txts и архив удалены"
+        else
+            echo "txts сохранены ($(ls data/output/txts/*.txt 2>/dev/null | wc -l) файлов)"
+        fi
+        echo "теперь: git pull && $0 start"
+        ;;
     *)
-        echo "использование: $0 {start|stop|status|logs}" >&2
+        echo "использование: $0 {start|stop|status|logs|reset [--all]}" >&2
         exit 1
         ;;
 esac
