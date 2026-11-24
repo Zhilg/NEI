@@ -232,20 +232,39 @@ def _classify_batch(
 
 
 def _filter_journal(
-    results_path: Path, stems: set, out, threads: int = 32
+    results_path: Path, stems: set, out, threads: int = 32, classifier=None
 ) -> tuple[int, int]:
     """Параллельная фильтрация results.jsonl с полоской по байтам.
 
     Читаем бинарными чанками, сплитим на строки, json.loads жуётся пулом
     потоков (порядок строк в журнале не важен для семантики, но мы его
     сохраняем — батчи пишутся строго в исходном порядке).  На 5ГБ журнале
-    даёт ~10x против однопоточного цикла.
+    даёт ~10x против однопоточного цикла.  ``classifier`` — функция
+    ``(line: bytes) -> bytes | None`` для переиспования машинерии сторонними
+    скриптами (None — выкинуть строку, иначе байты с \\n).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
 
     from tqdm import tqdm  # noqa: PLC0415
 
-    frozen = frozenset(stems)
+    if classifier is None:
+        classify_batch = lambda batch: _classify_batch(batch, frozenset(stems))  # noqa: E731
+    else:
+
+        def classify_batch(batch):  # noqa: F811
+            out_lines: list[bytes | None] = []
+            kept = dropped = 0
+            for ln in batch:
+                if not ln.strip():
+                    out_lines.append(None)
+                    continue
+                res = classifier(ln)
+                out_lines.append(res)
+                if res is None:
+                    dropped += 1
+                else:
+                    kept += 1
+            return out_lines, kept, dropped
     size = results_path.stat().st_size
     total_kept = total_dropped = 0
     with open(results_path, "rb") as f, ThreadPoolExecutor(max_workers=threads) as pool:
@@ -265,13 +284,13 @@ def _filter_journal(
                 for ln in lines:
                     batch.append(ln)
                     if len(batch) >= 2000:
-                        futures[pool.submit(_classify_batch, batch, frozen)] = idx
+                        futures[pool.submit(classify_batch, batch)] = idx
                         idx += 1
                         batch = []
             if buf:
                 batch.append(buf)
             if batch:
-                futures[pool.submit(_classify_batch, batch, frozen)] = idx
+                futures[pool.submit(classify_batch, batch)] = idx
                 idx += 1
         results: dict[int, tuple] = {}
         for fut in as_completed(futures):

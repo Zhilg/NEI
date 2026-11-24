@@ -502,6 +502,107 @@ def test_worker_startup_merges_split_book(workspace):
 
 
 # ---------------------------------------------------------------------------
+# verify_reprocess: сверка output (журнал vs txts), input — только для проблем
+# ---------------------------------------------------------------------------
+
+import verify_reprocess  # noqa: E402
+
+
+def _write_rec(output_root, rel, status, **extra):
+    rec = {"file": rel, "type": "pdf", "status": status, "documents": []}
+    rec.update(extra)
+    with open(output_root / "results.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def test_verify_requeues_ok_without_txt(workspace):
+    """ok-запись без txt на диске -> файл на переработку, записи выкинуты."""
+    make_text_pdf(workspace.input / "lost.pdf", "Документ", "Текст " * 50)
+    _write_rec(workspace.output, "lost.pdf", "ok")
+    _write_rec(workspace.output, "fine.pdf", "ok")
+    (workspace.output / "txts").mkdir()
+    (workspace.output / "txts" / "fine.txt").write_text("живой результат", encoding="utf-8")
+
+    assert verify_reprocess.cmd_verify(workspace.input, workspace.output) == 0
+
+    state = json.loads((workspace.output / verify_reprocess.STATE_NAME).read_text(encoding="utf-8"))
+    assert state["retry"] == ["lost.pdf"]
+    assert state["quarantined"] == {}
+    # Запись lost выкинута из журнала (воркер переработает), fine осталась.
+    journal = (workspace.output / "results.jsonl").read_text(encoding="utf-8")
+    assert "lost.pdf" not in journal
+    assert "fine.pdf" in journal
+
+
+def test_verify_quarantines_dead_error_file(workspace):
+    """error + мёртвый input (0 байт / не PDF) -> карантин: skip-запись,
+    повторных ретраев не будет, отчёт в quarantine.txt."""
+    (workspace.input / "empty.pdf").write_bytes(b"")
+    (workspace.input / "notpdf.pdf").write_bytes(b"MZ" + b"\x00" * 300)
+    _write_rec(workspace.output, "empty.pdf", "error", error="boom")
+    _write_rec(workspace.output, "notpdf.pdf", "error", error="boom")
+
+    assert verify_reprocess.cmd_verify(workspace.input, workspace.output) == 0
+
+    state = json.loads((workspace.output / verify_reprocess.STATE_NAME).read_text(encoding="utf-8"))
+    assert state["retry"] == []
+    assert set(state["quarantined"]) == {"empty.pdf", "notpdf.pdf"}
+    # В журнале ровно одна skip-запись на файл, с пометкой quarantine.
+    journal = (workspace.output / "results.jsonl").read_text(encoding="utf-8")
+    lines = [json.loads(l) for l in journal.splitlines() if l.strip()]
+    assert len(lines) == 2
+    assert all(l["status"] == "skip" and l["quarantine"] for l in lines)
+    assert not any(l["status"] == "error" for l in lines)
+    report = (workspace.output / verify_reprocess.QUARANTINE_NAME).read_text(encoding="utf-8")
+    assert "empty.pdf" in report and "notpdf.pdf" in report
+
+
+def test_verify_keeps_live_error_for_retry(workspace):
+    """error + живой input -> в списке переработки; запись выкидывается
+    (processed-сет воркера строится из ok/skip — он ретраит файл сам)."""
+    make_text_pdf(workspace.input / "alive.pdf", "Документ", "Текст " * 50)
+    _write_rec(workspace.output, "alive.pdf", "error", error="vlm timeout")
+
+    assert verify_reprocess.cmd_verify(workspace.input, workspace.output) == 0
+
+    state = json.loads((workspace.output / verify_reprocess.STATE_NAME).read_text(encoding="utf-8"))
+    assert state["retry"] == ["alive.pdf"]
+    assert state["quarantined"] == {}
+    # В журнале не осталось записей о файле — при следующем старте воркер
+    # увидит его как необработанный и ретраит.
+    journal = (workspace.output / "results.jsonl").read_text(encoding="utf-8")
+    assert "alive.pdf" not in journal
+
+
+def test_verify_clean_when_nothing_missing(workspace):
+    """Все ok имеют txt — verify ничего не трогает."""
+    (workspace.output / "txts").mkdir()
+    (workspace.output / "txts" / "a.txt").write_text("текст", encoding="utf-8")
+    _write_rec(workspace.output, "a.pdf", "ok")
+
+    assert verify_reprocess.cmd_verify(workspace.input, workspace.output) == 0
+    state = json.loads((workspace.output / verify_reprocess.STATE_NAME).read_text(encoding="utf-8"))
+    assert state["retry"] == [] and state["quarantined"] == {}
+
+
+def test_wait_exits_when_retried(workspace):
+    """wait дожидается ok/skip-записей по списку из verify."""
+    _write_rec(workspace.output, "a.pdf", "ok")  # журнал непустой
+    state = {
+        "retry": ["a.pdf", "b.pdf"],
+        "quarantined": {},
+        "journal_offset": (workspace.output / "results.jsonl").stat().st_size,
+    }
+    (workspace.output / verify_reprocess.STATE_NAME).write_text(
+        json.dumps(state), encoding="utf-8"
+    )
+    _write_rec(workspace.output, "a.pdf", "ok")
+    _write_rec(workspace.output, "b.pdf", "skip")
+
+    assert verify_reprocess.cmd_wait(workspace.output, timeout_sec=5) == 0
+
+
+# ---------------------------------------------------------------------------
 # Болевые типы документов: классификация и устойчивость пайплайна
 # ---------------------------------------------------------------------------
 

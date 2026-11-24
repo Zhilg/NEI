@@ -3,10 +3,13 @@
 #
 #   ./scripts/full_reprocess.sh           # в tmux/screen или с nohup
 #
-# Порядок (как договорились):
+# Порядок (как договорились — работаем от output, input открываем только
+# для файлов с проблемами):
 #   0. git pull + сборка образа воркера
-#   1. PDF с текстовым слоем — записи/txt выкинуты на переработку
-#   2. воркер перерабатывает их новым пайплайном (ждём до 24 ч, с прогрессом)
+#   1. verify: сверка results.jsonl с txts/ (output-only) — что без txt,
+#      что в error; error проверяются в input: живые — на переработку,
+#      мёртвые (0 байт/не PDF) — карантин, больше никого не блокируют
+#   2. воркер перерабатывает найденное (ждём до 24 ч, с прогрессом)
 #   3. merge: книги, расколотые эвристикой на главы, склеиваются обратно
 #   4. reflow: 'лесенку' (строки, разорванные колонкой) склеивает VLM
 #   5. корректировка ВСЕХ файлов в output (plain text) + схлопывание results.jsonl
@@ -50,14 +53,14 @@ git pull
 $COMPOSE build worker
 $COMPOSE stop worker || true
 
-step "1/7 pdf-requeue: текстовослойные pdf на переработку"
+step "1/7 verify: сверка output (журнал vs txts), карантин мёртвых"
 $COMPOSE run --rm --no-deps worker \
-    python /workspace/scripts/fix_results.py pdf-requeue
+    python /workspace/scripts/verify_reprocess.py verify
 
-step "2/7 worker перерабатывает pdf (до 24 ч)"
+step "2/7 worker перерабатывает найденное (до 24 ч)"
 $COMPOSE up -d worker
 $COMPOSE run --rm --no-deps worker \
-    python /workspace/scripts/wait_pdf_reprocess.py
+    python /workspace/scripts/verify_reprocess.py wait
 
 step "3/7 merge: склейка книг, разбитых на главы (сборники/газеты не трогаем)"
 $COMPOSE stop worker || true
